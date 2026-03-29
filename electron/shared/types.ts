@@ -322,4 +322,5 @@ export const IPC_CHANNELS = {
   BATCH_INSTALL_ADDONS: 'batch-install-addons',
   OPEN_EXTERNAL_URL: 'open-external-url',
   GET_APP_VERSION: 'get-app-version',
+  EXPORT_PROGRESS: 'export-progress',
 } as const;

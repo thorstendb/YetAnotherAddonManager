@@ -25,6 +25,7 @@ const ImportExportDialog: React.FC<ImportExportDialogProps> = ({
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [activeTab, setActiveTab] = useState<TabId>('export');
   const [exporting, setExporting] = useState(false);
+  const [exportProgress, setExportProgress] = useState<{ phase: string; percent: number } | null>(null);
   const [importing, setImporting] = useState(false);
   const [importFile, setImportFile] = useState<File | null>(null);
   const [importPreview, setImportPreview] = useState<{
@@ -53,7 +54,13 @@ const ImportExportDialog: React.FC<ImportExportDialogProps> = ({
       if (e.key === 'Escape') onClose();
     };
     window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
+    const cleanupProgress = window.electronAPI.onExportProgress((data) => {
+      setExportProgress(data);
+    });
+    return () => {
+      window.removeEventListener('keydown', onKey);
+      cleanupProgress();
+    };
   }, [onClose]);
 
   const libraryCount = addons.filter((a) => a.isLibrary).length;
@@ -62,6 +69,7 @@ const ImportExportDialog: React.FC<ImportExportDialogProps> = ({
   // --- Export ---
   const handleExport = async () => {
     setExporting(true);
+    setExportProgress({ phase: 'Preparing…', percent: 0 });
     try {
       const addonList = addons.map((a) => {
         const catalogAddon = catalogByDir.get(a.folderName);
@@ -91,6 +99,7 @@ const ImportExportDialog: React.FC<ImportExportDialogProps> = ({
       }
 
       // Trigger download as JSON file
+      setExportProgress({ phase: 'Writing file…', percent: 98 });
       const blob = new Blob([JSON.stringify(result, null, 2)], { type: 'application/json' });
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
@@ -114,6 +123,7 @@ const ImportExportDialog: React.FC<ImportExportDialogProps> = ({
       onLog(`Export failed: ${err.message || err}`, 'error');
     } finally {
       setExporting(false);
+      setExportProgress(null);
     }
   };
 
@@ -290,6 +300,19 @@ const ImportExportDialog: React.FC<ImportExportDialogProps> = ({
                   Include SavedVariables (addon saved data)
                 </label>
               </div>
+              {exportProgress && (
+                <div style={{ margin: '12px 0' }}>
+                  <div style={{ fontSize: '12px', color: 'var(--text-secondary)', marginBottom: 4 }}>
+                    {exportProgress.phase}
+                  </div>
+                  <div className="status-progress-track" style={{ height: 6 }}>
+                    <div
+                      className="status-progress-fill status-progress-current"
+                      style={{ width: `${exportProgress.percent}%` }}
+                    />
+                  </div>
+                </div>
+              )}
               <button
                 className="restore-btn ie-action-btn"
                 onClick={handleExport}

@@ -617,9 +617,12 @@ export interface ExportData {
  */
 export function exportProfile(
   addonsPath: string,
-  addonList: { folderName: string; catalogId?: string; version: string; isLibrary: boolean }[]
+  addonList: { folderName: string; catalogId?: string; version: string; isLibrary: boolean }[],
+  onProgress?: (phase: string, percent: number) => void
 ): ExportData {
   const liveDir = getLiveDir(addonsPath);
+
+  onProgress?.('Reading settings…', 10);
 
   // AddOnSettings.txt
   const settingsPath = getSettingsPath(addonsPath);
@@ -633,16 +636,22 @@ export function exportProfile(
     ? fs.readFileSync(userSettingsPath, 'utf-8')
     : null;
 
+  onProgress?.('Reading SavedVariables…', 20);
+
   // SavedVariables – each .lua file base64-encoded
   const savedVariables: Record<string, string> = {};
   const svDir = getSavedVarsDir(addonsPath);
   if (fs.existsSync(svDir)) {
     const files = fs.readdirSync(svDir).filter((f) => f.endsWith('.lua'));
-    for (const file of files) {
+    for (let i = 0; i < files.length; i++) {
+      const file = files[i];
       const content = fs.readFileSync(path.join(svDir, file));
       savedVariables[file] = content.toString('base64');
+      onProgress?.(`Reading SavedVariables… (${i + 1}/${files.length})`, 20 + Math.round(((i + 1) / files.length) * 70));
     }
   }
+
+  onProgress?.('Finalizing…', 95);
 
   return {
     formatVersion: 1,

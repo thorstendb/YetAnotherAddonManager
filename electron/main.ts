@@ -357,7 +357,11 @@ ipcMain.handle(IPC_CHANNELS.EXPORT_PROFILE, async (
   addonList: { folderName: string; catalogId?: string; version: string; isLibrary: boolean }[]
 ) => {
   try {
-    return exportProfile(addonsPath, addonList);
+    return exportProfile(addonsPath, addonList, (phase, percent) => {
+      if (mainWindow) {
+        mainWindow.webContents.send(IPC_CHANNELS.EXPORT_PROGRESS, { phase, percent });
+      }
+    });
   } catch (err: any) {
     console.error('Export profile error:', err);
     return { error: err.message || String(err) };

@@ -59,17 +59,30 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_OWNER: ${{ github.repository_owner }}
 
-      - name: Upload artifacts
+      - name: Upload setup artifact
+        if: matrix.platform == 'win'
         uses: actions/upload-artifact@v5
         with:
-          name: release-${{ matrix.platform }}
+          name: release-win-setup
+          path: release/*-setup.exe
+          if-no-files-found: ignore
+
+      - name: Upload portable artifact
+        if: matrix.platform == 'win'
+        uses: actions/upload-artifact@v5
+        with:
+          name: release-win-portable
+          path: release/*-portable.exe
+          if-no-files-found: ignore
+
+      - name: Upload macOS artifacts
+        if: matrix.platform == 'mac'
+        uses: actions/upload-artifact@v5
+        with:
+          name: release-mac
           path: |
-            release/*-setup.exe
-            release/*-portable.exe
             release/*.zip
             release/*.dmg
-            release/*.blockmap
-            release/latest*.yml
           if-no-files-found: ignore
 
   publish:

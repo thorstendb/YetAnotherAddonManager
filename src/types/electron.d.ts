@@ -70,6 +70,7 @@ declare global {
       saveUiSettings: (settings: { logHeight?: number; panelWidths?: number[] }) => Promise<AppConfig>;
       saveInstalledVersions: (versions: Record<string, string>) => Promise<void>;
       onInstallProgress: (callback: (data: { addonId: string; phase: string; percent?: number }) => void) => () => void;
+      onExportProgress: (callback: (data: { phase: string; percent: number }) => void) => () => void;
       acceptWelcome: () => Promise<AppConfig>;
       quitApp: () => Promise<void>;
       onCheckUnsaved: (callback: () => void) => () => void;

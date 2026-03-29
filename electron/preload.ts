@@ -74,6 +74,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.on(IPC_CHANNELS.INSTALL_PROGRESS, handler);
     return () => { ipcRenderer.removeListener(IPC_CHANNELS.INSTALL_PROGRESS, handler); };
   },
+  onExportProgress: (callback: (data: { phase: string; percent: number }) => void) => {
+    const handler = (_event: any, data: any) => callback(data);
+    ipcRenderer.on(IPC_CHANNELS.EXPORT_PROGRESS, handler);
+    return () => { ipcRenderer.removeListener(IPC_CHANNELS.EXPORT_PROGRESS, handler); };
+  },
   acceptWelcome: (): Promise<AppConfig> =>
     ipcRenderer.invoke(IPC_CHANNELS.ACCEPT_WELCOME),
   quitApp: (): Promise<void> =>
