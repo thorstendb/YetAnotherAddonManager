@@ -34,9 +34,19 @@ jobs:
       - name: Install dependencies
         run: yarn install --frozen-lockfile
 
-      - name: Bump version (if specified)
-        if: inputs.version != ''
-        run: npm version ${{ inputs.version }} --no-git-tag-version
+      - name: Set version
+        run: |
+          if [ -n "${{ inputs.version }}" ]; then
+            npm version "${{ inputs.version }}" --no-git-tag-version
+          else
+            # Derive version from latest git tag (e.g. v1.2.3 → 1.2.3)
+            TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
+            if [ -n "$TAG" ]; then
+              VERSION="${TAG#v}"
+              npm version "$VERSION" --no-git-tag-version --allow-same-version
+            fi
+          fi
+        shell: bash
 
       - name: Build distribution (${{ matrix.platform }})
         run: yarn dist${{ matrix.platform == 'mac' && ':mac' || '' }}
