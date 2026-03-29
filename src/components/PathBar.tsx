@@ -15,6 +15,7 @@ interface PathBarProps {
   onUpdateAll: () => void;
   onGoBack: () => void;
   onImportExport: () => void;
+  onAbout: () => void;
   loading: boolean;
   hasAddons: boolean;
   unreferencedCount: number;
@@ -38,6 +39,7 @@ const PathBar: React.FC<PathBarProps> = ({
   onUpdateAll,
   onGoBack,
   onImportExport,
+  onAbout,
   loading,
   hasAddons,
   unreferencedCount,
@@ -131,6 +133,13 @@ const PathBar: React.FC<PathBarProps> = ({
         title={theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme'}
       >
         {theme === 'dark' ? '☀️' : '🌙'}
+      </button>
+      <button
+        onClick={onAbout}
+        className="theme-toggle"
+        title="About YAAM"
+      >
+        ℹ️
       </button>
     </div>
   );

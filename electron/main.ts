@@ -18,6 +18,18 @@ ipcMain.handle(IPC_CHANNELS.OPEN_IN_EXPLORER, async (_event, folderPath: string)
   }
 });
 
+// Open external URL in default browser (only allow https)
+ipcMain.handle(IPC_CHANNELS.OPEN_EXTERNAL_URL, async (_event, url: string) => {
+  if (typeof url === 'string' && url.startsWith('https://')) {
+    shell.openExternal(url);
+  }
+});
+
+// Return app version from package.json
+ipcMain.handle(IPC_CHANNELS.GET_APP_VERSION, async () => {
+  return app.getVersion();
+});
+
 // Disable Chromium caches — we persist nothing via Electron's userData
 app.commandLine.appendSwitch('disk-cache-size', '1');
 app.commandLine.appendSwitch('disable-gpu-shader-disk-cache');

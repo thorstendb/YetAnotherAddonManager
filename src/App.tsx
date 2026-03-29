@@ -14,6 +14,7 @@ import WelcomeDialog from './components/WelcomeDialog';
 import UnsavedDialog from './components/UnsavedDialog';
 import RestoreDialog from './components/RestoreDialog';
 import ImportExportDialog from './components/ImportExportDialog';
+import AboutDialog from './components/AboutDialog';
 import './styles/App.css';
 
 /** Shorten "EU Megaserver-Alandhur" → "EU Alandhur" for display. */
@@ -60,6 +61,7 @@ function App() {
   const [updateTotal, setUpdateTotal] = useState(0);
   const updateCancelRef = useRef(false);
   const [showImportExport, setShowImportExport] = useState(false);
+  const [showAbout, setShowAbout] = useState(false);
 
   // Theme state: persisted in localStorage
   const [theme, setTheme] = useState<'dark' | 'light'>(() => {
@@ -1217,6 +1219,7 @@ function App() {
         onUpdateAll={handleUpdateAll}
         onGoBack={handleGoBack}
         onImportExport={() => setShowImportExport(true)}
+        onAbout={() => setShowAbout(true)}
         loading={loading}
         hasAddons={addons.length > 0}
         unreferencedCount={unreferencedLibs.size}
@@ -1400,6 +1403,7 @@ function App() {
           onClose={() => setShowImportExport(false)}
         />
       )}
+      {showAbout && <AboutDialog onClose={() => setShowAbout(false)} />}
     </div>
   );
 }

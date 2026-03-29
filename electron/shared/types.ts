@@ -320,4 +320,6 @@ export const IPC_CHANNELS = {
   EXPORT_PROFILE: 'export-profile',
   IMPORT_PROFILE: 'import-profile',
   BATCH_INSTALL_ADDONS: 'batch-install-addons',
+  OPEN_EXTERNAL_URL: 'open-external-url',
+  GET_APP_VERSION: 'get-app-version',
 } as const;

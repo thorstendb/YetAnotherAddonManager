@@ -53,6 +53,7 @@ jobs:
             release/*.zip
             release/*.blockmap
             release/latest*.yml
+            release/*.dmg
           if-no-files-found: ignore
 
   publish:

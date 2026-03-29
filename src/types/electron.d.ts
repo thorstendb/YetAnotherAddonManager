@@ -85,6 +85,8 @@ declare global {
       listSvBackups: (addonsPath: string) => Promise<SvBackupEntry[]>;
       restoreSvFile: (addonsPath: string, backupFilePath: string) => Promise<{ restored: boolean; fileName: string; error?: string }>;
       openInExplorer: (fullPath: string) => Promise<void>;
+      openExternalUrl: (url: string) => Promise<void>;
+      getAppVersion: () => Promise<string>;
       exportProfile: (
         addonsPath: string,
         addonList: { folderName: string; catalogId?: string; version: string; isLibrary: boolean }[]

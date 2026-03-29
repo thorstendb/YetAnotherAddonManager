@@ -115,6 +115,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.invoke(IPC_CHANNELS.RESTORE_SV_FILE, addonsPath, backupFilePath),
   openInExplorer: (fullPath: string): Promise<void> =>
     ipcRenderer.invoke(IPC_CHANNELS.OPEN_IN_EXPLORER, fullPath),
+  openExternalUrl: (url: string): Promise<void> =>
+    ipcRenderer.invoke(IPC_CHANNELS.OPEN_EXTERNAL_URL, url),
+  getAppVersion: (): Promise<string> =>
+    ipcRenderer.invoke(IPC_CHANNELS.GET_APP_VERSION),
   exportProfile: (
     addonsPath: string,
     addonList: { folderName: string; catalogId?: string; version: string; isLibrary: boolean }[]
