@@ -1,0 +1,78 @@
+/* Copyright (c) 2026 thorstendb */
+/* SPDX-License-Identifier: MIT */
+
+/* ---- Dark (default) ---- */
+:root,
+[data-theme="dark"] {
+  --bg-primary: #1a1d24;
+  --bg-secondary: #14171e;
+  --bg-surface: #222730;
+  --bg-hover: #2c3240;
+  --text-primary: #d0d4dc;
+  --text-secondary: #949bac;
+  --text-muted: #5c6374;
+  --accent: #5b9bd5;
+  --accent-hover: #7bb3e0;
+  --border: #363c4a;
+  --green: #6abf7b;
+  --yellow: #e0c478;
+  --red: #d45c6e;
+  --peach: #7ca8c9;
+  --contrast-on-color: #1a1d24;
+  --tree-indent: 20px;
+}
+
+/* ---- Light ---- */
+[data-theme="light"] {
+  --bg-primary: #f0eeeb;
+  --bg-secondary: #e4e1dc;
+  --bg-surface: #faf9f7;
+  --bg-hover: #dbd8d2;
+  --text-primary: #2c2c2c;
+  --text-secondary: #5a5a5a;
+  --text-muted: #8a8a8a;
+  --accent: #2b6cb0;
+  --accent-hover: #1e5a96;
+  --border: #c8c4bc;
+  --green: #3a8a4a;
+  --yellow: #a08030;
+  --red: #b8394a;
+  --peach: #4a80a8;
+  --contrast-on-color: #ffffff;
+}
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html, body, #root {
+  height: 100%;
+  width: 100%;
+  overflow: hidden;
+}
+
+body {
+  font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, sans-serif;
+  background-color: var(--bg-primary);
+  color: var(--text-primary);
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+/* Scrollbar styling */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-track {
+  background: var(--bg-secondary);
+}
+::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--text-muted);
+}
