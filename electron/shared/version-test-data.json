@@ -1,0 +1,314 @@
+{
+  "_comment": "Real-world version strings from ESO addons, deduplicated by structural pattern. Used as reference for parseVersionParts / compareVersionStrings tests.",
+  "parseTests": [
+    {
+      "pattern": "simple integer",
+      "input": "86",
+      "addon": "LibCombat",
+      "expectedParts": [86],
+      "expectedSubParts": []
+    },
+    {
+      "pattern": "two-part (X.Y)",
+      "input": "1.0",
+      "addon": "TributeImprovedLeaderboard",
+      "expectedParts": [1, 0],
+      "expectedSubParts": []
+    },
+    {
+      "pattern": "two-part, implicit (no dot in second segment)",
+      "input": "1.009",
+      "addon": "LibMOTD",
+      "expectedParts": [1, 9],
+      "expectedSubParts": []
+    },
+    {
+      "pattern": "two-part, large major",
+      "input": "101032.1",
+      "addon": "CompanionInfo",
+      "expectedParts": [101032, 1],
+      "expectedSubParts": []
+    },
+    {
+      "pattern": "two-part, dot-r revision",
+      "input": "2.r1",
+      "addon": "LibSort",
+      "expectedParts": [2, 1],
+      "expectedSubParts": []
+    },
+    {
+      "pattern": "two-part, v-prefix",
+      "input": "v2.31",
+      "addon": "SousChef",
+      "expectedParts": [2, 31],
+      "expectedSubParts": []
+    },
+    {
+      "pattern": "three-part (semver)",
+      "input": "0.8.9",
+      "addon": "LibSets",
+      "expectedParts": [0, 8, 9],
+      "expectedSubParts": []
+    },
+    {
+      "pattern": "three-part, space-r revision",
+      "input": "2.0 r41",
+      "addon": "LibAddonMenu-2.0",
+      "expectedParts": [2, 0, 41],
+      "expectedSubParts": []
+    },
+    {
+      "pattern": "four-part",
+      "input": "10.0.7.2",
+      "addon": "pChat",
+      "expectedParts": [10, 0, 7, 2],
+      "expectedSubParts": []
+    },
+    {
+      "pattern": "four-part, concatenated r-revision",
+      "input": "3.0r5.0",
+      "addon": "LibFilters-3.0",
+      "expectedParts": [3, 0, 5, 0],
+      "expectedSubParts": []
+    },
+    {
+      "pattern": "four-part, build keyword",
+      "input": "2.3.22 build 1442",
+      "addon": "GuildHallButton",
+      "expectedParts": [2, 3, 22, 1442],
+      "expectedSubParts": []
+    },
+    {
+      "pattern": "four-part, very large segments",
+      "input": "4.26.832.28195",
+      "addon": "TamrielTradeCentre",
+      "expectedParts": [4, 26, 832, 28195],
+      "expectedSubParts": []
+    },
+    {
+      "pattern": "five-part",
+      "input": "4.0.4.3.5",
+      "addon": "DolgubonsLazyWritCreator",
+      "expectedParts": [4, 0, 4, 3, 5],
+      "expectedSubParts": []
+    },
+    {
+      "pattern": "date-based (YYYY.MM.DD)",
+      "input": "2025.08.08",
+      "addon": "PersonalAssistant",
+      "expectedParts": [2025, 8, 8],
+      "expectedSubParts": []
+    },
+    {
+      "pattern": "date-based (YYYY-MM-DD)",
+      "input": "2026-03-30",
+      "addon": "HodorReflexes",
+      "expectedParts": [2026, 3, 30],
+      "expectedSubParts": []
+    },
+    {
+      "pattern": "date with parenthesized build number",
+      "input": "2026-03-04 (20260304)",
+      "addon": "synthetic",
+      "expectedParts": [2026, 3, 4],
+      "expectedSubParts": [20260304]
+    },
+    {
+      "pattern": "semver with parenthesized date",
+      "input": "1.2.3 (2026-01-15)",
+      "addon": "synthetic",
+      "expectedParts": [1, 2, 3],
+      "expectedSubParts": [2026, 1, 15]
+    },
+    {
+      "pattern": "semver with parenthesized build",
+      "input": "2.3.22 (build 1442)",
+      "addon": "synthetic",
+      "expectedParts": [2, 3, 22],
+      "expectedSubParts": [1442]
+    },
+    {
+      "pattern": "pre-release alpha",
+      "input": "1.0-alpha",
+      "addon": "synthetic",
+      "expectedParts": [1, 0],
+      "expectedSubParts": [],
+      "expectedPreRelease": "alpha",
+      "expectedPreReleaseNum": 0
+    },
+    {
+      "pattern": "pre-release rc with number",
+      "input": "1.0-rc.2",
+      "addon": "synthetic",
+      "expectedParts": [1, 0],
+      "expectedSubParts": [],
+      "expectedPreRelease": "rc",
+      "expectedPreReleaseNum": 2
+    }
+  ],
+  "compareTests": [
+    {
+      "description": "simple integer: older < newer",
+      "a": "86",
+      "b": "104",
+      "expected": "a<b"
+    },
+    {
+      "description": "two-part: minor bump",
+      "a": "4.434",
+      "b": "4.435",
+      "expected": "a<b"
+    },
+    {
+      "description": "two-part: implicit format vs dotted",
+      "a": "1.009",
+      "b": "1.05",
+      "expected": "a>b"
+    },
+    {
+      "description": "three-part semver: patch bump",
+      "a": "0.8.9",
+      "b": "0.9.0",
+      "expected": "a<b"
+    },
+    {
+      "description": "three-part: space-r revision bump",
+      "a": "2.0 r41",
+      "b": "2.0 r42",
+      "expected": "a<b"
+    },
+    {
+      "description": "four-part: last segment bump",
+      "a": "10.0.7.2",
+      "b": "10.0.7.3",
+      "expected": "a<b"
+    },
+    {
+      "description": "four-part: build keyword bump",
+      "a": "2.3.22 build 1442",
+      "b": "2.3.22 build 1500",
+      "expected": "a<b"
+    },
+    {
+      "description": "five-part: last segment differs",
+      "a": "4.0.4.3.5",
+      "b": "4.0.4.3.6",
+      "expected": "a<b"
+    },
+    {
+      "description": "five-part vs six-part: trailing zero means older",
+      "a": "4.0.5.6.0.1",
+      "b": "4.0.5.6.1",
+      "expected": "a<b"
+    },
+    {
+      "description": "date-based YYYY.MM.DD: different months",
+      "a": "2025.03.14",
+      "b": "2025.08.08",
+      "expected": "a<b"
+    },
+    {
+      "description": "date-based YYYY-MM-DD: day bump",
+      "a": "2026-03-29",
+      "b": "2026-03-30",
+      "expected": "a<b"
+    },
+    {
+      "description": "date dots vs date hyphens: same date",
+      "a": "2026.03.30",
+      "b": "2026-03-30",
+      "expected": "a=b"
+    },
+    {
+      "description": "date with build number: same main, sub differs",
+      "a": "2026-03-04 (20260304)",
+      "b": "2026-03-04 (20260305)",
+      "expected": "a<b"
+    },
+    {
+      "description": "semver with parenthesized date tiebreaker",
+      "a": "1.2.3 (2026-01-01)",
+      "b": "1.2.3 (2026-03-01)",
+      "expected": "a<b"
+    },
+    {
+      "description": "semver vs semver with sub: sub wins as tiebreaker",
+      "a": "1.2.3",
+      "b": "1.2.3 (2026-01-01)",
+      "expected": "a<b"
+    },
+    {
+      "description": "semver with parenthesized build: build differs",
+      "a": "1.2.3 (build 456)",
+      "b": "1.2.3 (build 789)",
+      "expected": "a<b"
+    },
+    {
+      "description": "v-prefix stripped: equal to plain",
+      "a": "v2.31",
+      "b": "2.31",
+      "expected": "a=b"
+    },
+    {
+      "description": "pre-release < release",
+      "a": "1.0-rc",
+      "b": "1.0",
+      "expected": "a<b"
+    },
+    {
+      "description": "pre-release ordering: alpha < beta",
+      "a": "1.0-alpha",
+      "b": "1.0-beta",
+      "expected": "a<b"
+    },
+    {
+      "description": "large version vs date: not confused as date",
+      "a": "4.26.832.28195",
+      "b": "4.26.832.28196",
+      "expected": "a<b"
+    },
+    {
+      "description": "concatenated r-revision bump",
+      "a": "3.0r5.0",
+      "b": "3.0r6.0",
+      "expected": "a<b"
+    },
+    {
+      "description": "empty vs any version",
+      "a": "",
+      "b": "1.0",
+      "expected": "a<b"
+    },
+    {
+      "description": "scheme change: semver→date, catalog date is newer",
+      "a": "1.2.3",
+      "b": "2026-03-30",
+      "catalogDate": 1774828800,
+      "expected": "a<b",
+      "_note": "catalogDate = 2026-03-30T00:00:00Z; local is old semver, catalog switched to date"
+    },
+    {
+      "description": "scheme change: date→semver, catalog date is newer",
+      "a": "2025-08-08",
+      "b": "2.0.0",
+      "catalogDate": 1774828800,
+      "expected": "a<b",
+      "_note": "catalogDate = 2026-03-30; local had date scheme, catalog now semver"
+    },
+    {
+      "description": "scheme change: date→semver, catalog date is older",
+      "a": "2026-03-30",
+      "b": "2.0.0",
+      "catalogDate": 1767225600,
+      "expected": "a>b",
+      "_note": "catalogDate = 2026-01-01; local date is newer than catalog upload"
+    },
+    {
+      "description": "scheme change: semver→date, no catalogDate falls through",
+      "a": "1.2.3",
+      "b": "2026-03-30",
+      "expected": "a<b",
+      "_note": "without catalogDate, raw numeric comparison still says 1 < 2026"
+    }
+  ]
+}

@@ -65,7 +65,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     addonsPath: string
   ): Promise<{ moved: string[]; error?: string }> =>
     ipcRenderer.invoke(IPC_CHANNELS.CLEANUP_DOWNLOADS, addonsPath),
-  saveUiSettings: (settings: { logHeight?: number; panelWidths?: number[] }): Promise<AppConfig> =>
+  saveUiSettings: (settings: { logHeight?: number; panelWidths?: number[]; fontSize?: number; fontFamily?: string }): Promise<AppConfig> =>
     ipcRenderer.invoke(IPC_CHANNELS.SAVE_UI_SETTINGS, settings),
   saveInstalledVersions: (versions: Record<string, string>): Promise<void> =>
     ipcRenderer.invoke(IPC_CHANNELS.SAVE_INSTALLED_VERSIONS, versions),
@@ -126,17 +126,20 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.invoke(IPC_CHANNELS.GET_APP_VERSION),
   exportProfile: (
     addonsPath: string,
-    addonList: { folderName: string; catalogId?: string; version: string; isLibrary: boolean }[]
+    addonList: { folderName: string; catalogId?: string; version: string; isLibrary: boolean }[],
+    bundleFolders?: string[]
   ): Promise<ExportData | { error: string }> =>
-    ipcRenderer.invoke(IPC_CHANNELS.EXPORT_PROFILE, addonsPath, addonList),
+    ipcRenderer.invoke(IPC_CHANNELS.EXPORT_PROFILE, addonsPath, addonList, bundleFolders),
   importProfile: (
     addonsPath: string,
     data: ExportData
-  ): Promise<{ addonsToInstall: { folderName: string; catalogId?: string; isLibrary: boolean }[]; restoredSettings: string[]; errors: string[] }> =>
+  ): Promise<{ addonsToInstall: { folderName: string; catalogId?: string; isLibrary: boolean }[]; restoredSettings: string[]; restoredBundles: string[]; errors: string[] }> =>
     ipcRenderer.invoke(IPC_CHANNELS.IMPORT_PROFILE, addonsPath, data),
   batchInstallAddons: (
     addonsPath: string,
     addonIds: string[]
   ): Promise<{ addonId: string; installed: string[]; error?: string }[]> =>
     ipcRenderer.invoke(IPC_CHANNELS.BATCH_INSTALL_ADDONS, addonsPath, addonIds),
+  getSystemFonts: (): Promise<string[]> =>
+    ipcRenderer.invoke(IPC_CHANNELS.GET_SYSTEM_FONTS),
 });

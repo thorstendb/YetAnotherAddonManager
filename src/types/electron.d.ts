@@ -67,7 +67,7 @@ declare global {
       cleanupDownloads: (
         addonsPath: string
       ) => Promise<{ moved: string[]; error?: string }>;
-      saveUiSettings: (settings: { logHeight?: number; panelWidths?: number[] }) => Promise<AppConfig>;
+      saveUiSettings: (settings: { logHeight?: number; panelWidths?: number[]; fontSize?: number; fontFamily?: string }) => Promise<AppConfig>;
       saveInstalledVersions: (versions: Record<string, string>) => Promise<void>;
       onInstallProgress: (callback: (data: { addonId: string; phase: string; percent?: number }) => void) => () => void;
       onExportProgress: (callback: (data: { phase: string; percent: number }) => void) => () => void;
@@ -90,16 +90,18 @@ declare global {
       getAppVersion: () => Promise<string>;
       exportProfile: (
         addonsPath: string,
-        addonList: { folderName: string; catalogId?: string; version: string; isLibrary: boolean }[]
+        addonList: { folderName: string; catalogId?: string; version: string; isLibrary: boolean }[],
+        bundleFolders?: string[]
       ) => Promise<ExportData | { error: string }>;
       importProfile: (
         addonsPath: string,
         data: ExportData
-      ) => Promise<{ addonsToInstall: { folderName: string; catalogId?: string; isLibrary: boolean }[]; restoredSettings: string[]; errors: string[] }>;
+      ) => Promise<{ addonsToInstall: { folderName: string; catalogId?: string; isLibrary: boolean }[]; restoredSettings: string[]; restoredBundles: string[]; errors: string[] }>;
       batchInstallAddons: (
         addonsPath: string,
         addonIds: string[]
       ) => Promise<{ addonId: string; installed: string[]; error?: string }[]>;
+      getSystemFonts: () => Promise<string[]>;
     };
   }
 }

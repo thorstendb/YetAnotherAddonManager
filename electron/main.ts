@@ -4,6 +4,7 @@ import { app, BrowserWindow, ipcMain, dialog, shell } from 'electron';
 import * as path from 'path';
 import * as fs from 'fs';
 import * as os from 'os';
+import { execSync } from 'child_process';
 import { IPC_CHANNELS } from './shared/types';
 import { loadConfig, saveConfig } from './configStore';
 import { scanAddonsFolder, cleanupUnusedLibraries, deleteAddon, deleteAddonAndExclusiveRefs } from './addonScanner';
@@ -125,10 +126,12 @@ ipcMain.handle(IPC_CHANNELS.SET_ADDON_PATH, async (_event, addonPath: string) =>
   return config;
 });
 
-ipcMain.handle(IPC_CHANNELS.SAVE_UI_SETTINGS, async (_event, settings: { logHeight?: number; panelWidths?: number[] }) => {
+ipcMain.handle(IPC_CHANNELS.SAVE_UI_SETTINGS, async (_event, settings: { logHeight?: number; panelWidths?: number[]; fontSize?: number; fontFamily?: string }) => {
   const config = loadConfig();
   if (settings.logHeight !== undefined) config.logHeight = settings.logHeight;
   if (settings.panelWidths !== undefined) config.panelWidths = settings.panelWidths;
+  if (settings.fontSize !== undefined) config.fontSize = settings.fontSize;
+  if (settings.fontFamily !== undefined) config.fontFamily = settings.fontFamily;
   saveConfig(config);
   return config;
 });
@@ -192,20 +195,61 @@ ipcMain.handle(IPC_CHANNELS.FETCH_ADDON_CATALOG, async (_event, forceRefresh: bo
 });
 
 ipcMain.handle(IPC_CHANNELS.INSTALL_ADDON, async (_event, addonId: string, addonsPath: string) => {
-  try {
-    return await installAddon(addonId, addonsPath, (phase, percent) => {
+  const allResults: { installed: string[]; missingDeps: string[] } = { installed: [], missingDeps: [] };
+  const processedIds = new Set<string>();
+  const idsToProcess = [addonId];
+
+  while (idsToProcess.length > 0) {
+    const currentId = idsToProcess.shift()!;
+    if (processedIds.has(currentId)) continue;
+    processedIds.add(currentId);
+
+    try {
+      const result = await installAddon(currentId, addonsPath, (phase, percent) => {
+        if (mainWindow) {
+          mainWindow.webContents.send(IPC_CHANNELS.INSTALL_PROGRESS, { addonId: currentId, phase, percent });
+        }
+      });
       if (mainWindow) {
-        mainWindow.webContents.send(IPC_CHANNELS.INSTALL_PROGRESS, { addonId, phase, percent });
+        mainWindow.webContents.send(IPC_CHANNELS.INSTALL_PROGRESS, { addonId: currentId, phase: 'done' });
       }
-    });
-  } catch (err: any) {
-    console.error('Install addon error:', err);
-    return { installed: [], missingDeps: [], error: err.message || String(err) };
-  } finally {
-    if (mainWindow) {
-      mainWindow.webContents.send(IPC_CHANNELS.INSTALL_PROGRESS, { addonId, phase: 'done' });
+      allResults.installed.push(...result.installed);
+
+      // Resolve missing deps → queue for install
+      if (result.missingDeps.length > 0) {
+        const catalog = await fetchAddonCatalog();
+        const dirToAddon = new Map<string, string>();
+        for (const ca of catalog) {
+          for (const d of ca.directories) {
+            dirToAddon.set(d, ca.id);
+          }
+        }
+        for (const depName of result.missingDeps) {
+          const depId = dirToAddon.get(depName);
+          if (depId && !processedIds.has(depId)) {
+            idsToProcess.push(depId);
+            if (mainWindow) {
+              mainWindow.webContents.send(IPC_CHANNELS.INSTALL_PROGRESS, { addonId: depId, phase: 'queued' });
+            }
+          } else if (!depId) {
+            allResults.missingDeps.push(depName);
+          }
+        }
+      }
+    } catch (err: any) {
+      console.error(`Install addon ${currentId} error:`, err);
+      if (currentId === addonId) {
+        // Primary addon failed — return error
+        return { installed: allResults.installed, missingDeps: allResults.missingDeps, error: err.message || String(err) };
+      }
+      // Dep install failed — log but continue
+      allResults.missingDeps.push(currentId);
     }
   }
+  if (mainWindow) {
+    mainWindow.webContents.send(IPC_CHANNELS.INSTALL_PROGRESS, { addonId, phase: 'done' });
+  }
+  return allResults;
 });
 
 ipcMain.handle(IPC_CHANNELS.GET_ADDON_SETTINGS, async (_event, addonsPath: string) => {
@@ -354,10 +398,11 @@ ipcMain.handle(IPC_CHANNELS.RESTORE_SV_FILE, async (_event, addonsPath: string, 
 ipcMain.handle(IPC_CHANNELS.EXPORT_PROFILE, async (
   _event,
   addonsPath: string,
-  addonList: { folderName: string; catalogId?: string; version: string; isLibrary: boolean }[]
+  addonList: { folderName: string; catalogId?: string; version: string; isLibrary: boolean }[],
+  bundleFolders?: string[]
 ) => {
   try {
-    return exportProfile(addonsPath, addonList, (phase, percent) => {
+    return exportProfile(addonsPath, addonList, bundleFolders, (phase, percent) => {
       if (mainWindow) {
         mainWindow.webContents.send(IPC_CHANNELS.EXPORT_PROGRESS, { phase, percent });
       }
@@ -380,38 +425,92 @@ ipcMain.handle(IPC_CHANNELS.IMPORT_PROFILE, async (_event, addonsPath: string, d
 ipcMain.handle(IPC_CHANNELS.BATCH_INSTALL_ADDONS, async (
   _event,
   addonsPath: string,
-  addonIds: string[]
+  addonIds: string[],
+  resolveDeps = true
 ) => {
   const results: { addonId: string; installed: string[]; error?: string }[] = [];
+  const processedIds = new Set<string>();
+  const idsToProcess = [...addonIds];
   const BATCH_SIZE = 4;
-  for (let i = 0; i < addonIds.length; i += BATCH_SIZE) {
-    const batch = addonIds.slice(i, i + BATCH_SIZE);
-    const batchResults = await Promise.allSettled(
-      batch.map(async (addonId) => {
-        try {
-          const result = await installAddon(addonId, addonsPath, (phase, percent) => {
+
+  while (idsToProcess.length > 0) {
+    // Take the next chunk of unprocessed IDs
+    const currentBatch = idsToProcess.splice(0);
+    for (const id of currentBatch) processedIds.add(id);
+
+    for (let i = 0; i < currentBatch.length; i += BATCH_SIZE) {
+      const batch = currentBatch.slice(i, i + BATCH_SIZE);
+      const batchResults = await Promise.allSettled(
+        batch.map(async (addonId) => {
+          try {
+            const result = await installAddon(addonId, addonsPath, (phase, percent) => {
+              if (mainWindow) {
+                mainWindow.webContents.send(IPC_CHANNELS.INSTALL_PROGRESS, { addonId, phase, percent });
+              }
+            });
             if (mainWindow) {
-              mainWindow.webContents.send(IPC_CHANNELS.INSTALL_PROGRESS, { addonId, phase, percent });
+              mainWindow.webContents.send(IPC_CHANNELS.INSTALL_PROGRESS, { addonId, phase: 'done' });
             }
-          });
-          if (mainWindow) {
-            mainWindow.webContents.send(IPC_CHANNELS.INSTALL_PROGRESS, { addonId, phase: 'done' });
+            return { addonId, installed: result.installed, missingDeps: result.missingDeps };
+          } catch (err: any) {
+            if (mainWindow) {
+              mainWindow.webContents.send(IPC_CHANNELS.INSTALL_PROGRESS, { addonId, phase: 'done' });
+            }
+            return { addonId, installed: [] as string[], missingDeps: [] as string[], error: err.message || String(err) };
           }
-          return { addonId, installed: result.installed };
-        } catch (err: any) {
-          if (mainWindow) {
-            mainWindow.webContents.send(IPC_CHANNELS.INSTALL_PROGRESS, { addonId, phase: 'done' });
+        })
+      );
+      for (const r of batchResults) {
+        if (r.status === 'fulfilled') {
+          results.push({ addonId: r.value.addonId, installed: r.value.installed, error: r.value.error });
+
+          // Resolve missing dependencies → find their catalog IDs and queue them
+          if (resolveDeps && r.value.missingDeps.length > 0) {
+            const catalog = await fetchAddonCatalog();
+            // Build a map: directory name → catalog addon
+            const dirToAddon = new Map<string, { id: string; name: string }>();
+            for (const ca of catalog) {
+              for (const d of ca.directories) {
+                dirToAddon.set(d, { id: ca.id, name: ca.name });
+              }
+            }
+            for (const depName of r.value.missingDeps) {
+              const match = dirToAddon.get(depName);
+              if (match && !processedIds.has(match.id)) {
+                idsToProcess.push(match.id);
+              }
+            }
           }
-          return { addonId, installed: [] as string[], error: err.message || String(err) };
+        } else {
+          results.push({ addonId: 'unknown', installed: [], error: String(r.reason) });
         }
-      })
-    );
-    for (const r of batchResults) {
-      if (r.status === 'fulfilled') results.push(r.value);
-      else results.push({ addonId: 'unknown', installed: [], error: String(r.reason) });
+      }
     }
   }
   return results;
+});
+
+// --- System Fonts ---
+
+ipcMain.handle(IPC_CHANNELS.GET_SYSTEM_FONTS, async () => {
+  try {
+    if (process.platform === 'win32') {
+      const output = execSync(
+        'powershell -NoProfile -Command "[System.Reflection.Assembly]::LoadWithPartialName(\'System.Drawing\') | Out-Null; (New-Object System.Drawing.Text.InstalledFontCollection).Families | ForEach-Object { $_.Name }"',
+        { encoding: 'utf-8', timeout: 10000 }
+      );
+      return output.split('\n').map((s) => s.trim()).filter(Boolean).sort();
+    } else if (process.platform === 'darwin') {
+      const output = execSync('system_profiler SPFontsDataType 2>/dev/null | grep "Full Name:" | sed "s/.*Full Name: //"', { encoding: 'utf-8', timeout: 10000 });
+      return [...new Set(output.split('\n').map((s) => s.trim()).filter(Boolean))].sort();
+    } else {
+      const output = execSync('fc-list --format="%{family[0]}\\n" 2>/dev/null | sort -u', { encoding: 'utf-8', timeout: 10000 });
+      return output.split('\n').map((s) => s.trim()).filter(Boolean);
+    }
+  } catch (err: any) {
+    console.error('Failed to enumerate system fonts:', err);
+    return [];
+  }
 });
 
 // --- App Lifecycle ---

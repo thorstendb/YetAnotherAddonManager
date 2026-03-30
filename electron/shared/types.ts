@@ -80,22 +80,59 @@ const VERSION_PRE_RELEASE_ORDER: Record<string, number> = {
 };
 
 /**
+ * Normalize date-based version parts to [YYYY, MM, DD] order so that
+ * ISO (2026-03-30), US (03/30/2026), and EU (30.03.2026) compare correctly.
+ *
+ * Only triggers for exactly 3 numeric segments where one value is ≥ 2000
+ * (a plausible year), so normal versions like "1.2.3" are left untouched.
+ */
+function normalizeDateParts(parts: number[]): number[] {
+  if (parts.length !== 3) return parts;
+  const [a, b, c] = parts;
+
+  // ISO: YYYY-MM-DD (first segment is the year)
+  if (a >= 2000 && b >= 1 && b <= 12 && c >= 1 && c <= 31) {
+    return parts; // already [YYYY, MM, DD]
+  }
+
+  // Trailing year: ?-?-YYYY
+  if (c >= 2000) {
+    // EU: DD-MM-YYYY — day > 12 rules out US interpretation
+    if (a > 12 && a <= 31 && b >= 1 && b <= 12) {
+      return [c, b, a];
+    }
+    // US: MM-DD-YYYY (also the fallback for ambiguous cases like 05/06/2026)
+    if (a >= 1 && a <= 12 && b >= 1 && b <= 31) {
+      return [c, a, b];
+    }
+  }
+
+  return parts; // not a recognisable date — leave as-is
+}
+
+/**
  * Parse a version string into numeric parts and optional pre-release tag.
  *
  * Supported formats (from real addons):
  *   1.2.3, 0.8.6         – standard semver
  *   2025.08.08            – date-based (YYYY.MM.DD)
- *   2025-12-01            – date-based with hyphens
+ *   2025-12-01            – date-based with hyphens (ISO)
+ *   03/30/2025            – date-based US (MM/DD/YYYY)
+ *   30.03.2025            – date-based EU (DD.MM.YYYY)
  *   2.0 r41, 1.0 r7       – revision suffix
  *   3.0r4.6               – concatenated revision
  *   2.3.22 build 1442     – with build number
  *   v2.31                 – leading v prefix
  *   85, 104               – simple integer
- *   4.0.4.3.5             – extra-long
+ *   4.0.5.6.1             – extra-long (arbitrary number of segments)
  *   1.0-alpha, 1.0-rc.2  – pre-release
+ *   2026-03-04 (20260304) – with parenthesized build metadata
+ *   1.2.3 (2026-01-01)   – version with parenthesized date sub-version
  */
 export function parseVersionParts(raw: string): {
   parts: number[];
+  subParts: number[];
+  isDate: boolean;
   preRelease?: string;
   preReleaseNum: number;
 } {
@@ -103,6 +140,18 @@ export function parseVersionParts(raw: string): {
 
   // Strip leading 'v' or 'V'
   s = s.replace(/^v/i, '');
+
+  // Extract parenthesized sub-version, e.g. "2026-03-04 (20260304)" or "1.2.3 (2026-01-01)"
+  let subParts: number[] = [];
+  const parenMatch = s.match(/\s*\(([^)]*)\)/);
+  if (parenMatch) {
+    const inner = parenMatch[1].replace(/^v/i, '').replace(/\b(?:build|rev)\b/gi, '');
+    const subNums = inner.match(/\d+/g);
+    if (subNums) {
+      subParts = normalizeDateParts(subNums.map(Number));
+    }
+    s = s.replace(parenMatch[0], '');
+  }
 
   // Detect and extract pre-release markers
   let preRelease: string | undefined;
@@ -115,11 +164,16 @@ export function parseVersionParts(raw: string): {
   }
 
   // Extract all numeric groups (handles any separator: dots, hyphens, spaces,
-  // 'r' prefixes, 'build' keyword, etc.)
+  // slashes, 'r' prefixes, 'build' keyword, etc.)
   const nums = s.match(/\d+/g);
-  const parts = nums ? nums.map(Number) : [0];
+  let parts = nums ? nums.map(Number) : [0];
 
-  return { parts, preRelease, preReleaseNum };
+  // Normalise date-based versions so ISO / US / EU all compare correctly
+  parts = normalizeDateParts(parts);
+  // Detect whether this version looks like a date (3 segments with a plausible year)
+  const isDate = parts.length === 3 && parts[0] >= 2000 && parts[1] >= 1 && parts[1] <= 12 && parts[2] >= 1 && parts[2] <= 31;
+
+  return { parts, subParts, isDate, preRelease, preReleaseNum };
 }
 
 /**
@@ -143,8 +197,12 @@ export function dateToVersion(epochSeconds: number): string {
  *
  * A pre-release version is always less than the corresponding release:
  *   1.0-alpha < 1.0-beta < 1.0-rc < 1.0
+ *
+ * When the versioning schemes are incompatible (one is date-based, the other
+ * is not), the caller can supply an optional catalog upload date as a reliable
+ * fallback. Without it, the raw numeric comparison still applies (best effort).
  */
-export function compareVersionStrings(a: string, b: string): number {
+export function compareVersionStrings(a: string, b: string, catalogDateEpoch?: number): number {
   const sa = (a || '').trim();
   const sb = (b || '').trim();
   if (sa === sb) return 0;
@@ -155,6 +213,32 @@ export function compareVersionStrings(a: string, b: string): number {
 
   const va = parseVersionParts(sa);
   const vb = parseVersionParts(sb);
+
+  // Detect versioning scheme mismatch: one side is date-based, the other is not.
+  // The addon author changed versioning scheme between releases.
+  // Fall back to the catalog upload date as the reliable comparison anchor.
+  if (va.isDate !== vb.isDate && catalogDateEpoch) {
+    const catalogDateParts = parseVersionParts(dateToVersion(catalogDateEpoch)).parts;
+    if (va.isDate) {
+      // local is date-based, catalog switched to semver
+      // → compare local date against catalog upload date
+      for (let i = 0; i < 3; i++) {
+        const na = va.parts[i] ?? 0;
+        const nb = catalogDateParts[i] ?? 0;
+        if (na !== nb) return na - nb;
+      }
+      return 0;
+    } else {
+      // local is semver, catalog switched to date-based
+      // → We cannot meaningfully compare semver against a date.
+      //   Use catalog upload date vs catalog date-version as sanity check,
+      //   but the key insight is: if the author changed the scheme, a new
+      //   upload to the catalog almost certainly means an update.
+      //   Report update unless the installedCatalogVersions guard already
+      //   caught it (which happens at the call site, not here).
+      return -1;
+    }
+  }
 
   // Compare numeric parts
   const maxLen = Math.max(va.parts.length, vb.parts.length);
@@ -173,7 +257,18 @@ export function compareVersionStrings(a: string, b: string): number {
     const orderA = VERSION_PRE_RELEASE_ORDER[va.preRelease] ?? 99;
     const orderB = VERSION_PRE_RELEASE_ORDER[vb.preRelease] ?? 99;
     if (orderA !== orderB) return orderA - orderB;
-    return va.preReleaseNum - vb.preReleaseNum;
+    const preDiff = va.preReleaseNum - vb.preReleaseNum;
+    if (preDiff !== 0) return preDiff;
+  }
+
+  // Tiebreaker: compare parenthesized sub-version parts (e.g. build numbers, dates)
+  if (va.subParts.length > 0 || vb.subParts.length > 0) {
+    const subMax = Math.max(va.subParts.length, vb.subParts.length);
+    for (let i = 0; i < subMax; i++) {
+      const sa2 = va.subParts[i] ?? 0;
+      const sb2 = vb.subParts[i] ?? 0;
+      if (sa2 !== sb2) return sa2 - sb2;
+    }
   }
 
   return 0;
@@ -188,6 +283,10 @@ export interface AppConfig {
   /** Catalog addon ID → UIVersion when last installed. Prevents false "update available" when
    *  the local manifest ## Version doesn't match the catalog UIVersion string. */
   installedCatalogVersions?: Record<string, string>;
+  /** UI font size in pixels (default 14) */
+  fontSize?: number;
+  /** UI font family (CSS value) */
+  fontFamily?: string;
 }
 
 /** Character → enabled map used for per-addon enable/disable display */
@@ -323,4 +422,5 @@ export const IPC_CHANNELS = {
   OPEN_EXTERNAL_URL: 'open-external-url',
   GET_APP_VERSION: 'get-app-version',
   EXPORT_PROGRESS: 'export-progress',
+  GET_SYSTEM_FONTS: 'get-system-fonts',
 } as const;

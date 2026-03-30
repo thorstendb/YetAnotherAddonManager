@@ -4,7 +4,7 @@ import React, { useEffect, useRef, useState } from 'react';
 
 interface ImportExportDialogProps {
   addonPath: string;
-  addons: { folderName: string; version: string; isLibrary: boolean }[];
+  addons: { folderName: string; version: string; isLibrary: boolean; dependsOn: string[] }[];
   catalogByDir: Map<string, { id: string; name: string; version: string; directories: string[] }>;
   onLog: (message: string, level?: 'info' | 'success' | 'warn' | 'error') => void;
   onScanPath: (path: string) => void;
@@ -31,12 +31,13 @@ const ImportExportDialog: React.FC<ImportExportDialogProps> = ({
   const [importPreview, setImportPreview] = useState<{
     totalAddons: number;
     totalLibraries: number;
+    bundledCount: number;
     hasSettings: boolean;
     hasUserSettings: boolean;
     savedVarsCount: number;
     exportedAt: string;
   } | null>(null);
-  const [importProgress, setImportProgress] = useState('');
+  const [importProgress, setImportProgress] = useState<{ phase: string; percent: number } | null>(null);
   // Checkboxes for individual SavedVariables .lua files
   const [savedVarFiles, setSavedVarFiles] = useState<Map<string, boolean>>(new Map());
 
@@ -65,23 +66,73 @@ const ImportExportDialog: React.FC<ImportExportDialogProps> = ({
 
   const libraryCount = addons.filter((a) => a.isLibrary).length;
   const addonCount = addons.length - libraryCount;
+  const nonCatalogCount = addons.filter((a) => !a.isLibrary && !catalogByDir.has(a.folderName)).length;
+
+  // Compute required libraries (transitively used by non-library addons)
+  const requiredLibNames = (() => {
+    const allByName = new Map(addons.map((a) => [a.folderName, a]));
+    const required = new Set<string>();
+    const q = addons.filter((a) => !a.isLibrary).flatMap((a) => a.dependsOn);
+    while (q.length > 0) {
+      const dep = q.shift()!;
+      if (required.has(dep)) continue;
+      const d = allByName.get(dep);
+      if (d && d.isLibrary) {
+        required.add(dep);
+        q.push(...d.dependsOn);
+      }
+    }
+    return required;
+  })();
+  const requiredLibCount = requiredLibNames.size;
+  const unusedLibCount = libraryCount - requiredLibCount;
 
   // --- Export ---
   const handleExport = async () => {
     setExporting(true);
     setExportProgress({ phase: 'Preparing…', percent: 0 });
     try {
-      const addonList = addons.map((a) => {
-        const catalogAddon = catalogByDir.get(a.folderName);
-        return {
-          folderName: a.folderName,
-          catalogId: catalogAddon?.id,
-          version: a.version,
-          isLibrary: a.isLibrary,
-        };
-      });
+      const nonLibAddons = addons.filter((a) => !a.isLibrary);
+      const allAddonsByName = new Map(addons.map((a) => [a.folderName, a]));
 
-      const result = await window.electronAPI.exportProfile(addonPath, addonList);
+      // Transitively collect all required libraries
+      const requiredLibs = new Set<string>();
+      const queue = nonLibAddons.flatMap((a) => a.dependsOn);
+      while (queue.length > 0) {
+        const depName = queue.shift()!;
+        if (requiredLibs.has(depName)) continue;
+        const dep = allAddonsByName.get(depName);
+        if (dep && dep.isLibrary) {
+          requiredLibs.add(depName);
+          // Also add transitive deps of this library
+          queue.push(...dep.dependsOn);
+        }
+      }
+
+      // Build addon list: non-libraries + required libraries
+      const addonList = nonLibAddons.map((a) => ({
+        folderName: a.folderName,
+        catalogId: catalogByDir.get(a.folderName)?.id,
+        version: a.version,
+        isLibrary: false,
+      }));
+
+      for (const libName of requiredLibs) {
+        const lib = allAddonsByName.get(libName)!;
+        addonList.push({
+          folderName: lib.folderName,
+          catalogId: catalogByDir.get(lib.folderName)?.id,
+          version: lib.version,
+          isLibrary: true,
+        });
+      }
+
+      // Identify non-catalog folders to bundle (both addons and libs without catalog entry)
+      const bundleFolders = addonList
+        .filter((a) => !catalogByDir.has(a.folderName))
+        .map((a) => a.folderName);
+
+      const result = await window.electronAPI.exportProfile(addonPath, addonList, bundleFolders.length > 0 ? bundleFolders : undefined);
       if ('error' in result) {
         onLog(`Export failed: ${result.error}`, 'error');
         return;
@@ -112,8 +163,12 @@ const ImportExportDialog: React.FC<ImportExportDialogProps> = ({
       URL.revokeObjectURL(url);
 
       const svCount = Object.keys(result.savedVariables).length;
+      const bundledCount = result.bundledAddons ? Object.keys(result.bundledAddons).length : 0;
+      const exportedAddons = result.addons.filter((a: { isLibrary: boolean }) => !a.isLibrary).length;
+      const exportedLibs = result.addons.filter((a: { isLibrary: boolean }) => a.isLibrary).length;
       onLog(
-        `Exported ${result.addons.length} addons` +
+        `Exported ${exportedAddons} addon(s), ${exportedLibs} librar${exportedLibs === 1 ? 'y' : 'ies'}` +
+        (bundledCount > 0 ? ` (${bundledCount} bundled)` : '') +
         (result.addonSettings ? ', AddOnSettings.txt' : '') +
         (svCount > 0 ? `, ${svCount} SavedVariables` : '') +
         (result.userSettings ? ', UserSettings.txt' : ''),
@@ -152,6 +207,7 @@ const ImportExportDialog: React.FC<ImportExportDialogProps> = ({
       setImportPreview({
         totalAddons: data.addons.filter((a: any) => !a.isLibrary).length,
         totalLibraries: data.addons.filter((a: any) => a.isLibrary).length,
+        bundledCount: data.bundledAddons ? Object.keys(data.bundledAddons).length : 0,
         hasSettings: !!data.addonSettings,
         hasUserSettings: !!data.userSettings,
         savedVarsCount: svKeys.length,
@@ -167,10 +223,11 @@ const ImportExportDialog: React.FC<ImportExportDialogProps> = ({
   const handleImport = async () => {
     if (!importFile || !addonPath) return;
     setImporting(true);
-    setImportProgress('Reading file...');
+    setImportProgress({ phase: 'Reading file…', percent: 5 });
     try {
       const text = await importFile.text();
       const data = JSON.parse(text);
+      setImportProgress({ phase: 'Parsing…', percent: 10 });
 
       // Filter based on user checkbox selection
       if (!importAddonSettings) {
@@ -190,11 +247,14 @@ const ImportExportDialog: React.FC<ImportExportDialogProps> = ({
       }
 
       // Step 1: Restore settings & SavedVariables
-      setImportProgress('Restoring settings...');
+      setImportProgress({ phase: 'Restoring settings…', percent: 20 });
       const result = await window.electronAPI.importProfile(addonPath, data);
 
       for (const s of result.restoredSettings) {
         onLog(`Restored: ${s}`, 'success');
+      }
+      if (result.restoredBundles.length > 0) {
+        onLog(`Restored ${result.restoredBundles.length} bundled addon(s): ${result.restoredBundles.join(', ')}`, 'success');
       }
       for (const e of result.errors) {
         onLog(`Import error: ${e}`, 'error');
@@ -203,7 +263,6 @@ const ImportExportDialog: React.FC<ImportExportDialogProps> = ({
       // Step 2: Install missing addons from catalog
       const toInstall = result.addonsToInstall.filter((a) => a.catalogId);
       if (toInstall.length > 0) {
-        // Deduplicate: a catalog addon may provide multiple directories
         const seenIds = new Set<string>();
         const uniqueIds: string[] = [];
         for (const addon of toInstall) {
@@ -213,13 +272,23 @@ const ImportExportDialog: React.FC<ImportExportDialogProps> = ({
           }
         }
 
-        setImportProgress(`Installing ${uniqueIds.length} addon(s)...`);
+        setImportProgress({ phase: `Installing 0/${uniqueIds.length} addon(s)…`, percent: 30 });
         onLog(`Installing ${uniqueIds.length} missing addon(s) from catalog...`);
+
+        // Listen for install progress to update the bar
+        let installedSoFar = 0;
+        const totalToInstall = uniqueIds.length;
+        const updateInstallProgress = () => {
+          installedSoFar++;
+          const pct = 30 + Math.round((installedSoFar / totalToInstall) * 65);
+          setImportProgress({ phase: `Installing ${installedSoFar}/${totalToInstall} addon(s)…`, percent: pct });
+        };
 
         const installResults = await window.electronAPI.batchInstallAddons(addonPath, uniqueIds);
         let installed = 0;
         let failed = 0;
         for (const r of installResults) {
+          updateInstallProgress();
           if (r.error) {
             onLog(`Failed to install ${r.addonId}: ${r.error}`, 'error');
             failed++;
@@ -235,12 +304,12 @@ const ImportExportDialog: React.FC<ImportExportDialogProps> = ({
         onLog(`${noCatalog.length} addon(s) not in catalog (manual install needed): ${noCatalog.map((a) => a.folderName).join(', ')}`, 'warn');
       }
 
-      setImportProgress('Done!');
+      setImportProgress({ phase: 'Done!', percent: 100 });
       onLog('Import complete', 'success');
       onScanPath(addonPath);
     } catch (err: any) {
       onLog(`Import failed: ${err.message || err}`, 'error');
-      setImportProgress('');
+      setImportProgress(null);
     } finally {
       setImporting(false);
     }
@@ -272,7 +341,13 @@ const ImportExportDialog: React.FC<ImportExportDialogProps> = ({
               </p>
               <div className="ie-stats">
                 <span className="ie-stat">🧩 <strong>{addonCount}</strong> AddOns</span>
-                <span className="ie-stat">📚 <strong>{libraryCount}</strong> Libraries</span>
+                <span className="ie-stat">📚 <strong>{requiredLibCount}</strong> Libraries</span>
+                {unusedLibCount > 0 && (
+                  <span className="ie-stat" style={{ opacity: 0.6 }}>🗑️ <strong>{unusedLibCount}</strong> unused libs (excluded)</span>
+                )}
+                {nonCatalogCount > 0 && (
+                  <span className="ie-stat">📦 <strong>{nonCatalogCount}</strong> bundled (not on ESOUI)</span>
+                )}
               </div>
               <div className="ie-options">
                 <label className="ie-option">
@@ -354,6 +429,9 @@ const ImportExportDialog: React.FC<ImportExportDialogProps> = ({
                   <div className="ie-stats">
                     <span className="ie-stat">🧩 <strong>{importPreview.totalAddons}</strong> AddOns</span>
                     <span className="ie-stat">📚 <strong>{importPreview.totalLibraries}</strong> Libraries</span>
+                    {importPreview.bundledCount > 0 && (
+                      <span className="ie-stat">📦 <strong>{importPreview.bundledCount}</strong> bundled</span>
+                    )}
                   </div>
                   <div className="ie-date">
                     Exported: {new Date(importPreview.exportedAt).toLocaleString()}
@@ -421,7 +499,17 @@ const ImportExportDialog: React.FC<ImportExportDialogProps> = ({
               )}
 
               {importProgress && (
-                <div className="ie-progress">{importProgress}</div>
+                <div style={{ margin: '12px 0' }}>
+                  <div style={{ fontSize: '12px', color: 'var(--text-secondary)', marginBottom: 4 }}>
+                    {importProgress.phase}
+                  </div>
+                  <div className="status-progress-track" style={{ height: 6 }}>
+                    <div
+                      className="status-progress-fill status-progress-current"
+                      style={{ width: `${importProgress.percent}%` }}
+                    />
+                  </div>
+                </div>
               )}
 
               <button

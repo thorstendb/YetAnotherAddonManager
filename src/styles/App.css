@@ -42,12 +42,12 @@
 
 .toolbar button,
 .btn {
-  padding: 6px 14px;
+  padding: 4px 10px;
   background: var(--accent);
   color: var(--bg-primary);
   border: none;
   border-radius: 4px;
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 600;
   cursor: pointer;
   white-space: nowrap;
@@ -92,21 +92,24 @@
 
 /* ---- Theme toggle ---- */
 .theme-toggle {
-  width: 28px;
-  height: 28px;
+  width: 26px;
+  height: 26px;
   padding: 0;
-  margin-left: auto;
   flex-shrink: 0;
   background: var(--bg-surface);
   border: 1px solid var(--border);
   border-radius: 6px;
-  font-size: 16px;
+  font-size: 14px;
   line-height: 1;
   cursor: pointer;
   display: flex;
   align-items: center;
   justify-content: center;
   transition: background 0.15s;
+}
+
+.theme-toggle:first-of-type {
+  margin-left: auto;
 }
 
 .theme-toggle:hover {
@@ -1933,4 +1936,71 @@
   text-overflow: ellipsis;
   white-space: nowrap;
   font-family: var(--font-mono, monospace);
+}
+
+/* ---- Settings dialog ---- */
+.settings-dialog {
+  width: min(400px, 90vw);
+}
+
+.settings-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.settings-label {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  min-width: 80px;
+  flex-shrink: 0;
+}
+
+.settings-control {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.settings-control input[type="range"] {
+  flex: 1;
+  accent-color: var(--accent);
+}
+
+.settings-value {
+  font-size: 12px;
+  color: var(--text-muted);
+  min-width: 36px;
+  text-align: right;
+}
+
+.settings-select {
+  flex: 1;
+  padding: 4px 8px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text-primary);
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.settings-preview {
+  margin: 12px 0;
+  padding: 10px 14px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text-primary);
+  text-align: center;
+}
+
+.settings-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 12px;
 }

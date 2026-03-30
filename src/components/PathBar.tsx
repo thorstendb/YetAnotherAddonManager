@@ -16,6 +16,7 @@ interface PathBarProps {
   onGoBack: () => void;
   onImportExport: () => void;
   onAbout: () => void;
+  onSettings: () => void;
   loading: boolean;
   hasAddons: boolean;
   unreferencedCount: number;
@@ -40,6 +41,7 @@ const PathBar: React.FC<PathBarProps> = ({
   onGoBack,
   onImportExport,
   onAbout,
+  onSettings,
   loading,
   hasAddons,
   unreferencedCount,
@@ -126,6 +128,13 @@ const PathBar: React.FC<PathBarProps> = ({
         className="btn-secondary"
       >
         📋 Import/Export
+      </button>
+      <button
+        onClick={onSettings}
+        className="theme-toggle"
+        title="Settings"
+      >
+        ⚙️
       </button>
       <button
         onClick={onToggleTheme}

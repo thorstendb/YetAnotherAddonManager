@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: MIT
 import * as fs from 'fs';
 import * as path from 'path';
+import AdmZip from 'adm-zip';
 import { AddonSettingsData, SavedVarsInfo } from './shared/types';
 
 /**
@@ -609,15 +610,19 @@ export interface ExportData {
   userSettings: string | null;
   /** SavedVariables: filename → base64-encoded content */
   savedVariables: Record<string, string>;
+  /** Non-catalog addon folders bundled as base64-encoded zip per folder */
+  bundledAddons?: Record<string, string>;
 }
 
 /**
  * Export all addon references, settings, and saved variables
  * into a single self-contained JSON object.
+ * @param bundleFolders  Folder names of non-catalog addons to zip and embed in the export.
  */
 export function exportProfile(
   addonsPath: string,
   addonList: { folderName: string; catalogId?: string; version: string; isLibrary: boolean }[],
+  bundleFolders?: string[],
   onProgress?: (phase: string, percent: number) => void
 ): ExportData {
   const liveDir = getLiveDir(addonsPath);
@@ -647,7 +652,28 @@ export function exportProfile(
       const file = files[i];
       const content = fs.readFileSync(path.join(svDir, file));
       savedVariables[file] = content.toString('base64');
-      onProgress?.(`Reading SavedVariables… (${i + 1}/${files.length})`, 20 + Math.round(((i + 1) / files.length) * 70));
+      onProgress?.(`Reading SavedVariables… (${i + 1}/${files.length})`, 20 + Math.round(((i + 1) / files.length) * 50));
+    }
+  }
+
+  // Bundle non-catalog addon folders as base64-encoded zips
+  const bundledAddons: Record<string, string> = {};
+  if (bundleFolders && bundleFolders.length > 0) {
+    for (let i = 0; i < bundleFolders.length; i++) {
+      const folder = bundleFolders[i];
+      const folderPath = path.join(addonsPath, folder);
+      onProgress?.(`Bundling ${folder}… (${i + 1}/${bundleFolders.length})`, 70 + Math.round(((i + 1) / bundleFolders.length) * 20));
+      if (!fs.existsSync(folderPath) || !fs.statSync(folderPath).isDirectory()) continue;
+      // Validate folder name to prevent path traversal
+      if (folder.includes('..') || folder.includes('/') || folder.includes('\\')) continue;
+      try {
+        const zip = new AdmZip();
+        zip.addLocalFolder(folderPath, folder);
+        const zipBuffer = zip.toBuffer();
+        bundledAddons[folder] = zipBuffer.toString('base64');
+      } catch {
+        // Skip folders that can't be zipped
+      }
     }
   }
 
@@ -660,6 +686,7 @@ export function exportProfile(
     addonSettings,
     userSettings,
     savedVariables,
+    ...(Object.keys(bundledAddons).length > 0 ? { bundledAddons } : {}),
   };
 }
 
@@ -671,9 +698,10 @@ export function exportProfile(
 export function importProfile(
   addonsPath: string,
   data: ExportData
-): { addonsToInstall: { folderName: string; catalogId?: string; isLibrary: boolean }[]; restoredSettings: string[]; errors: string[] } {
+): { addonsToInstall: { folderName: string; catalogId?: string; isLibrary: boolean }[]; restoredSettings: string[]; restoredBundles: string[]; errors: string[] } {
   const liveDir = getLiveDir(addonsPath);
   const restoredSettings: string[] = [];
+  const restoredBundles: string[] = [];
   const errors: string[] = [];
 
   // Restore AddOnSettings.txt
@@ -739,6 +767,25 @@ export function importProfile(
     }
   }
 
+  // Restore bundled (non-catalog) addons from base64-encoded zips
+  if (data.bundledAddons) {
+    for (const [folderName, base64Zip] of Object.entries(data.bundledAddons)) {
+      // Validate folder name to prevent path traversal
+      if (folderName.includes('..') || folderName.includes('/') || folderName.includes('\\')) {
+        errors.push(`Skipped unsafe bundled addon folder: ${folderName}`);
+        continue;
+      }
+      try {
+        const zipBuffer = Buffer.from(base64Zip, 'base64');
+        const zip = new AdmZip(zipBuffer);
+        zip.extractAllTo(addonsPath, true);
+        restoredBundles.push(folderName);
+      } catch (err: any) {
+        errors.push(`Bundled addon ${folderName}: ${err.message}`);
+      }
+    }
+  }
+
   // Determine which addons need to be installed
   const existingDirs = new Set(
     fs.readdirSync(addonsPath, { withFileTypes: true })
@@ -748,5 +795,5 @@ export function importProfile(
 
   const addonsToInstall = data.addons.filter((a) => !existingDirs.has(a.folderName));
 
-  return { addonsToInstall, restoredSettings, errors };
+  return { addonsToInstall, restoredSettings, restoredBundles, errors };
 }

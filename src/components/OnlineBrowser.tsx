@@ -166,13 +166,22 @@ const OnlineBrowser: React.FC<OnlineBrowserProps> = ({
       if (result.error) {
         onLog(`Failed to install "${addon.name}": ${result.error}`, 'error');
       } else {
-        onLog(
-          `Installed "${addon.name}" (${result.installed.join(', ')})`,
-          'success'
-        );
+        const primaryDirs = result.installed.filter((d) => !d.startsWith('Lib'));
+        const depDirs = result.installed.filter((d) => d.startsWith('Lib'));
+        if (depDirs.length > 0) {
+          onLog(
+            `Installed "${addon.name}" (${primaryDirs.join(', ')}) + ${depDirs.length} dependenc${depDirs.length === 1 ? 'y' : 'ies'} (${depDirs.join(', ')})`,
+            'success'
+          );
+        } else {
+          onLog(
+            `Installed "${addon.name}" (${result.installed.join(', ')})`,
+            'success'
+          );
+        }
         if (result.missingDeps.length > 0) {
           onLog(
-            `Missing dependencies for "${addon.name}": ${result.missingDeps.join(', ')}`,
+            `Could not resolve ${result.missingDeps.length} dependenc${result.missingDeps.length === 1 ? 'y' : 'ies'}: ${result.missingDeps.join(', ')}`,
             'warn'
           );
         }
@@ -724,9 +733,9 @@ const OnlineBrowser: React.FC<OnlineBrowserProps> = ({
                         onClick={(e) => {
                           e.preventDefault();
                           e.stopPropagation();
-                          window.open(addon.infoUrl, '_blank');
+                          window.electronAPI.openExternalUrl(addon.infoUrl);
                         }}
-                        title="Open addon page online"
+                        title="Open addon page in browser"
                       >
                         🔗 Addon Page
                       </a>

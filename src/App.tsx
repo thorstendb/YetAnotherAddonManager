@@ -15,6 +15,7 @@ import UnsavedDialog from './components/UnsavedDialog';
 import RestoreDialog from './components/RestoreDialog';
 import ImportExportDialog from './components/ImportExportDialog';
 import AboutDialog from './components/AboutDialog';
+import SettingsDialog from './components/SettingsDialog';
 import './styles/App.css';
 
 /** Shorten "EU Megaserver-Alandhur" → "EU Alandhur" for display. */
@@ -62,6 +63,9 @@ function App() {
   const updateCancelRef = useRef(false);
   const [showImportExport, setShowImportExport] = useState(false);
   const [showAbout, setShowAbout] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
+  const [fontSize, setFontSize] = useState(14);
+  const [fontFamily, setFontFamily] = useState("'Segoe UI', sans-serif");
 
   // Theme state: persisted in localStorage
   const [theme, setTheme] = useState<'dark' | 'light'>(() => {
@@ -72,6 +76,12 @@ function App() {
     document.documentElement.setAttribute('data-theme', theme);
     localStorage.setItem('yaam-theme', theme);
   }, [theme]);
+
+  // Apply font settings to body
+  useEffect(() => {
+    document.body.style.fontSize = `${fontSize}px`;
+    document.body.style.fontFamily = fontFamily;
+  }, [fontSize, fontFamily]);
 
   const toggleTheme = useCallback(() => {
     setTheme((t) => (t === 'dark' ? 'light' : 'dark'));
@@ -95,6 +105,8 @@ function App() {
       if (config.logHeight) setLogHeight(config.logHeight);
       if (config.panelWidths) setPanelWidths(config.panelWidths);
       if (config.installedCatalogVersions) setInstalledCatalogVersions(config.installedCatalogVersions);
+      if (config.fontSize) setFontSize(config.fontSize);
+      if (config.fontFamily) setFontFamily(config.fontFamily);
       if (config.welcomeAccepted) {
         setWelcomeAccepted(true);
         addLog('YAAM started', 'info');
@@ -469,7 +481,7 @@ function App() {
       // Skip recently-updated addons (local version hasn't been rescanned yet)
       if (recentlyUpdated.has(catalogAddon.id)) return false;
       const localVer = getEffectiveVersion(addon, catalogAddon);
-      return compareVersionStrings(localVer, catalogAddon.version) < 0;
+      return compareVersionStrings(localVer, catalogAddon.version, catalogAddon.date) < 0;
     },
     [installedCatalogVersions, recentlyUpdated, getEffectiveVersion]
   );
@@ -1220,6 +1232,7 @@ function App() {
         onGoBack={handleGoBack}
         onImportExport={() => setShowImportExport(true)}
         onAbout={() => setShowAbout(true)}
+        onSettings={() => setShowSettings(true)}
         loading={loading}
         hasAddons={addons.length > 0}
         unreferencedCount={unreferencedLibs.size}
@@ -1396,7 +1409,7 @@ function App() {
       {showImportExport && (
         <ImportExportDialog
           addonPath={addonPath}
-          addons={addons.map((a) => ({ folderName: a.folderName, version: a.version, isLibrary: a.isLibrary }))}
+          addons={addons.map((a) => ({ folderName: a.folderName, version: a.version, isLibrary: a.isLibrary, dependsOn: a.dependsOn.map((d) => d.name) }))}
           catalogByDir={catalogByDir}
           onLog={addLog}
           onScanPath={scanPath}
@@ -1404,6 +1417,18 @@ function App() {
         />
       )}
       {showAbout && <AboutDialog onClose={() => setShowAbout(false)} />}
+      {showSettings && (
+        <SettingsDialog
+          fontSize={fontSize}
+          fontFamily={fontFamily}
+          onApply={(s) => {
+            setFontSize(s.fontSize);
+            setFontFamily(s.fontFamily);
+            window.electronAPI.saveUiSettings({ fontSize: s.fontSize, fontFamily: s.fontFamily });
+          }}
+          onClose={() => setShowSettings(false)}
+        />
+      )}
     </div>
   );
 }

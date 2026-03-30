@@ -827,9 +827,9 @@ const AddonTreeItem: React.FC<AddonTreeItemProps> = ({
                 onClick={(e) => {
                   e.preventDefault();
                   e.stopPropagation();
-                  window.open(catalogAddon.infoUrl, '_blank');
+                  window.electronAPI.openExternalUrl(catalogAddon.infoUrl);
                 }}
-                title="Open addon page online"
+                title="Open addon page in browser"
               >
                 🔗 Addon Page
               </a>
