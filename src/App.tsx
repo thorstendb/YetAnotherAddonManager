@@ -18,6 +18,7 @@ import AboutDialog from './components/AboutDialog';
 import SettingsDialog from './components/SettingsDialog';
 import CleanupDialog, { CleanupType } from './components/CleanupDialog';
 import BackupCleanupDialog from './components/BackupCleanupDialog';
+import UpdateAllDialog, { UpdatableAddon } from './components/UpdateAllDialog';
 import './styles/App.css';
 
 function errMsg(err: unknown): string {
@@ -86,6 +87,7 @@ function App() {
     title: string;
     action: () => void;
   } | null>(null);
+  const [updateAllList, setUpdateAllList] = useState<UpdatableAddon[] | null>(null);
 
   // Theme state: persisted in localStorage
   const [theme, setTheme] = useState<'dark' | 'light'>(() => {
@@ -249,27 +251,88 @@ function App() {
   // Set of addons NOT found in the catalog and without their own download URL
   const notInCatalog = useMemo(() => {
     if (catalogDirNames.size === 0) return new Set<string>();
+    const catalogNames = new Set(catalogAddons.map(a => a.name));
+    const catalogIds = new Set(catalogAddons.map(a => a.id));
     const missing = new Set<string>();
     for (const addon of addons) {
-      if (!catalogDirNames.has(addon.folderName) && !addon.downloadUrl) {
+      // Has a catalogId that matches → definitely in catalog
+      if (addon.catalogId && catalogIds.has(addon.catalogId)) continue;
+      if (!catalogDirNames.has(addon.folderName) && !catalogNames.has(addon.title) && !addon.downloadUrl) {
         missing.add(addon.folderName);
       }
     }
     return missing;
-  }, [addons, catalogDirNames]);
+  }, [addons, catalogDirNames, catalogAddons]);
 
-  // Map from folder name -> CatalogAddon for local addon matching
+  // Catalog ID lookup: maps ESOUI UID → CatalogAddon (exact, O(1))
+  const catalogById = useMemo(() => {
+    const map = new Map<string, CatalogAddon>();
+    for (const addon of catalogAddons) {
+      map.set(addon.id, addon);
+    }
+    return map;
+  }, [catalogAddons]);
+
+  // Map from folder/title name -> CatalogAddon for local addon matching.
+  // When multiple catalog entries share the same key (directory or name),
+  // keep the entry with the most total downloads (almost always the main addon).
+  // ID-based matching (catalogId) is preferred and bypasses this map entirely.
   const catalogByDir = useMemo(() => {
     const map = new Map<string, CatalogAddon>();
     for (const addon of catalogAddons) {
       for (const dir of addon.directories) {
-        map.set(dir, addon);
+        const existing = map.get(dir);
+        if (!existing || addon.totalDownloads > existing.totalDownloads) {
+          map.set(dir, addon);
+        }
       }
-      // Also map by addon name (for dependency lookups by title)
-      map.set(addon.name, addon);
+      // Map by addon name (for title-based matching + dependency lookups)
+      const existingByName = map.get(addon.name);
+      if (!existingByName || addon.totalDownloads > existingByName.totalDownloads) {
+        map.set(addon.name, addon);
+      }
     }
     return map;
   }, [catalogAddons]);
+
+  // Set of catalog addon names that appear in more than one catalog entry
+  const catalogNameConflicts = useMemo(() => {
+    const nameCount = new Map<string, number>();
+    for (const addon of catalogAddons) {
+      nameCount.set(addon.name, (nameCount.get(addon.name) || 0) + 1);
+    }
+    const conflicts = new Set<string>();
+    for (const [name, count] of nameCount) {
+      if (count > 1) conflicts.add(name);
+    }
+    return conflicts;
+  }, [catalogAddons]);
+
+  /** Look up the catalog entry for an installed addon.
+   *  Priority chain:
+   *  1. catalogId from manifest URL (ESOUI UID) — exact, unique
+   *  2. addon title → catalog name match
+   *  3. folder name → directories match (fallback) */
+  const getCatalogAddon = useCallback(
+    (addon: AddonInfo): CatalogAddon | undefined =>
+      (addon.catalogId ? catalogById.get(addon.catalogId) : undefined)
+        ?? catalogByDir.get(addon.title)
+        ?? catalogByDir.get(addon.folderName),
+    [catalogById, catalogByDir]
+  );
+
+  /** Detect addons matched by title whose folder name is NOT in the
+   *  catalog's directories list — indicates a name / directory mismatch. */
+  const catalogMismatch = useMemo(() => {
+    const set = new Set<string>();
+    for (const addon of addons) {
+      const cat = getCatalogAddon(addon);
+      if (cat && !cat.directories.includes(addon.folderName)) {
+        set.add(addon.folderName);
+      }
+    }
+    return set;
+  }, [addons, getCatalogAddon]);
 
   // Set of all known addon names (folder names + titles) for dependency checking
   const knownAddonNames = useMemo(() => new Set(addonMap.keys()), [addonMap]);
@@ -512,31 +575,33 @@ function App() {
     const seen = new Set<string>();
     let count = 0;
     for (const addon of addons) {
-      const catalogAddon = catalogByDir.get(addon.folderName);
+      const catalogAddon = getCatalogAddon(addon);
       if (catalogAddon && !seen.has(catalogAddon.id)) {
         seen.add(catalogAddon.id);
         if (isUpdateAvailable(addon, catalogAddon)) count++;
       }
     }
     return count;
-  }, [addons, catalogByDir, isUpdateAvailable]);
+  }, [addons, getCatalogAddon, isUpdateAvailable]);
 
   // Set of folder names that have an update available (used for sorting to top)
   const updatableFolders = useMemo(() => {
     const set = new Set<string>();
     const seen = new Set<string>();
     for (const addon of addons) {
-      const catalogAddon = catalogByDir.get(addon.folderName);
+      const catalogAddon = getCatalogAddon(addon);
       if (catalogAddon && !seen.has(catalogAddon.id)) {
         seen.add(catalogAddon.id);
         if (isUpdateAvailable(addon, catalogAddon)) {
           // Mark all directories belonging to this catalog addon as updatable
           for (const dir of catalogAddon.directories) set.add(dir);
+          // Also mark the addon's own folder (title-matched addons may not be in directories)
+          set.add(addon.folderName);
         }
       }
     }
     return set;
-  }, [addons, catalogByDir, isUpdateAvailable]);
+  }, [addons, getCatalogAddon, isUpdateAvailable]);
 
   // --- Navigation ---
 
@@ -801,7 +866,7 @@ function App() {
     }
   }, [addonPath, addLog, libraries, scanPath]);
 
-  const handleUpdateAll = useCallback(async () => {
+  const handleUpdateAll = useCallback(() => {
     if (!addonPath) return;
 
     // If already updating, cancel it
@@ -812,32 +877,61 @@ function App() {
     }
 
     // Find installed addons that have a matching catalog entry with a newer version
-    const updatable: { addon: AddonInfo; catalogAddon: CatalogAddon }[] = [];
+    const updatable: UpdatableAddon[] = [];
     const seen = new Set<string>();
-    let skippedCount = 0;
     for (const addon of addons) {
-      const catalogAddon = catalogByDir.get(addon.folderName);
+      const catalogAddon = getCatalogAddon(addon);
       if (catalogAddon && !seen.has(catalogAddon.id)) {
         seen.add(catalogAddon.id);
         if (isUpdateAvailable(addon, catalogAddon)) {
-          updatable.push({ addon, catalogAddon });
-        } else {
-          skippedCount++;
+          // Ambiguous: no catalogId in manifest → matched only by title/dir,
+          // OR title matches a name used by multiple catalog entries
+          const ambiguous = !addon.catalogId
+            || catalogNameConflicts.has(catalogAddon.name);
+          updatable.push({
+            folderName: addon.folderName,
+            title: addon.title,
+            localVersion: getEffectiveVersion(addon, catalogAddon),
+            catalogVersion: catalogAddon.version,
+            catalogId: catalogAddon.id,
+            ambiguous,
+          });
         }
       }
     }
 
     if (updatable.length === 0) {
-      addLog(`Update All: nothing to update (${skippedCount} up-to-date)`, 'info');
+      addLog('Update All: nothing to update — all addons are up-to-date', 'info');
       return;
     }
+
+    // Show selection dialog
+    setUpdateAllList(updatable);
+  }, [addons, addonPath, getCatalogAddon, addLog, updatingAll, isUpdateAvailable, getEffectiveVersion, catalogNameConflicts]);
+
+  const handleUpdateAllConfirm = useCallback(async (selectedCatalogIds: string[]) => {
+    setUpdateAllList(null);
+    if (!addonPath || selectedCatalogIds.length === 0) return;
+
+    const selectedSet = new Set(selectedCatalogIds);
+    const updatable: { addon: AddonInfo; catalogAddon: CatalogAddon }[] = [];
+    const seen = new Set<string>();
+    for (const addon of addons) {
+      const catalogAddon = getCatalogAddon(addon);
+      if (catalogAddon && !seen.has(catalogAddon.id) && selectedSet.has(catalogAddon.id)) {
+        seen.add(catalogAddon.id);
+        updatable.push({ addon, catalogAddon });
+      }
+    }
+
+    if (updatable.length === 0) return;
 
     setUpdatingAll(true);
     setUpdateRemaining(updatable.length);
     setUpdateTotal(updatable.length);
     updateCancelRef.current = false;
     setLoading(true);
-    addLog(`Updating ${updatable.length} addon(s) from catalog in parallel (${skippedCount} skipped)...`);
+    addLog(`Updating ${updatable.length} addon(s) from catalog in parallel...`);
 
     let success = 0;
     let failed = 0;
@@ -902,7 +996,7 @@ function App() {
       addLog(`Update All complete: ${summaryParts.join(', ')}`, success > 0 ? 'success' : 'warn');
       await scanPath(addonPath);
     }
-  }, [addons, addonPath, catalogByDir, addLog, scanPath, updatingAll, isUpdateAvailable]);
+  }, [addons, addonPath, getCatalogAddon, addLog, scanPath]);
 
   const handleCleanupSettings = useCallback(async () => {
     if (!addonPath || addons.length === 0) return;
@@ -1060,7 +1154,8 @@ function App() {
         if (ok) {
           addLog(`Restored "${folderName}" to version ${version}`, 'success');
           // Clear installedCatalogVersions for this addon so update detection works again
-          const catalogAddon = catalogByDir.get(folderName);
+          const localAddon = addonMap.get(folderName);
+          const catalogAddon = localAddon ? getCatalogAddon(localAddon) : catalogByDir.get(folderName);
           if (catalogAddon) {
             setInstalledCatalogVersions(prev => {
               const next = { ...prev };
@@ -1087,7 +1182,7 @@ function App() {
         addLog(`Restore failed: ${errMsg(err)}`, 'error');
       }
     },
-    [addonPath, addLog, scanPath, catalogByDir]
+    [addonPath, addLog, scanPath, addonMap, getCatalogAddon, catalogByDir]
   );
 
   const handleRestoreSvFile = useCallback(
@@ -1192,8 +1287,10 @@ function App() {
       setInstallingAddon(catalogAddon.id);
       addLog(`Installing "${catalogAddon.name}" from catalog...`);
       try {
-        // Backup existing addon if it's an update
-        const existingAddon = addons.find((a) => catalogAddon.directories.includes(a.folderName));
+        // Backup existing addon if it's an update (match by directory or title)
+        const existingAddon = addons.find((a) =>
+          catalogAddon.directories.includes(a.folderName) || a.title === catalogAddon.name
+        );
         let backupPath = '';
         const backupFolder = existingAddon?.folderName || '';
         if (existingAddon && existingAddon.version) {
@@ -1426,7 +1523,7 @@ function App() {
     ? (() => {
         const addon = contextMenu.addon;
         const hasSV = !!(savedVarsInfo.addonFiles[addon.folderName]?.length);
-        const catalogAddon = catalogByDir.get(addon.folderName);
+        const catalogAddon = getCatalogAddon(addon);
         const items: ContextMenuItem[] = [];
         // Open in Explorer / Finder
         items.push({
@@ -1537,10 +1634,11 @@ function App() {
                   isSelected={selectedAddon === addon.folderName}
                   onSelect={setSelectedAddon}
                   isNotInCatalog={notInCatalog.has(addon.folderName)}
+                  isCatalogMismatch={catalogMismatch.has(addon.folderName)}
                   characterSettings={getCharacterSettingsForAddon(addon.folderName)}
                   hasSavedVars={!!(savedVarsInfo.addonFiles[addon.folderName]?.length) || addon.subAddons.some(s => !!(savedVarsInfo.addonFiles[s.folderName]?.length))}
-                  catalogAddon={catalogByDir.get(addon.folderName)}
-                  isInstalling={installingAddon === catalogByDir.get(addon.folderName)?.id}
+                  catalogAddon={getCatalogAddon(addon)}
+                  isInstalling={installingAddon === getCatalogAddon(addon)?.id}
                   knownAddonNames={knownAddonNames}
                   catalogByDir={catalogByDir}
                   installingAddonId={installingAddon}
@@ -1585,11 +1683,12 @@ function App() {
                   onSelect={setSelectedAddon}
                   isUnreferenced={unreferencedLibs.has(lib.folderName)}
                   isNotInCatalog={notInCatalog.has(lib.folderName)}
+                  isCatalogMismatch={catalogMismatch.has(lib.folderName)}
                   referencedBy={getReferencedBy(lib)}
                   characterSettings={getCharacterSettingsForAddon(lib.folderName)}
                   hasSavedVars={!!(savedVarsInfo.addonFiles[lib.folderName]?.length) || lib.subAddons.some(s => !!(savedVarsInfo.addonFiles[s.folderName]?.length))}
-                  catalogAddon={catalogByDir.get(lib.folderName)}
-                  isInstalling={installingAddon === catalogByDir.get(lib.folderName)?.id}
+                  catalogAddon={getCatalogAddon(lib)}
+                  isInstalling={installingAddon === getCatalogAddon(lib)?.id}
                   knownAddonNames={knownAddonNames}
                   catalogByDir={catalogByDir}
                   installingAddonId={installingAddon}
@@ -1715,6 +1814,13 @@ function App() {
           backups={backupCleanupBackups}
           onConfirm={handleCleanupBackupsConfirm}
           onCancel={() => setBackupCleanupBackups(null)}
+        />
+      )}
+      {updateAllList && (
+        <UpdateAllDialog
+          addons={updateAllList}
+          onConfirm={handleUpdateAllConfirm}
+          onCancel={() => setUpdateAllList(null)}
         />
       )}
       {deleteConfirm && (

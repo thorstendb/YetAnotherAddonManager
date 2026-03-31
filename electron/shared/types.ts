@@ -49,6 +49,8 @@ export interface AddonInfo {
   path: string;
   /** Catalog download URL (best effort) */
   downloadUrl: string;
+  /** ESOUI catalog UID extracted from downloadUrl (e.g. "1346") */
+  catalogId: string;
 
   // ─── Sub-addon & hierarchy fields ───
 

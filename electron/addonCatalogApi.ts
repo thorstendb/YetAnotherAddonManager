@@ -191,13 +191,18 @@ export async function installAddon(
       .map((d) => d.name)
   );
 
-  // Resolve the real CDN download URL from the ESOUI download page
-  onProgress?.('resolving');
-  const downloadUrl = await resolveDownloadUrl(addonId);
-  onProgress?.('downloading', 0);
-  await downloadFile(downloadUrl, zipPath, 5, (received, total) => {
-    onProgress?.('downloading', Math.round((received / total) * 100));
-  });
+  // Skip download if the exact same versioned ZIP already exists (reinstall case)
+  if (!fs.existsSync(zipPath)) {
+    // Resolve the real CDN download URL from the ESOUI download page
+    onProgress?.('resolving');
+    const downloadUrl = await resolveDownloadUrl(addonId);
+    onProgress?.('downloading', 0);
+    await downloadFile(downloadUrl, zipPath, 5, (received, total) => {
+      onProgress?.('downloading', Math.round((received / total) * 100));
+    });
+  } else {
+    onProgress?.('downloading', 100);
+  }
 
   // Extract ZIP using extractAllTo to avoid path sanitization issues
   // with folder names containing hyphens, dots, or numbers (e.g. LibAddonMenu-2.0)

@@ -580,6 +580,42 @@
   align-items: center;
 }
 
+/* Catalog JSON popup */
+.catalog-json-popup {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 10001;
+  background: var(--bg-primary);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+  width: min(560px, 90vw);
+  max-height: 70vh;
+  display: flex;
+  flex-direction: column;
+}
+.catalog-json-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border);
+  font-size: 12px;
+  font-weight: 600;
+}
+.catalog-json-content {
+  padding: 12px 14px;
+  margin: 0;
+  overflow: auto;
+  font-size: 11px;
+  line-height: 1.4;
+  white-space: pre-wrap;
+  word-break: break-all;
+  color: var(--text-primary);
+}
+
 .tree-detail .dep-version,
 .tree-subtree-leaf .dep-version {
   color: var(--text-muted);
@@ -654,6 +690,11 @@
 
 .catalog-missing {
   color: var(--red);
+  font-size: 14px;
+}
+
+.catalog-mismatch {
+  color: var(--yellow, #f5a623);
   font-size: 14px;
 }
 

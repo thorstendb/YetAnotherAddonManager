@@ -175,6 +175,9 @@ function parseManifest(
   const rawContributors = headers['Contributors'] || '';
   const { plain: contributors, segments: contributorsSegments } = parseColorCodes(rawContributors);
   const downloadUrl = extractDownloadUrl(content, folderName);
+  // Extract ESOUI catalog UID from URL like "info1346-Name.html"
+  const uidMatch = downloadUrl.match(/\/info(\d+)-/);
+  const catalogId = uidMatch ? uidMatch[1] : '';
 
   // Parse dependencies – on PC we merge PCDependsOn into DependsOn
   const baseDeps = parseDependencies(headers['DependsOn'] || '');
@@ -220,6 +223,7 @@ function parseManifest(
     files,
     path: folderPath,
     downloadUrl,
+    catalogId,
     // New fields
     subAddons,
     parentAddon,

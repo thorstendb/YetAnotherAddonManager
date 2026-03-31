@@ -12,6 +12,7 @@ interface AddonTreeItemProps {
   onSelect: (folderName: string) => void;
   isUnreferenced?: boolean;
   isNotInCatalog?: boolean;
+  isCatalogMismatch?: boolean;
   referencedBy?: string[];
   characterSettings?: CharacterSettings;
   hasSavedVars?: boolean;
@@ -38,6 +39,7 @@ const AddonTreeItem: React.FC<AddonTreeItemProps> = ({
   onSelect,
   isUnreferenced = false,
   isNotInCatalog = false,
+  isCatalogMismatch = false,
   referencedBy = [],
   characterSettings,
   hasSavedVars = false,
@@ -68,6 +70,9 @@ const AddonTreeItem: React.FC<AddonTreeItemProps> = ({
   const [optDepsExpanded, setOptDepsExpanded] = useState(false);
   const [refsExpanded, setRefsExpanded] = useState(false);
   const [charsExpanded, setCharsExpanded] = useState(false);
+  const [catalogExpanded, setCatalogExpanded] = useState(false);
+  const [catalogPopup, setCatalogPopup] = useState(false);
+  const catalogPopupRef = useRef<HTMLDivElement>(null);
 
   const toggleSubAddon = (name: string) =>
     setExpandedSubAddons((prev) => {
@@ -151,6 +156,25 @@ const AddonTreeItem: React.FC<AddonTreeItemProps> = ({
     }
   }, [isIndeterminate, characterSettings]);
 
+  // Close catalog popup on outside click or Escape
+  useEffect(() => {
+    if (!catalogPopup) return;
+    const handleClick = (e: MouseEvent) => {
+      if (catalogPopupRef.current && !catalogPopupRef.current.contains(e.target as Node)) {
+        setCatalogPopup(false);
+      }
+    };
+    const handleKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setCatalogPopup(false);
+    };
+    document.addEventListener('mousedown', handleClick);
+    document.addEventListener('keydown', handleKey);
+    return () => {
+      document.removeEventListener('mousedown', handleClick);
+      document.removeEventListener('keydown', handleKey);
+    };
+  }, [catalogPopup]);
+
   const handleTriCheckClick = useCallback((e: React.MouseEvent) => {
     e.stopPropagation();
     if (!onToggleCharSetting || totalChars === 0) return;
@@ -215,6 +239,7 @@ const AddonTreeItem: React.FC<AddonTreeItemProps> = ({
           {addon.version && <span className="tree-version"> v{addon.version}</span>}
           {isUnreferenced && <span className="unreferenced-marker">{' \u26A0\uFE0E (unused)'}</span>}
           {isNotInCatalog && <span className="catalog-missing" title="Not found in catalog and no download URL">{' \u26A0\uFE0E'}</span>}
+          {isCatalogMismatch && <span className="catalog-mismatch" title={`Folder "${addon.folderName}" does not match catalog directory — matched by title`}>{' \u26A0\uFE0E'}</span>}
         </span>
         <span className="tree-row-actions">
           {catalogAddon && onInstall && (
@@ -779,6 +804,59 @@ const AddonTreeItem: React.FC<AddonTreeItemProps> = ({
                         </label>
                       </div>
                     ))}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* ESOUI Catalog Entry - expandable with JSON popup */}
+          {catalogAddon && (
+            <div className="tree-item">
+              <div
+                className="tree-subtree-row"
+                onClick={(e) => { e.stopPropagation(); setCatalogExpanded((p) => !p); }}
+              >
+                <span className={`tree-chevron ${catalogExpanded ? 'expanded' : ''}`}>▶</span>
+                <span className="detail-label">ESOUI Catalog Entry</span>
+              </div>
+              {catalogExpanded && (
+                <div className="tree-children">
+                  <div className="tree-detail"><span className="detail-label">ID:</span> {catalogAddon.id}</div>
+                  <div className="tree-detail"><span className="detail-label">Name:</span> {catalogAddon.name}</div>
+                  <div className="tree-detail"><span className="detail-label">Version:</span> {catalogAddon.version}</div>
+                  <div className="tree-detail"><span className="detail-label">Author:</span> {catalogAddon.author}</div>
+                  <div className="tree-detail"><span className="detail-label">Category:</span> {ADDON_CATEGORIES[catalogAddon.categoryId] || `Cat ${catalogAddon.categoryId}`}</div>
+                  <div className="tree-detail"><span className="detail-label">Updated:</span> {new Date(catalogAddon.date * 1000).toLocaleDateString('en-GB', { year: 'numeric', month: 'short', day: 'numeric' })}</div>
+                  <div className="tree-detail"><span className="detail-label">Downloads:</span> {catalogAddon.totalDownloads.toLocaleString()} total / {catalogAddon.monthlyDownloads.toLocaleString()} monthly</div>
+                  <div className="tree-detail"><span className="detail-label">Favorites:</span> {catalogAddon.favorites.toLocaleString()}</div>
+                  <div className="tree-detail"><span className="detail-label">Dirs:</span> {catalogAddon.directories.join(', ')}</div>
+                  {catalogAddon.compatibility.length > 0 && (
+                    <div className="tree-detail"><span className="detail-label">Compatible:</span> {catalogAddon.compatibility.map(c => `${c.name} (${c.version})`).join(', ')}</div>
+                  )}
+                  {catalogAddon.donationLink && (
+                    <div className="tree-detail"><span className="detail-label">Donation:</span>{' '}
+                      <a className="online-link" href={catalogAddon.donationLink} onClick={(e) => { e.preventDefault(); e.stopPropagation(); window.electronAPI.openExternalUrl(catalogAddon.donationLink); }}>Link</a>
+                    </div>
+                  )}
+                  <div className="tree-detail" style={{ position: 'relative' }}>
+                    <button
+                      className="row-btn"
+                      style={{ fontSize: '11px', padding: '1px 6px' }}
+                      onClick={(e) => { e.stopPropagation(); setCatalogPopup(p => !p); }}
+                      title="Show raw ESOUI JSON data"
+                    >
+                      📋 Raw JSON
+                    </button>
+                    {catalogPopup && (
+                      <div ref={catalogPopupRef} className="catalog-json-popup" onClick={(e) => e.stopPropagation()}>
+                        <div className="catalog-json-header">
+                          <span>ESOUI JSON — {catalogAddon.name}</span>
+                          <button className="restore-close-btn" onClick={() => setCatalogPopup(false)} title="Close">✕</button>
+                        </div>
+                        <pre className="catalog-json-content">{JSON.stringify(catalogAddon, null, 2)}</pre>
+                      </div>
+                    )}
+                  </div>
                 </div>
               )}
             </div>

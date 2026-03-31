@@ -121,8 +121,8 @@ const BackupCleanupDialog: React.FC<BackupCleanupDialogProps> = ({ backups, onCo
                           />
                           <span>
                             v{entry.version}
-                            <span style={{ opacity: 0.5, marginLeft: '8px' }}>{formatSize(entry.sizeBytes)}</span>
-                            {isNewest && entries.length > 1 && <span style={{ opacity: 0.5, marginLeft: '6px' }}>(newest)</span>}
+                            <span style={{ opacity: 0.7, marginLeft: '8px' }}>{formatSize(entry.sizeBytes)}</span>
+                            {isNewest && entries.length > 1 && <span style={{ opacity: 0.7, marginLeft: '6px' }}>(newest)</span>}
                           </span>
                         </label>
                       );
