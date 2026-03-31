@@ -244,6 +244,23 @@
   font-weight: 500;
 }
 
+.collapse-all-btn {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 13px;
+  padding: 0 3px;
+  border-radius: 3px;
+  line-height: 1;
+  opacity: 0.7;
+  transition: opacity 0.15s;
+}
+.collapse-all-btn:hover {
+  opacity: 1;
+  color: var(--text-primary);
+}
+
 /* ---- Tree panel inline search ---- */
 .tree-search-bar {
   display: flex;
@@ -2067,3 +2084,110 @@
 .link-btn:hover {
   opacity: 0.8;
 }
+
+/* ---- Info popup ---- */
+.addon-info-popup {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 10001;
+  background: var(--bg-primary);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+  width: min(700px, 90vw);
+  max-height: 80vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.addon-info-content {
+  padding: 12px 14px;
+  overflow: auto;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-primary);
+}
+
+.addon-info-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.addon-info-table td {
+  padding: 3px 8px;
+  vertical-align: top;
+}
+
+.info-label {
+  color: var(--text-muted);
+  white-space: nowrap;
+  text-align: right;
+  width: 120px;
+  font-weight: 600;
+  font-size: 11px;
+}
+
+/* ---- Expandable description ---- */
+.desc-expandable {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  cursor: pointer;
+  max-width: 500px;
+}
+
+.desc-expanded {
+  white-space: pre-wrap;
+  overflow: visible;
+  cursor: pointer;
+  max-width: 500px;
+}
+
+.desc-chevron {
+  display: inline-block;
+  font-size: 8px;
+  margin-right: 3px;
+  vertical-align: middle;
+  opacity: 0.6;
+}
+
+/* ---- Info popup action bar ---- */
+.addon-info-actions {
+  display: flex;
+  gap: 6px;
+  padding: 8px 14px;
+  border-bottom: 1px solid var(--border);
+  flex-wrap: wrap;
+}
+
+.info-action-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  font-size: 11px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.info-action-btn:hover {
+  background: var(--bg-hover);
+}
+
+.info-action-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.info-action-btn.danger:hover {
+  background: rgba(220, 53, 69, 0.2);
+  border-color: rgba(220, 53, 69, 0.5);
+}
+
+

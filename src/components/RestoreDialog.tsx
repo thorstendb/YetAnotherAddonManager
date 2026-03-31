@@ -16,6 +16,7 @@ interface AddonBackup {
   folderName: string;
   version: string;
   backupPath: string;
+  mtimeMs: number;
 }
 
 interface SvBackupEntry {
@@ -79,20 +80,30 @@ const RestoreDialog: React.FC<RestoreDialogProps> = ({
     [currentAddons]
   );
 
-  // Build backup lookup: folderName -> versions[]
+  // Build backup lookup: folderName -> versions[] (sorted newest first within each group)
   const backupsByAddon = useMemo(() => {
     const map = new Map<string, AddonBackup[]>();
     for (const b of backups) {
       if (!map.has(b.folderName)) map.set(b.folderName, []);
       map.get(b.folderName)!.push(b);
     }
+    // Sort versions within each addon group: newest first
+    for (const versions of map.values()) {
+      versions.sort((a, b) => b.mtimeMs - a.mtimeMs);
+    }
     return map;
   }, [backups]);
 
-  // Filter backups by search
+  // Filter backups by search, sorted by most recent backup first
   const filteredBackupAddons = useMemo(() => {
     const q = searchQuery.toLowerCase();
-    const addonNames = Array.from(backupsByAddon.keys()).sort();
+    const addonNames = Array.from(backupsByAddon.keys());
+    // Sort addon groups by newest backup first
+    addonNames.sort((a, b) => {
+      const aMax = backupsByAddon.get(a)![0]?.mtimeMs ?? 0;
+      const bMax = backupsByAddon.get(b)![0]?.mtimeMs ?? 0;
+      return bMax - aMax;
+    });
     if (!q) return addonNames;
     return addonNames.filter((name) => name.toLowerCase().includes(q));
   }, [backupsByAddon, searchQuery]);

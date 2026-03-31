@@ -7,7 +7,7 @@ import * as os from 'os';
 import { IPC_CHANNELS } from './shared/types';
 import { loadConfig, saveConfig } from './configStore';
 import { scanAddonsFolder, cleanupUnusedLibraries, deleteAddon, deleteAddonAndExclusiveRefs, previewUnusedLibraries, cleanupSelectedLibraries } from './addonScanner';
-import { fetchAddonCatalog, installAddon, cleanupDownloadsFolder, previewCleanupDownloads, cleanupDownloadsSelected } from './addonCatalogApi';
+import { fetchAddonCatalog, fetchAddonDetails, fetchCategories, installAddon, cleanupDownloadsFolder, previewCleanupDownloads, cleanupDownloadsSelected } from './addonCatalogApi';
 import { parseAddonSettings, setAddonSetting, batchSetAddonSettings, getSavedVarsInfo, deleteSavedVars, cleanupSettings, undoCleanupSettings, listSavedVarsBackups, restoreSavedVarsFile, exportProfile, importProfile, ExportData, previewCleanupSettings, cleanupSettingsSelected } from './settingsManager';
 import { saveSnapshotIfChanged, listSnapshots, listAddonBackups, restoreAddonFromBackup, backupAddonFolder, deleteAddonBackups, getDirSize, SnapshotAddon } from './snapshotManager';
 
@@ -202,6 +202,24 @@ ipcMain.handle(IPC_CHANNELS.FETCH_ADDON_CATALOG, async (_event, forceRefresh: bo
     return await fetchAddonCatalog(forceRefresh);
   } catch (err: unknown) {
     console.error('Fetch addon catalog error:', err);
+    return [];
+  }
+});
+
+ipcMain.handle(IPC_CHANNELS.FETCH_ADDON_DETAILS, async (_event, uid: string) => {
+  try {
+    return await fetchAddonDetails(uid);
+  } catch (err: unknown) {
+    console.error('Fetch addon details error:', err);
+    return { description: '', changeLog: '', md5: '', downloadUrl: '', fileName: '' };
+  }
+});
+
+ipcMain.handle(IPC_CHANNELS.FETCH_CATEGORIES, async () => {
+  try {
+    return await fetchCategories();
+  } catch (err: unknown) {
+    console.error('Fetch categories error:', err);
     return [];
   }
 });

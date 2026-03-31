@@ -39,6 +39,8 @@ function App() {
   const [libSearchQuery, setLibSearchQuery] = useState('');
   const [addonCharFilter, setAddonCharFilter] = useState<string>('');
   const [libCharFilter, setLibCharFilter] = useState<string>('');
+  const [addonCollapseAll, setAddonCollapseAll] = useState(0);
+  const [libCollapseAll, setLibCollapseAll] = useState(0);
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [contextMenu, setContextMenu] = useState<{
     x: number;
@@ -64,7 +66,7 @@ function App() {
   const [showUnsavedDialog, setShowUnsavedDialog] = useState(false);
   const [showRestoreDialog, setShowRestoreDialog] = useState(false);
   const [restoreSnapshots, setRestoreSnapshots] = useState<{ timestamp: string; addons: { folderName: string; version: string }[] }[]>([]);
-  const [restoreBackups, setRestoreBackups] = useState<{ folderName: string; version: string; backupPath: string }[]>([]);
+  const [restoreBackups, setRestoreBackups] = useState<{ folderName: string; version: string; backupPath: string; mtimeMs: number }[]>([]);
   const [restoreSvBackups, setRestoreSvBackups] = useState<{ fileName: string; backupDirName: string; backupFilePath: string; type: 'backup' | 'cleanup'; timestamp: string }[]>([]);
   const [updateTotal, setUpdateTotal] = useState(0);
   const updateCancelRef = useRef(false);
@@ -1671,7 +1673,7 @@ function App() {
         />
       </div>
       <div className="main-content">
-        <TreePanel title="AddOns" count={filteredAddons.length} scrollRef={addonsScrollRef} flex={panelWidths[0]} onKeyDown={handleAddonsKeyDown} searchQuery={addonSearchQuery} onSearchChange={setAddonSearchQuery} characters={characterNames} characterFilter={addonCharFilter} onCharacterFilterChange={setAddonCharFilter} hasPendingChanges={pendingCharSettings.size > 0} onSave={handleSaveCharSettings}>
+        <TreePanel title="AddOns" count={filteredAddons.length} scrollRef={addonsScrollRef} flex={panelWidths[0]} onKeyDown={handleAddonsKeyDown} searchQuery={addonSearchQuery} onSearchChange={setAddonSearchQuery} characters={characterNames} characterFilter={addonCharFilter} onCharacterFilterChange={setAddonCharFilter} hasPendingChanges={pendingCharSettings.size > 0} onSave={handleSaveCharSettings} onCollapseAll={() => setAddonCollapseAll(c => c + 1)}>
           {filteredAddons.length === 0 && !loading ? (
             <div className="empty-state">
               <div className="icon">📦</div>
@@ -1706,6 +1708,7 @@ function App() {
                   onInstall={handleInstallAddon}
                   onNavigateCatalog={handleNavigateCatalog}
                   installProgress={installProgress}
+                  collapseAllCounter={addonCollapseAll}
                 />
               </div>
             );
@@ -1719,7 +1722,7 @@ function App() {
           })()}
         </TreePanel>
         <div className="panel-resize-handle" onMouseDown={(e) => handlePanelResizeStart(0, e)} title="Drag to resize" />
-        <TreePanel title="Libraries" count={filteredLibraries.length} scrollRef={libsScrollRef} flex={panelWidths[1]} onKeyDown={handleLibsKeyDown} searchQuery={libSearchQuery} onSearchChange={setLibSearchQuery} characters={characterNames} characterFilter={libCharFilter} onCharacterFilterChange={setLibCharFilter} hasPendingChanges={pendingCharSettings.size > 0} onSave={handleSaveCharSettings}>
+        <TreePanel title="Libraries" count={filteredLibraries.length} scrollRef={libsScrollRef} flex={panelWidths[1]} onKeyDown={handleLibsKeyDown} searchQuery={libSearchQuery} onSearchChange={setLibSearchQuery} characters={characterNames} characterFilter={libCharFilter} onCharacterFilterChange={setLibCharFilter} hasPendingChanges={pendingCharSettings.size > 0} onSave={handleSaveCharSettings} onCollapseAll={() => setLibCollapseAll(c => c + 1)}>
           {filteredLibraries.length === 0 && !loading ? (
             <div className="empty-state">
               <div className="icon">📚</div>
@@ -1756,6 +1759,7 @@ function App() {
                   onInstall={handleInstallAddon}
                   onNavigateCatalog={handleNavigateCatalog}
                   installProgress={installProgress}
+                  collapseAllCounter={libCollapseAll}
                 />
               </div>
             );

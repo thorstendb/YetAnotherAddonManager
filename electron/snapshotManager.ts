@@ -127,14 +127,14 @@ export function backupAddonFolder(
  */
 export function listAddonBackups(
   addonsPath: string
-): { folderName: string; version: string; backupPath: string; sizeBytes: number }[] {
+): { folderName: string; version: string; backupPath: string; sizeBytes: number; mtimeMs: number }[] {
   const backupDir = getAddonBackupDir(addonsPath);
   if (!fs.existsSync(backupDir)) return [];
 
   const entries = fs.readdirSync(backupDir, { withFileTypes: true })
     .filter((d) => d.isDirectory());
 
-  const results: { folderName: string; version: string; backupPath: string; sizeBytes: number }[] = [];
+  const results: { folderName: string; version: string; backupPath: string; sizeBytes: number; mtimeMs: number }[] = [];
   for (const entry of entries) {
     // Parse "FolderName-Version" format (split on last hyphen)
     const lastDash = entry.name.lastIndexOf('-');
@@ -142,11 +142,14 @@ export function listAddonBackups(
     const folderName = entry.name.substring(0, lastDash);
     const version = entry.name.substring(lastDash + 1);
     const fullPath = path.join(backupDir, entry.name);
+    let mtimeMs = 0;
+    try { mtimeMs = fs.statSync(fullPath).mtimeMs; } catch { /* ignore */ }
     results.push({
       folderName,
       version,
       backupPath: fullPath,
       sizeBytes: getDirSize(fullPath),
+      mtimeMs,
     });
   }
 

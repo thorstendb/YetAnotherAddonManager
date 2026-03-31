@@ -1,8 +1,9 @@
 // Copyright (c) 2026 thorstendb
 // SPDX-License-Identifier: MIT
 import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { AddonInfo, CatalogAddon, CharacterSettings, ADDON_CATEGORIES, getCategoryIconUrl } from '../../electron/shared/types';
+import { AddonInfo, CatalogAddon, CharacterSettings, ADDON_CATEGORIES, getCategoryIconUrl, compareVersionStrings } from '../../electron/shared/types';
 import ColoredText from './ColoredText';
+import RichText from './RichText';
 import ImagePreview from './ImagePreview';
 import { shortenCharName } from '../App';
 
@@ -31,6 +32,7 @@ interface AddonTreeItemProps {
   onInstall?: (catalogAddon: CatalogAddon) => void;
   onNavigateCatalog?: (addonId: string) => void;
   installProgress?: Record<string, { phase: string; percent?: number; current?: number; total?: number }>;
+  collapseAllCounter?: number;
 }
 
 const AddonTreeItem: React.FC<AddonTreeItemProps> = ({
@@ -58,6 +60,7 @@ const AddonTreeItem: React.FC<AddonTreeItemProps> = ({
   onInstall,
   onNavigateCatalog,
   installProgress,
+  collapseAllCounter = 0,
 }) => {
   const [expanded, setExpanded] = useState(false);
   const [subAddonsExpanded, setSubAddonsExpanded] = useState(false);
@@ -73,6 +76,31 @@ const AddonTreeItem: React.FC<AddonTreeItemProps> = ({
   const [catalogExpanded, setCatalogExpanded] = useState(false);
   const [catalogPopup, setCatalogPopup] = useState(false);
   const catalogPopupRef = useRef<HTMLDivElement>(null);
+  const [catalogDetails, setCatalogDetails] = useState<{ description: string; changeLog: string; md5: string; downloadUrl: string; fileName: string } | null>(null);
+  const [catalogDetailsLoading, setCatalogDetailsLoading] = useState(false);
+  const [descExpanded, setDescExpanded] = useState(false);
+  const [catalogDescExpanded, setCatalogDescExpanded] = useState(false);
+  const [subDescExpanded, setSubDescExpanded] = useState<Set<string>>(new Set());
+  const [infoPopup, setInfoPopup] = useState(false);
+  const infoPopupRef = useRef<HTMLDivElement>(null);
+
+  // Collapse all when counter changes (triggered by parent's collapse-all button)
+  useEffect(() => {
+    if (collapseAllCounter === 0) return;
+    setExpanded(false);
+    setSubAddonsExpanded(false);
+    setExpandedSubAddons(new Set());
+    setExpandedSubDeps(new Set());
+    setExpandedSubOptDeps(new Set());
+    setDepsExpanded(false);
+    setOptDepsExpanded(false);
+    setRefsExpanded(false);
+    setCharsExpanded(false);
+    setCatalogExpanded(false);
+    setDescExpanded(false);
+    setCatalogDescExpanded(false);
+    setSubDescExpanded(new Set());
+  }, [collapseAllCounter]);
 
   const toggleSubAddon = (name: string) =>
     setExpandedSubAddons((prev) => {
@@ -175,6 +203,34 @@ const AddonTreeItem: React.FC<AddonTreeItemProps> = ({
     };
   }, [catalogPopup]);
 
+  // Close info popup on outside click or Escape
+  useEffect(() => {
+    if (!infoPopup) return;
+    const handleClick = (e: MouseEvent) => {
+      if (infoPopupRef.current && !infoPopupRef.current.contains(e.target as Node)) {
+        setInfoPopup(false);
+      }
+    };
+    const handleKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setInfoPopup(false);
+    };
+    document.addEventListener('mousedown', handleClick);
+    document.addEventListener('keydown', handleKey);
+    return () => {
+      document.removeEventListener('mousedown', handleClick);
+      document.removeEventListener('keydown', handleKey);
+    };
+  }, [infoPopup]);
+
+  // Fetch catalog details on demand when catalog expanded or info popup opened
+  useEffect(() => {
+    if ((!catalogExpanded && !infoPopup) || !catalogAddon || catalogDetails || catalogDetailsLoading) return;
+    setCatalogDetailsLoading(true);
+    window.electronAPI.fetchAddonDetails(catalogAddon.id)
+      .then(setCatalogDetails)
+      .finally(() => setCatalogDetailsLoading(false));
+  }, [catalogExpanded, infoPopup, catalogAddon, catalogDetails, catalogDetailsLoading]);
+
   const handleTriCheckClick = useCallback((e: React.MouseEvent) => {
     e.stopPropagation();
     if (!onToggleCharSetting || totalChars === 0) return;
@@ -242,6 +298,13 @@ const AddonTreeItem: React.FC<AddonTreeItemProps> = ({
           {isCatalogMismatch && <span className="catalog-mismatch" title={`Folder "${addon.folderName}" does not match catalog directory — matched by title`}>{' \u26A0\uFE0E'}</span>}
         </span>
         <span className="tree-row-actions">
+          <button
+            className="row-btn"
+            onClick={(e) => { e.stopPropagation(); setInfoPopup(true); }}
+            title="Show addon details"
+          >
+            ℹ️
+          </button>
           {catalogAddon && onInstall && (
             <button
               className="row-btn row-btn-install"
@@ -372,9 +435,13 @@ const AddonTreeItem: React.FC<AddonTreeItemProps> = ({
                           )}
                           {/* Sub-addon description */}
                           {sub.description && (
-                            <div className="tree-detail">
-                              <span className="detail-label">Description:</span>{' '}
-                              <ColoredText segments={sub.descriptionSegments} />
+                            <div
+                              className={`tree-detail desc-expandable ${subDescExpanded.has(sub.folderName) ? 'desc-expanded' : ''}`}
+                              onClick={(e) => { e.stopPropagation(); setSubDescExpanded(prev => { const s = new Set(prev); if (s.has(sub.folderName)) s.delete(sub.folderName); else s.add(sub.folderName); return s; }); }}
+                              title={subDescExpanded.has(sub.folderName) ? 'Click to collapse' : 'Click to expand'}
+                            >
+                              <span className="detail-label"><span className="desc-chevron">{subDescExpanded.has(sub.folderName) ? '▼' : '▶'}</span>Description:</span>{' '}
+                              <RichText text={sub.description} />
                             </div>
                           )}
                           {/* Sub-addon version detail */}
@@ -529,11 +596,15 @@ const AddonTreeItem: React.FC<AddonTreeItemProps> = ({
               <ColoredText segments={addon.authorSegments} />
             </div>
           )}
-          {/* Description */}
+          {/* Description — expandable */}
           {addon.description && (
-            <div className="tree-detail">
-              <span className="detail-label">Description:</span>{' '}
-              <ColoredText segments={addon.descriptionSegments} />
+            <div
+              className={`tree-detail desc-expandable ${descExpanded ? 'desc-expanded' : ''}`}
+              onClick={(e) => { e.stopPropagation(); setDescExpanded(p => !p); }}
+              title={descExpanded ? 'Click to collapse' : 'Click to expand'}
+            >
+              <span className="detail-label"><span className="desc-chevron">{descExpanded ? '▼' : '▶'}</span>Description:</span>{' '}
+              <RichText text={addon.description} />
             </div>
           )}
           {/* Contributors */}
@@ -857,6 +928,24 @@ const AddonTreeItem: React.FC<AddonTreeItemProps> = ({
                       <a className="online-link" href={catalogAddon.donationLink} onClick={(e) => { e.preventDefault(); e.stopPropagation(); window.electronAPI.openExternalUrl(catalogAddon.donationLink); }}>Link</a>
                     </div>
                   )}
+                  {catalogDetailsLoading && (
+                    <div className="tree-detail" style={{ opacity: 0.6 }}>Loading details…</div>
+                  )}
+                  {catalogDetails?.description && (
+                    <div
+                      className={`tree-detail desc-expandable ${catalogDescExpanded ? 'desc-expanded' : ''}`}
+                      onClick={(e) => { e.stopPropagation(); setCatalogDescExpanded(p => !p); }}
+                      title={catalogDescExpanded ? 'Click to collapse' : 'Click to expand'}
+                    >
+                      <span className="detail-label"><span className="desc-chevron">{catalogDescExpanded ? '▼' : '▶'}</span>Description:</span>{' '}
+                      <RichText text={catalogDetails.description} />
+                    </div>
+                  )}
+                  {catalogDetails?.changeLog && (
+                    <div className="tree-detail"><span className="detail-label">ChangeLog:</span>{' '}
+                      <span style={{ whiteSpace: 'pre-wrap', opacity: 0.8 }}><RichText text={catalogDetails.changeLog} /></span>
+                    </div>
+                  )}
                 </div>
               )}
             </div>
@@ -917,6 +1006,119 @@ const AddonTreeItem: React.FC<AddonTreeItemProps> = ({
               </a>
             </div>
           )}
+        </div>
+      )}
+
+      {/* Info popup — shows all collected information */}
+      {infoPopup && (
+        <div className="unsaved-overlay" onClick={(e) => { e.stopPropagation(); setInfoPopup(false); }}>
+          <div ref={infoPopupRef} className="addon-info-popup" onClick={(e) => e.stopPropagation()}>
+            <div className="catalog-json-header">
+              <span>ℹ️ {addon.title || addon.folderName}</span>
+              <button className="restore-close-btn" onClick={() => setInfoPopup(false)} title="Close">✕</button>
+            </div>
+            <div className="addon-info-actions">
+              {catalogAddon && onInstall && (() => {
+                const isUpdate = catalogAddon && addon.version && catalogAddon.version
+                  && compareVersionStrings(addon.version, catalogAddon.version, catalogAddon.date) < 0;
+                return (
+                  <button className="info-action-btn" onClick={() => { setInfoPopup(false); onInstall(catalogAddon); }} disabled={isInstalling} title={isUpdate ? 'Update to catalog version' : 'Reinstall from catalog'}>
+                    {isInstalling ? '⏳' : isUpdate ? '⬆️' : '🔄'} {isUpdate ? 'Update' : 'Reinstall'}
+                  </button>
+                );
+              })()}
+              {onDelete && (
+                <button className="info-action-btn danger" onClick={() => { setInfoPopup(false); onDelete(addon.folderName); }} title="Delete addon">
+                  🗑️ Delete
+                </button>
+              )}
+              {hasSavedVars && onDeleteWithSV && (
+                <button className="info-action-btn danger" onClick={() => { setInfoPopup(false); onDeleteWithSV(addon.folderName); }} title="Delete addon and its SavedVariables">
+                  🗑️ + SavedVars
+                </button>
+              )}
+              {onDeleteAndRefs && (
+                <button className="info-action-btn danger" onClick={() => { setInfoPopup(false); onDeleteAndRefs(addon.folderName); }} title="Delete addon and exclusive library references">
+                  🗑️ + Refs
+                </button>
+              )}
+              {catalogAddon?.infoUrl && (
+                <button className="info-action-btn" onClick={() => window.electronAPI.openExternalUrl(catalogAddon.infoUrl)} title="Open ESOUI page">
+                  🌐 ESOUI
+                </button>
+              )}
+            </div>
+            <div className="addon-info-content">
+              <table className="addon-info-table">
+                <tbody>
+                  <tr><td className="info-label">Folder</td><td>{addon.folderName}</td></tr>
+                  {addon.title && <tr><td className="info-label">Title</td><td>{addon.title}</td></tr>}
+                  {addon.author && <tr><td className="info-label">Author</td><td><ColoredText segments={addon.authorSegments} /></td></tr>}
+                  {addon.version && <tr><td className="info-label">Version</td><td>{addon.version}{addon.addonVersion ? ` (${addon.addonVersion})` : ''}</td></tr>}
+                  {addon.apiVersion && <tr><td className="info-label">API Version</td><td>{addon.apiVersion}</td></tr>}
+                  {addon.description && <tr><td className="info-label">Description</td><td style={{ whiteSpace: 'pre-wrap' }}><RichText text={addon.description} /></td></tr>}
+                  {addon.contributors && <tr><td className="info-label">Contributors</td><td><ColoredText segments={addon.contributorsSegments} /></td></tr>}
+                  {catalogAddon && (
+                    <>
+                      <tr><td className="info-label" colSpan={2} style={{ paddingTop: '10px', fontWeight: 700, opacity: 0.7 }}>— ESOUI Catalog —</td></tr>
+                      <tr><td className="info-label">Catalog ID</td><td>{catalogAddon.id}</td></tr>
+                      <tr><td className="info-label">Catalog Name</td><td>{catalogAddon.name}</td></tr>
+                      <tr><td className="info-label">Catalog Version</td><td>{catalogAddon.version}</td></tr>
+                      <tr><td className="info-label">Category</td><td>{ADDON_CATEGORIES[catalogAddon.categoryId] || `Cat ${catalogAddon.categoryId}`}</td></tr>
+                      <tr><td className="info-label">Updated</td><td>{new Date(catalogAddon.date * 1000).toLocaleDateString('en-GB', { year: 'numeric', month: 'short', day: 'numeric' })}</td></tr>
+                      <tr><td className="info-label">Downloads</td><td>{catalogAddon.totalDownloads.toLocaleString()} total / {catalogAddon.monthlyDownloads.toLocaleString()} monthly</td></tr>
+                      <tr><td className="info-label">Favorites</td><td>{catalogAddon.favorites.toLocaleString()}</td></tr>
+                      {catalogAddon.compatibility.length > 0 && (
+                        <tr><td className="info-label">Compatible</td><td>{catalogAddon.compatibility.map(c => `${c.name} (${c.version})`).join(', ')}</td></tr>
+                      )}
+                      <tr><td className="info-label">Directories</td><td>{catalogAddon.directories.join(', ')}</td></tr>
+                      {catalogAddon.donationLink && (
+                        <tr><td className="info-label">Donation</td><td>
+                          <a className="online-link" href={catalogAddon.donationLink} onClick={(e) => { e.preventDefault(); window.electronAPI.openExternalUrl(catalogAddon.donationLink); }}>Link</a>
+                        </td></tr>
+                      )}
+                      <tr><td className="info-label">Page</td><td>
+                        <a className="online-link" href={catalogAddon.infoUrl} onClick={(e) => { e.preventDefault(); window.electronAPI.openExternalUrl(catalogAddon.infoUrl); }}>{catalogAddon.infoUrl}</a>
+                      </td></tr>
+                    </>
+                  )}
+                  {catalogDetailsLoading && (
+                    <tr><td colSpan={2} style={{ opacity: 0.6 }}>Loading online details…</td></tr>
+                  )}
+                  {catalogDetails?.description && (
+                    <tr><td className="info-label">Online Description</td><td style={{ whiteSpace: 'pre-wrap' }}><RichText text={catalogDetails.description} /></td></tr>
+                  )}
+                  {catalogDetails?.changeLog && (
+                    <tr><td className="info-label">ChangeLog</td><td style={{ whiteSpace: 'pre-wrap' }}><RichText text={catalogDetails.changeLog} /></td></tr>
+                  )}
+                  {catalogDetails?.md5 && (
+                    <tr><td className="info-label">MD5</td><td style={{ fontFamily: 'monospace', fontSize: '11px' }}>{catalogDetails.md5}</td></tr>
+                  )}
+                  {catalogDetails?.fileName && (
+                    <tr><td className="info-label">File</td><td>{catalogDetails.fileName}</td></tr>
+                  )}
+                  {addon.dependsOn.length > 0 && (
+                    <tr><td className="info-label">Dependencies</td><td>{addon.dependsOn.map(d => d.name + (d.minVersion !== undefined ? ` ≥${d.minVersion}` : '')).join(', ')}</td></tr>
+                  )}
+                  {addon.optionalDependsOn.length > 0 && (
+                    <tr><td className="info-label">Optional Deps</td><td>{addon.optionalDependsOn.map(d => d.name + (d.minVersion !== undefined ? ` ≥${d.minVersion}` : '')).join(', ')}</td></tr>
+                  )}
+                  {addon.savedVariables.length > 0 && (
+                    <tr><td className="info-label">SavedVars</td><td>{addon.savedVariables.join(', ')}</td></tr>
+                  )}
+                  {addon.files.length > 0 && (
+                    <tr><td className="info-label">Files</td><td>{addon.files.length} file(s)</td></tr>
+                  )}
+                  {addon.downloadUrl && (
+                    <tr><td className="info-label">Download URL</td><td style={{ wordBreak: 'break-all' }}>{addon.downloadUrl}</td></tr>
+                  )}
+                  {addon.catalogId && (
+                    <tr><td className="info-label">Catalog ID (manifest)</td><td>{addon.catalogId}</td></tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
         </div>
       )}
     </div>

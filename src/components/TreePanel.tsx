@@ -17,14 +17,20 @@ interface TreePanelProps {
   onCharacterFilterChange?: (value: string) => void;
   hasPendingChanges?: boolean;
   onSave?: () => void;
+  onCollapseAll?: () => void;
 }
 
-const TreePanel: React.FC<TreePanelProps> = ({ title, count, children, scrollRef, flex, onKeyDown, searchQuery, onSearchChange, characters, characterFilter, onCharacterFilterChange, hasPendingChanges, onSave }) => {
+const TreePanel: React.FC<TreePanelProps> = ({ title, count, children, scrollRef, flex, onKeyDown, searchQuery, onSearchChange, characters, characterFilter, onCharacterFilterChange, hasPendingChanges, onSave, onCollapseAll }) => {
   return (
     <div className="tree-panel" style={flex != null ? { flex } : undefined}>
       <div className="tree-panel-header">
         <span>{title}</span>
-        <span className="count">{count}</span>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+          {onCollapseAll && (
+            <button className="collapse-all-btn" onClick={onCollapseAll} title="Collapse all">⏶</button>
+          )}
+          <span className="count">{count}</span>
+        </div>
       </div>
       {onSearchChange != null && (
         <div className="tree-search-bar">

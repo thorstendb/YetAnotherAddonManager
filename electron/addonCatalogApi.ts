@@ -2,13 +2,15 @@
 // SPDX-License-Identifier: MIT
 import * as https from 'https';
 import * as http from 'http';
+import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
 import AdmZip from 'adm-zip';
-import { CatalogAddon } from './shared/types';
+import { CatalogAddon, CatalogCategory } from './shared/types';
 import { scanSpecificAddons } from './addonScanner';
 
 const API_URL = 'https://api.mmoui.com/v3/game/ESO/filelist.json';
+const CATEGORY_API_URL = 'https://api.mmoui.com/v3/game/ESO/categorylist.json';
 
 interface RawCatalogAddon {
   UID: string;
@@ -30,6 +32,7 @@ interface RawCatalogAddon {
 }
 
 let cachedList: CatalogAddon[] | null = null;
+let cachedCategories: CatalogCategory[] | null = null;
 
 function transformAddon(raw: RawCatalogAddon): CatalogAddon {
   return {
@@ -132,6 +135,54 @@ export async function fetchAddonCatalog(forceRefresh = false): Promise<CatalogAd
 }
 
 /**
+ * Fetch addon categories from the MMOUI API.
+ * Returns live data; cached in memory after first fetch.
+ */
+export async function fetchCategories(forceRefresh = false): Promise<CatalogCategory[]> {
+  if (cachedCategories && !forceRefresh) return cachedCategories;
+
+  try {
+    const data = await fetchUrl(CATEGORY_API_URL);
+    const raw: { UICATID: string; UICATTitle: string; UICATFileCount: string; UICATParentIDs: string[] }[] = JSON.parse(data);
+    cachedCategories = raw.map(r => ({
+      id: r.UICATID,
+      name: r.UICATTitle,
+      fileCount: parseInt(r.UICATFileCount) || 0,
+      parentIds: r.UICATParentIDs || [],
+    }));
+    return cachedCategories;
+  } catch {
+    return [];
+  }
+}
+
+/** Cache for on-demand filedetails lookups */
+const detailsCache = new Map<string, { description: string; changeLog: string; md5: string; downloadUrl: string; fileName: string }>();
+
+/**
+ * Fetch addon details (description, changelog, md5, downloadUrl, fileName) from the MMOUI filedetails endpoint.
+ * Results are cached in memory.
+ */
+export async function fetchAddonDetails(uid: string): Promise<{ description: string; changeLog: string; md5: string; downloadUrl: string; fileName: string }> {
+  const cached = detailsCache.get(uid);
+  if (cached) return cached;
+
+  const url = `https://api.mmoui.com/v3/game/ESO/filedetails/${encodeURIComponent(uid)}.json`;
+  const data = await fetchUrl(url);
+  const arr: { UIDescription?: string; UIChangeLog?: string; UIMD5?: string; UIDownload?: string; UIFileName?: string }[] = JSON.parse(data);
+  const entry = arr[0] || {};
+  const result = {
+    description: entry.UIDescription || '',
+    changeLog: entry.UIChangeLog || '',
+    md5: entry.UIMD5 || '',
+    downloadUrl: entry.UIDownload || '',
+    fileName: entry.UIFileName || '',
+  };
+  detailsCache.set(uid, result);
+  return result;
+}
+
+/**
  * Get the Downloads subfolder inside the AddOns folder, creating it if needed.
  */
 function getDownloadsDir(addonsPath: string): string {
@@ -193,13 +244,35 @@ export async function installAddon(
 
   // Skip download if the exact same versioned ZIP already exists (reinstall case)
   if (!fs.existsSync(zipPath)) {
-    // Resolve the real CDN download URL from the ESOUI download page
+    // Try direct CDN URL from filedetails first, fall back to page scraping
     onProgress?.('resolving');
-    const downloadUrl = await resolveDownloadUrl(addonId);
+    let downloadUrl: string;
+    let expectedMd5 = '';
+    try {
+      const details = await fetchAddonDetails(addonId);
+      if (details.downloadUrl) {
+        downloadUrl = details.downloadUrl;
+        expectedMd5 = details.md5;
+      } else {
+        downloadUrl = await resolveDownloadUrl(addonId);
+      }
+    } catch {
+      downloadUrl = await resolveDownloadUrl(addonId);
+    }
     onProgress?.('downloading', 0);
     await downloadFile(downloadUrl, zipPath, 5, (received, total) => {
       onProgress?.('downloading', Math.round((received / total) * 100));
     });
+
+    // Verify MD5 if available
+    if (expectedMd5) {
+      const fileBuffer = fs.readFileSync(zipPath);
+      const actualMd5 = crypto.createHash('md5').update(fileBuffer).digest('hex');
+      if (actualMd5 !== expectedMd5) {
+        fs.unlinkSync(zipPath);
+        throw new Error(`MD5 mismatch: expected ${expectedMd5}, got ${actualMd5}`);
+      }
+    }
   } else {
     onProgress?.('downloading', 100);
   }

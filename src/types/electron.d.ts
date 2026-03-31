@@ -80,7 +80,9 @@ declare global {
       respondUnsavedDialog: (choice: 'save' | 'discard' | 'cancel') => void;
       saveSnapshot: (addonsPath: string, addons: SnapshotAddon[]) => Promise<AddonSnapshot | null>;
       listSnapshots: (addonsPath: string) => Promise<AddonSnapshot[]>;
-      listAddonBackups: (addonsPath: string) => Promise<{ folderName: string; version: string; backupPath: string; sizeBytes: number }[]>;
+      fetchAddonDetails: (uid: string) => Promise<{ description: string; changeLog: string; md5: string; downloadUrl: string; fileName: string }>;
+      fetchCategories: () => Promise<{ id: string; name: string; fileCount: number; parentIds: string[] }[]>;
+      listAddonBackups: (addonsPath: string) => Promise<{ folderName: string; version: string; backupPath: string; sizeBytes: number; mtimeMs: number }[]>;
       restoreAddonBackup: (addonsPath: string, folderName: string, backupPath: string) => Promise<boolean>;
       backupAddonFolder: (addonsPath: string, folderName: string, version: string) => Promise<string>;
       deleteAddonBackups: (backupPaths: string[]) => Promise<number>;

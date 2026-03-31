@@ -24,6 +24,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.invoke(IPC_CHANNELS.DELETE_ADDON_AND_REFS, addonPath, folderName),
   fetchAddonCatalog: (forceRefresh?: boolean): Promise<CatalogAddon[]> =>
     ipcRenderer.invoke(IPC_CHANNELS.FETCH_ADDON_CATALOG, forceRefresh || false),
+  fetchAddonDetails: (uid: string): Promise<{ description: string; changeLog: string; md5: string; downloadUrl: string; fileName: string }> =>
+    ipcRenderer.invoke(IPC_CHANNELS.FETCH_ADDON_DETAILS, uid),
+  fetchCategories: (): Promise<{ id: string; name: string; fileCount: number; parentIds: string[] }[]> =>
+    ipcRenderer.invoke(IPC_CHANNELS.FETCH_CATEGORIES),
   installAddon: (
     addonId: string,
     addonsPath: string
@@ -108,7 +112,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.invoke(IPC_CHANNELS.SAVE_SNAPSHOT, addonsPath, addons),
   listSnapshots: (addonsPath: string): Promise<AddonSnapshot[]> =>
     ipcRenderer.invoke(IPC_CHANNELS.LIST_SNAPSHOTS, addonsPath),
-  listAddonBackups: (addonsPath: string): Promise<{ folderName: string; version: string; backupPath: string; sizeBytes: number }[]> =>
+  listAddonBackups: (addonsPath: string): Promise<{ folderName: string; version: string; backupPath: string; sizeBytes: number; mtimeMs: number }[]> =>
     ipcRenderer.invoke(IPC_CHANNELS.LIST_ADDON_BACKUPS, addonsPath),
   restoreAddonBackup: (addonsPath: string, folderName: string, backupPath: string): Promise<boolean> =>
     ipcRenderer.invoke(IPC_CHANNELS.RESTORE_ADDON_BACKUP, addonsPath, folderName, backupPath),

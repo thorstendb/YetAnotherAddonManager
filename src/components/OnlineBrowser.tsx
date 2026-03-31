@@ -3,6 +3,7 @@
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { AddonInfo, CatalogAddon, CharacterSettings, ADDON_CATEGORIES, getCategoryIconUrl, compareVersionStrings } from '../../electron/shared/types';
 import ImagePreview from './ImagePreview';
+import RichText from './RichText';
 import { shortenCharName } from '../App';
 
 function errMsg(err: unknown): string {
@@ -54,12 +55,19 @@ const OnlineBrowser: React.FC<OnlineBrowserProps> = ({
   const [searchQuery, setSearchQuery] = useState('');
   const [categoryFilter, setCategoryFilter] = useState('');
   const [sortField, setSortField] = useState<SortField>('downloads');
-  const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
+  const [focusedId, setFocusedId] = useState<string | null>(null);
   const [installing, setInstalling] = useState<string | null>(null);
   const [depsExpandedIds, setDepsExpandedIds] = useState<Set<string>>(new Set());
   const [optDepsExpandedIds, setOptDepsExpandedIds] = useState<Set<string>>(new Set());
   const [charsExpandedIds, setCharsExpandedIds] = useState<Set<string>>(new Set());
+  const [descExpandedIds, setDescExpandedIds] = useState<Set<string>>(new Set());
   const [showInstalledOnly, setShowInstalledOnly] = useState(false);
+  const [addonDetails, setAddonDetails] = useState<Record<string, { description: string; changeLog: string; md5: string; downloadUrl: string; fileName: string }>>({});
+  const [detailsLoading, setDetailsLoading] = useState<Set<string>>(new Set());
+  const [dynamicCategories, setDynamicCategories] = useState<Record<string, string>>({});
+  const [infoAddonId, setInfoAddonId] = useState<string | null>(null);
+  const infoPopupRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
 
   // When highlightAddonId changes, clear filters, expand that addon, and scroll to it
@@ -67,7 +75,8 @@ const OnlineBrowser: React.FC<OnlineBrowserProps> = ({
     if (!highlightAddonId) return;
     setSearchQuery('');
     setCategoryFilter('');
-    setExpandedId(highlightAddonId);
+    setExpandedIds(prev => new Set(prev).add(highlightAddonId));
+    setFocusedId(highlightAddonId);
     // Scroll to the element after render
     requestAnimationFrame(() => {
       const el = scrollRef.current?.querySelector(`[data-catalog-id="${highlightAddonId}"]`);
@@ -77,9 +86,46 @@ const OnlineBrowser: React.FC<OnlineBrowserProps> = ({
     });
   }, [highlightAddonId]);
 
-  // Fetch the addon list on mount
+  // Fetch addon details on-demand when expanded or info popup opened
+  useEffect(() => {
+    const targets = [...expandedIds];
+    if (infoAddonId) targets.push(infoAddonId);
+    for (const targetId of targets) {
+      if (!targetId || addonDetails[targetId] || detailsLoading.has(targetId)) continue;
+      setDetailsLoading(prev => new Set(prev).add(targetId));
+      window.electronAPI.fetchAddonDetails(targetId)
+        .then(details => setAddonDetails(prev => ({ ...prev, [targetId]: details })))
+        .finally(() => setDetailsLoading(prev => { const next = new Set(prev); next.delete(targetId); return next; }));
+    }
+  }, [expandedIds, infoAddonId, addonDetails, detailsLoading]);
+
+  // Close info popup on outside click or Escape
+  useEffect(() => {
+    if (!infoAddonId) return;
+    const handleClick = (e: MouseEvent) => {
+      if (infoPopupRef.current && !infoPopupRef.current.contains(e.target as Node)) {
+        setInfoAddonId(null);
+      }
+    };
+    const handleKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setInfoAddonId(null);
+    };
+    document.addEventListener('mousedown', handleClick);
+    document.addEventListener('keydown', handleKey);
+    return () => {
+      document.removeEventListener('mousedown', handleClick);
+      document.removeEventListener('keydown', handleKey);
+    };
+  }, [infoAddonId]);
+
+  // Fetch the addon list and categories on mount
   useEffect(() => {
     loadList(false);
+    window.electronAPI.fetchCategories().then(cats => {
+      const map: Record<string, string> = { '': 'All Categories' };
+      for (const c of cats) map[c.id] = c.name;
+      setDynamicCategories(map);
+    }).catch(() => {});
   }, []);
 
   const loadList = useCallback(async (forceRefresh: boolean) => {
@@ -99,17 +145,22 @@ const OnlineBrowser: React.FC<OnlineBrowserProps> = ({
     }
   }, [onLog]);
 
+  // Category name resolver: dynamic API → hardcoded fallback
+  const getCategoryName = useCallback((catId: string) => {
+    return dynamicCategories[catId] || ADDON_CATEGORIES[catId] || `Category ${catId}`;
+  }, [dynamicCategories]);
+
   // Build sorted list of unique categories from the data
   const categoryOptions = useMemo(() => {
     const cats = new Map<string, string>();
     for (const addon of allAddons) {
       const catId = addon.categoryId;
       if (!cats.has(catId)) {
-        cats.set(catId, ADDON_CATEGORIES[catId] || `Category ${catId}`);
+        cats.set(catId, getCategoryName(catId));
       }
     }
     return Array.from(cats.entries()).sort((a, b) => a[1].localeCompare(b[1]));
-  }, [allAddons]);
+  }, [allAddons, getCategoryName]);
 
   // Filter and sort
   const filteredAddons = useMemo(() => {
@@ -297,16 +348,17 @@ const OnlineBrowser: React.FC<OnlineBrowserProps> = ({
       e.preventDefault();
 
       if (key === 'Escape') {
-        setExpandedId(null);
+        setExpandedIds(new Set());
+        setFocusedId(null);
         return;
       }
 
-      const currentIdx = expandedId ? filteredAddons.findIndex((a) => a.id === expandedId) : -1;
+      const currentIdx = focusedId ? filteredAddons.findIndex((a) => a.id === focusedId) : -1;
 
       if (key === 'ArrowDown') {
         const nextIdx = currentIdx < filteredAddons.length - 1 ? currentIdx + 1 : 0;
         const next = filteredAddons[nextIdx];
-        setExpandedId(next.id);
+        setFocusedId(next.id);
         requestAnimationFrame(() => {
           const el = scrollRef.current?.querySelector(`[data-catalog-id="${next.id}"]`);
           el?.scrollIntoView({ block: 'nearest' });
@@ -314,27 +366,44 @@ const OnlineBrowser: React.FC<OnlineBrowserProps> = ({
       } else if (key === 'ArrowUp') {
         const prevIdx = currentIdx > 0 ? currentIdx - 1 : filteredAddons.length - 1;
         const prev = filteredAddons[prevIdx];
-        setExpandedId(prev.id);
+        setFocusedId(prev.id);
         requestAnimationFrame(() => {
           const el = scrollRef.current?.querySelector(`[data-catalog-id="${prev.id}"]`);
           el?.scrollIntoView({ block: 'nearest' });
         });
       } else if (key === 'Enter') {
         if (currentIdx >= 0) {
-          setExpandedId(expandedId === filteredAddons[currentIdx].id ? null : filteredAddons[currentIdx].id);
+          const id = filteredAddons[currentIdx].id;
+          setExpandedIds(prev => {
+            const next = new Set(prev);
+            if (next.has(id)) next.delete(id); else next.add(id);
+            return next;
+          });
         } else if (filteredAddons.length > 0) {
-          setExpandedId(filteredAddons[0].id);
+          const id = filteredAddons[0].id;
+          setExpandedIds(prev => new Set(prev).add(id));
+          setFocusedId(id);
         }
       }
     },
-    [filteredAddons, expandedId]
+    [filteredAddons, focusedId]
   );
 
   return (
     <div className="tree-panel online-browser" style={flex != null ? { flex } : undefined}>
       <div className="tree-panel-header">
         <span>Online Browse</span>
-        <span className="count">{filteredAddons.length}</span>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+          <button className="collapse-all-btn" onClick={() => {
+            setExpandedIds(new Set());
+            setFocusedId(null);
+            setDepsExpandedIds(new Set());
+            setOptDepsExpandedIds(new Set());
+            setCharsExpandedIds(new Set());
+            setDescExpandedIds(new Set());
+          }} title="Collapse all">⏶</button>
+          <span className="count">{filteredAddons.length}</span>
+        </div>
       </div>
       <div className="online-filters">
         <input
@@ -408,9 +477,9 @@ const OnlineBrowser: React.FC<OnlineBrowserProps> = ({
             const isLocalNewer = installed && localVer && addon.version
               ? compareVersionStrings(localVer, addon.version, addon.date) > 0
               : false;
-            const isExpanded = expandedId === addon.id;
+            const isExpanded = expandedIds.has(addon.id);
             const isCurrentlyInstalling = installing === addon.id;
-            const catName = ADDON_CATEGORIES[addon.categoryId] || `Cat ${addon.categoryId}`;
+            const catName = getCategoryName(addon.categoryId);
             const deps = getDepsForOnlineAddon(addon);
             const optDeps = getOptDepsForOnlineAddon(addon);
             // Get character settings for first installed dir
@@ -422,7 +491,11 @@ const OnlineBrowser: React.FC<OnlineBrowserProps> = ({
               <div key={addon.id} className="tree-item" data-catalog-id={addon.id}>
                 <div
                   className={`tree-item-row ${isExpanded ? 'selected' : ''}`}
-                  onClick={() => setExpandedId(isExpanded ? null : addon.id)}
+                  onClick={() => setExpandedIds(prev => {
+                    const next = new Set(prev);
+                    if (isExpanded) next.delete(addon.id); else next.add(addon.id);
+                    return next;
+                  })}
                 >
                   <span className={`tree-chevron ${isExpanded ? 'expanded' : ''}`}>▶</span>
                   <span className="tree-icon" title={installed ? 'Installed locally' : bundledOnly ? 'Not installed (shared library present)' : 'Not installed'}>{installed ? '🟢' : bundledOnly ? '🟡' : '⚪'}</span>
@@ -443,6 +516,13 @@ const OnlineBrowser: React.FC<OnlineBrowserProps> = ({
                   </span>
                   <span className="tree-row-actions">
                     <button
+                      className="row-btn"
+                      onClick={(e) => { e.stopPropagation(); setInfoAddonId(addon.id); }}
+                      title="Show addon details"
+                    >
+                      ℹ️
+                    </button>
+                    <button
                       className={`row-btn row-btn-install`}
                       onClick={(e) => {
                         e.stopPropagation();
@@ -451,7 +531,7 @@ const OnlineBrowser: React.FC<OnlineBrowserProps> = ({
                       disabled={isCurrentlyInstalling}
                       title={isLocalNewer ? `Downgrade to catalog version (v${addon.version})` : installed ? 'Reinstall' : bundledOnly ? 'Install (bundled library already present)' : 'Install'}
                     >
-                      {isCurrentlyInstalling ? '⏳' : isLocalNewer ? '⬇️' : installed ? '🔄' : '➕'}
+                      {isCurrentlyInstalling ? '⏳' : isLocalNewer ? '⬇️' : installed ? '🔄' : '📥'}
                     </button>
                     {installed && onDelete && installedDir && (
                       <button
@@ -493,6 +573,20 @@ const OnlineBrowser: React.FC<OnlineBrowserProps> = ({
                     <div className="tree-detail">
                       <span className="detail-label">Author:</span> {addon.author}
                     </div>
+                    {/* Description (loaded on demand) */}
+                    {detailsLoading.has(addon.id) && (
+                      <div className="tree-detail" style={{ opacity: 0.6 }}>Loading description…</div>
+                    )}
+                    {addonDetails[addon.id]?.description && (
+                      <div
+                        className={`tree-detail desc-expandable ${descExpandedIds.has(addon.id) ? 'desc-expanded' : ''}`}
+                        onClick={(e) => { e.stopPropagation(); setDescExpandedIds(prev => { const s = new Set(prev); if (s.has(addon.id)) s.delete(addon.id); else s.add(addon.id); return s; }); }}
+                        title={descExpandedIds.has(addon.id) ? 'Click to collapse' : 'Click to expand'}
+                      >
+                        <span className="detail-label"><span className="desc-chevron">{descExpandedIds.has(addon.id) ? '▼' : '▶'}</span>Description:</span>{' '}
+                        <RichText text={addonDetails[addon.id].description} />
+                      </div>
+                    )}
                     {/* Category */}
                     <div className="tree-detail">
                       <span className="detail-label">Category:</span>
@@ -587,7 +681,7 @@ const OnlineBrowser: React.FC<OnlineBrowserProps> = ({
                                       disabled={!!isDepInstalling}
                                       title={isDepInstalled ? 'Reinstall' : 'Install'}
                                     >
-                                      {isDepInstalling ? '⏳' : isDepInstalled ? '🔄' : '➕'}
+                                      {isDepInstalling ? '⏳' : isDepInstalled ? '🔄' : '📥'}
                                     </button>
                                   )}
                                   {isDepInstalled && onDelete && (
@@ -656,7 +750,7 @@ const OnlineBrowser: React.FC<OnlineBrowserProps> = ({
                                       disabled={!!isDepInstalling}
                                       title={isDepInstalled ? 'Reinstall' : 'Install'}
                                     >
-                                      {isDepInstalling ? '⏳' : isDepInstalled ? '🔄' : '➕'}
+                                      {isDepInstalling ? '⏳' : isDepInstalled ? '🔄' : '📥'}
                                     </button>
                                   )}
                                   {isDepInstalled && onDelete && (
@@ -756,6 +850,107 @@ const OnlineBrowser: React.FC<OnlineBrowserProps> = ({
           })
         )}
       </div>
+
+      {/* Info popup for ESOUI addon details */}
+      {infoAddonId && (() => {
+        const infoAddon = allAddons.find(a => a.id === infoAddonId);
+        if (!infoAddon) return null;
+        const details = addonDetails[infoAddonId];
+        const isLoading = detailsLoading.has(infoAddonId);
+        const installedDir = infoAddon.directories.find(dir => installedDirNames.has(dir));
+        const localAddon = installedDir ? localAddons.find(a => a.folderName === installedDir) : undefined;
+        return (
+          <div className="unsaved-overlay" onClick={(e) => { e.stopPropagation(); setInfoAddonId(null); }}>
+            <div ref={infoPopupRef} className="addon-info-popup" onClick={(e) => e.stopPropagation()}>
+              <div className="catalog-json-header">
+                <span>ℹ️ {infoAddon.name}</span>
+                <button className="restore-close-btn" onClick={() => setInfoAddonId(null)} title="Close">✕</button>
+              </div>
+              {(() => {
+                const installed = infoAddon.directories.some(dir => installedDirNames.has(dir));
+                const localAddonForBtn = installedDir ? localAddons.find(a => a.folderName === installedDir) : undefined;
+                const hasUpdate = installed && localAddonForBtn && checkUpdateAvailable
+                  ? checkUpdateAvailable(localAddonForBtn, infoAddon) : false;
+                const isLocalNewer = installed && localAddonForBtn && infoAddon.version
+                  ? compareVersionStrings(localAddonForBtn.version, infoAddon.version, infoAddon.date) > 0 : false;
+                const isCurrentlyInstalling = installing === infoAddon.id || installingAddonId === infoAddon.id;
+                return (
+                  <div className="addon-info-actions">
+                    <button className="info-action-btn" onClick={() => { setInfoAddonId(null); handleInstall(infoAddon); }} disabled={isCurrentlyInstalling}
+                      title={isCurrentlyInstalling ? 'Installing…' : hasUpdate ? 'Update to catalog version' : isLocalNewer ? `Downgrade to v${infoAddon.version}` : installed ? 'Reinstall' : 'Install'}>
+                      {isCurrentlyInstalling ? '⏳' : hasUpdate ? '⬆️' : isLocalNewer ? '⬇️' : installed ? '🔄' : '📥'} {isCurrentlyInstalling ? 'Installing…' : hasUpdate ? 'Update' : isLocalNewer ? 'Downgrade' : installed ? 'Reinstall' : 'Install'}
+                    </button>
+                    {installed && onDelete && installedDir && (
+                      <button className="info-action-btn danger" onClick={() => { setInfoAddonId(null); onDelete(installedDir); }} title="Delete installed addon">
+                        🗑️ Delete
+                      </button>
+                    )}
+                    {infoAddon.infoUrl && (
+                      <button className="info-action-btn" onClick={() => window.electronAPI.openExternalUrl(infoAddon.infoUrl)} title="Open ESOUI page">
+                        🌐 ESOUI
+                      </button>
+                    )}
+                    {installed && (
+                      <button className="info-action-btn" onClick={() => { setInfoAddonId(null); onNavigate(infoAddon.name); }} title="Find in addon/library tree">
+                        🔍 Find
+                      </button>
+                    )}
+                  </div>
+                );
+              })()}
+              <div className="addon-info-content">
+                <table className="addon-info-table">
+                  <tbody>
+                    <tr><td className="info-label">Name</td><td>{infoAddon.name}</td></tr>
+                    <tr><td className="info-label">Author</td><td>{infoAddon.author}</td></tr>
+                    <tr><td className="info-label">Version</td><td>{infoAddon.version}</td></tr>
+                    <tr><td className="info-label">Category</td><td>{getCategoryName(infoAddon.categoryId)}</td></tr>
+                    <tr><td className="info-label">Updated</td><td>{formatDate(infoAddon.date)}</td></tr>
+                    <tr><td className="info-label">Downloads</td><td>{infoAddon.totalDownloads.toLocaleString()} total / {infoAddon.monthlyDownloads.toLocaleString()} monthly</td></tr>
+                    <tr><td className="info-label">Favorites</td><td>{infoAddon.favorites.toLocaleString()}</td></tr>
+                    {infoAddon.compatibility.length > 0 && (
+                      <tr><td className="info-label">Compatible</td><td>{infoAddon.compatibility.map(c => `${c.name} (${c.version})`).join(', ')}</td></tr>
+                    )}
+                    <tr><td className="info-label">Directories</td><td>{infoAddon.directories.join(', ')}</td></tr>
+                    {infoAddon.donationLink && (
+                      <tr><td className="info-label">Donation</td><td>
+                        <a className="online-link" href={infoAddon.donationLink} onClick={(e) => { e.preventDefault(); window.electronAPI.openExternalUrl(infoAddon.donationLink); }}>Link</a>
+                      </td></tr>
+                    )}
+                    <tr><td className="info-label">Page</td><td>
+                      <a className="online-link" href={infoAddon.infoUrl} onClick={(e) => { e.preventDefault(); window.electronAPI.openExternalUrl(infoAddon.infoUrl); }}>{infoAddon.infoUrl}</a>
+                    </td></tr>
+                    {localAddon && (
+                      <>
+                        <tr><td className="info-label" colSpan={2} style={{ paddingTop: '10px', fontWeight: 700, opacity: 0.7 }}>— Local Info —</td></tr>
+                        {localAddon.description && <tr><td className="info-label">Description</td><td style={{ whiteSpace: 'pre-wrap' }}><RichText text={localAddon.description} /></td></tr>}
+                        {localAddon.apiVersion && <tr><td className="info-label">API Version</td><td>{localAddon.apiVersion}</td></tr>}
+                        {localAddon.dependsOn.length > 0 && <tr><td className="info-label">Dependencies</td><td>{localAddon.dependsOn.map(d => d.name).join(', ')}</td></tr>}
+                        {localAddon.savedVariables.length > 0 && <tr><td className="info-label">SavedVars</td><td>{localAddon.savedVariables.join(', ')}</td></tr>}
+                      </>
+                    )}
+                    {isLoading && (
+                      <tr><td colSpan={2} style={{ opacity: 0.6 }}>Loading online details…</td></tr>
+                    )}
+                    {details?.description && (
+                      <tr><td className="info-label">Online Description</td><td style={{ whiteSpace: 'pre-wrap' }}><RichText text={details.description} /></td></tr>
+                    )}
+                    {details?.changeLog && (
+                      <tr><td className="info-label">ChangeLog</td><td style={{ whiteSpace: 'pre-wrap' }}><RichText text={details.changeLog} /></td></tr>
+                    )}
+                    {details?.md5 && (
+                      <tr><td className="info-label">MD5</td><td style={{ fontFamily: 'monospace', fontSize: '11px' }}>{details.md5}</td></tr>
+                    )}
+                    {details?.fileName && (
+                      <tr><td className="info-label">File</td><td>{details.fileName}</td></tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
     </div>
   );
 };

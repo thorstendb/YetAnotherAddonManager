@@ -370,6 +370,14 @@ export interface CatalogAddon {
   donationLink: string;
 }
 
+/** A category from the ESOUI API */
+export interface CatalogCategory {
+  id: string;
+  name: string;
+  fileCount: number;
+  parentIds: string[];
+}
+
 /** Known addon category IDs and names */
 export const ADDON_CATEGORIES: Record<string, string> = {
   '': 'All Categories',
@@ -469,4 +477,6 @@ export const IPC_CHANNELS = {
   CLEANUP_SETTINGS_SELECTED: 'cleanup-settings-selected',
   CLEANUP_DOWNLOADS_SELECTED: 'cleanup-downloads-selected',
   DELETE_ADDON_BACKUPS: 'delete-addon-backups',
+  FETCH_ADDON_DETAILS: 'fetch-addon-details',
+  FETCH_CATEGORIES: 'fetch-categories',
 } as const;
