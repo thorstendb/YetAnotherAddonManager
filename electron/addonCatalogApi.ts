@@ -6,7 +6,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import AdmZip from 'adm-zip';
 import { CatalogAddon } from './shared/types';
-import { scanAddonsFolder } from './addonScanner';
+import { scanSpecificAddons } from './addonScanner';
 
 const API_URL = 'https://api.mmoui.com/v3/game/ESO/filelist.json';
 
@@ -217,9 +217,8 @@ export async function installAddon(
     .map((d) => d.name);
   const newDirs = afterDirs.filter((d) => !existingDirs.has(d));
 
-  // Scan newly installed addons for dependencies
-  const allAddons = scanAddonsFolder(addonsPath);
-  const installedAddons = allAddons.filter((a) => newDirs.includes(a.folderName));
+  // Scan only newly installed addon folders for dependencies (fast)
+  const installedAddons = scanSpecificAddons(addonsPath, newDirs);
 
   // Collect all required dependencies
   const requiredDeps = new Set<string>();
@@ -229,11 +228,10 @@ export async function installAddon(
     }
   }
 
-  // Check which deps are missing
-  const installedNames = new Set(allAddons.map((a) => a.folderName));
-  const installedTitles = new Set(allAddons.map((a) => a.title));
+  // Check which deps are missing (use existing directory names as proxy)
+  const allDirNames = new Set(afterDirs);
   const missingDeps = Array.from(requiredDeps).filter(
-    (depName) => !depName.startsWith('ZO_') && !installedNames.has(depName) && !installedTitles.has(depName)
+    (depName) => !depName.startsWith('ZO_') && !allDirNames.has(depName)
   );
 
   return { installed: newDirs, missingDeps };

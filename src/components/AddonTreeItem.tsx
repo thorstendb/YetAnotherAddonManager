@@ -814,10 +814,29 @@ const AddonTreeItem: React.FC<AddonTreeItemProps> = ({
             <div className="tree-item">
               <div
                 className="tree-subtree-row"
+                style={{ display: 'flex', alignItems: 'center', gap: '4px' }}
                 onClick={(e) => { e.stopPropagation(); setCatalogExpanded((p) => !p); }}
               >
                 <span className={`tree-chevron ${catalogExpanded ? 'expanded' : ''}`}>▶</span>
                 <span className="detail-label">ESOUI Catalog Entry</span>
+                <span style={{ position: 'relative' }}>
+                  <button
+                    style={{ fontSize: '11px', padding: '1px 6px', background: 'none', border: 'none', cursor: 'pointer', borderRadius: '3px', opacity: 0.6, color: '#ccc' }}
+                    onClick={(e) => { e.stopPropagation(); setCatalogPopup(p => !p); }}
+                    title="Show raw ESOUI JSON data"
+                  >
+                    📋 JSON
+                  </button>
+                  {catalogPopup && (
+                    <div ref={catalogPopupRef} className="catalog-json-popup" onClick={(e) => e.stopPropagation()}>
+                      <div className="catalog-json-header">
+                        <span>ESOUI JSON — {catalogAddon.name}</span>
+                        <button className="restore-close-btn" onClick={() => setCatalogPopup(false)} title="Close">✕</button>
+                      </div>
+                      <pre className="catalog-json-content">{JSON.stringify(catalogAddon, null, 2)}</pre>
+                    </div>
+                  )}
+                </span>
               </div>
               {catalogExpanded && (
                 <div className="tree-children">
@@ -838,25 +857,6 @@ const AddonTreeItem: React.FC<AddonTreeItemProps> = ({
                       <a className="online-link" href={catalogAddon.donationLink} onClick={(e) => { e.preventDefault(); e.stopPropagation(); window.electronAPI.openExternalUrl(catalogAddon.donationLink); }}>Link</a>
                     </div>
                   )}
-                  <div className="tree-detail" style={{ position: 'relative' }}>
-                    <button
-                      className="row-btn"
-                      style={{ fontSize: '11px', padding: '1px 6px' }}
-                      onClick={(e) => { e.stopPropagation(); setCatalogPopup(p => !p); }}
-                      title="Show raw ESOUI JSON data"
-                    >
-                      📋 Raw JSON
-                    </button>
-                    {catalogPopup && (
-                      <div ref={catalogPopupRef} className="catalog-json-popup" onClick={(e) => e.stopPropagation()}>
-                        <div className="catalog-json-header">
-                          <span>ESOUI JSON — {catalogAddon.name}</span>
-                          <button className="restore-close-btn" onClick={() => setCatalogPopup(false)} title="Close">✕</button>
-                        </div>
-                        <pre className="catalog-json-content">{JSON.stringify(catalogAddon, null, 2)}</pre>
-                      </div>
-                    )}
-                  </div>
                 </div>
               )}
             </div>

@@ -338,7 +338,29 @@ export function scanAddonsFolder(addonsPath: string): AddonInfo[] {
 }
 
 /**
- * Collect ALL addon folder names: top-level + all sub-addons (recursive).
+ * Scan only specific addon folders (by name) inside the AddOns directory.
+ * Much faster than scanAddonsFolder when only a few folders are needed.
+ */
+export function scanSpecificAddons(addonsPath: string, folderNames: string[]): AddonInfo[] {
+  const addons: AddonInfo[] = [];
+  for (const folderName of folderNames) {
+    const folderPath = path.join(addonsPath, folderName);
+    if (!fs.existsSync(folderPath)) continue;
+    const addonManifest = path.join(folderPath, `${folderName}.addon`);
+    const txtManifest = path.join(folderPath, `${folderName}.txt`);
+    let manifestPath: string | null = null;
+    if (fs.existsSync(addonManifest)) manifestPath = addonManifest;
+    else if (fs.existsSync(txtManifest)) manifestPath = txtManifest;
+    if (manifestPath) {
+      try {
+        addons.push(parseManifest(manifestPath, folderName, undefined, addonsPath));
+      } catch { /* skip unparseable */ }
+    }
+  }
+  return addons;
+}
+
+/**
  * This is critical for settings/SavedVariables cleanup — we must never remove
  * entries for legitimately installed sub-addons.
  */
