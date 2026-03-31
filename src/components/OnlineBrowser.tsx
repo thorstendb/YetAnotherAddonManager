@@ -3,7 +3,7 @@
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { AddonInfo, CatalogAddon, CharacterSettings, ADDON_CATEGORIES, getCategoryIconUrl, compareVersionStrings } from '../../electron/shared/types';
 import ImagePreview from './ImagePreview';
-import RichText from './RichText';
+import RichText, { stripBBCode } from './RichText';
 import { shortenCharName } from '../App';
 
 function errMsg(err: unknown): string {
@@ -584,7 +584,7 @@ const OnlineBrowser: React.FC<OnlineBrowserProps> = ({
                         title={descExpandedIds.has(addon.id) ? 'Click to collapse' : 'Click to expand'}
                       >
                         <span className="detail-label"><span className="desc-chevron">{descExpandedIds.has(addon.id) ? '▼' : '▶'}</span>Description:</span>{' '}
-                        <RichText text={addonDetails[addon.id].description} />
+                        {descExpandedIds.has(addon.id) ? <RichText text={addonDetails[addon.id].description} /> : stripBBCode(addonDetails[addon.id].description)}
                       </div>
                     )}
                     {/* Category */}

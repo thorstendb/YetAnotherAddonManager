@@ -12,7 +12,10 @@ export function renderBBCode(raw: string): React.ReactNode {
   // First pass: convert ESO |cHHHHHH / |r codes to BBCode equivalents
   let text = raw
     .replace(/\|c([0-9a-fA-F]{6})/g, '[color="$1"]')
-    .replace(/\|r/g, '[/color]');
+    .replace(/\|r/g, '[/color]')
+    // Normalize: strip \r, collapse 3+ newlines to 2
+    .replace(/\r/g, '')
+    .replace(/\n{3,}/g, '\n\n');
 
   return parseBBNodes(text, 0).nodes;
 }
@@ -128,6 +131,34 @@ function parseBBNodes(text: string, start: number, stopTag?: string): ParseResul
           nodes.push(<span key={++keyCounter} style={{ display: 'block', marginLeft: '1.5em' }}>{inner.nodes}</span>);
           i = inner.pos;
           continue;
+        } else if (tag === 'center') {
+          flushBuffer();
+          const inner = parseBBNodes(text, tagEnd, 'center');
+          nodes.push(<span key={++keyCounter} style={{ display: 'block', textAlign: 'center' }}>{inner.nodes}</span>);
+          i = inner.pos;
+          continue;
+        } else if (tag === 'code') {
+          flushBuffer();
+          const inner = parseBBNodes(text, tagEnd, 'code');
+          nodes.push(<code key={++keyCounter} style={{ background: 'rgba(255,255,255,0.08)', padding: '1px 4px', borderRadius: 3, fontSize: '0.9em' }}>{inner.nodes}</code>);
+          i = inner.pos;
+          continue;
+        } else if (tag === 'youtube') {
+          // [youtube]ID[/youtube] — skip, just show link
+          flushBuffer();
+          const inner = parseBBNodes(text, tagEnd, 'youtube');
+          const videoId = inner.nodes.length === 1 && typeof inner.nodes[0] === 'string' ? inner.nodes[0].trim() : '';
+          if (videoId) {
+            const href = `https://www.youtube.com/watch?v=${videoId}`;
+            nodes.push(
+              <a key={++keyCounter} className="online-link" href={href}
+                onClick={(e) => { e.preventDefault(); e.stopPropagation(); window.electronAPI.openExternalUrl(href); }}>
+                ▶ YouTube
+              </a>
+            );
+          }
+          i = inner.pos;
+          continue;
         } else if (tag === 'list') {
           flushBuffer();
           const inner = parseBBNodes(text, tagEnd, 'list');
@@ -139,8 +170,7 @@ function parseBBNodes(text: string, start: number, stopTag?: string): ParseResul
       // [*] list item
       if (text.substring(i, i + 3) === '[*]') {
         flushBuffer();
-        buffer = '';
-        nodes.push(<span key={++keyCounter}>{'\n• '}</span>);
+        nodes.push(<span key={++keyCounter}>{'\u2022 '}</span>);
         i += 3;
         continue;
       }
@@ -152,12 +182,24 @@ function parseBBNodes(text: string, start: number, stopTag?: string): ParseResul
       }
     }
 
-    // Handle newlines
+    // Handle newlines: just a simple line break
     if (text[i] === '\n') {
       flushBuffer();
+      // Skip all consecutive newlines
+      while (i < text.length && text[i] === '\n') i++;
       nodes.push(<br key={++keyCounter} />);
-      i++;
       continue;
+    }
+
+    // Handle --- separator lines (3+ dashes)
+    if (text[i] === '-' && (i === 0 || text[i - 1] === '\n')) {
+      const dashMatch = text.substring(i).match(/^-{3,}/);
+      if (dashMatch) {
+        flushBuffer();
+        nodes.push(<hr key={++keyCounter} style={{ border: 'none', borderTop: '1px solid var(--border)', margin: '4px 0', opacity: 0.4 }} />);
+        i += dashMatch[0].length;
+        continue;
+      }
     }
 
     buffer += text[i];
@@ -175,5 +217,17 @@ const RichText: React.FC<{ text: string; className?: string }> = ({ text, classN
   const content = renderBBCode(text);
   return className ? <span className={className}>{content}</span> : <>{content}</>;
 };
+
+/** Strip all BBCode tags and ESO color codes, returning plain text. */
+export function stripBBCode(raw: string): string {
+  if (!raw) return '';
+  return raw
+    .replace(/\|c[0-9a-fA-F]{6}/g, '')
+    .replace(/\|r/g, '')
+    .replace(/\[\*\]/g, '• ')
+    .replace(/\[\/?[\w]+(?:=[^\]]*)?\]/g, '')
+    .replace(/\n{2,}/g, '\n')
+    .trim();
+}
 
 export default RichText;

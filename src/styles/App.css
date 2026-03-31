@@ -2139,7 +2139,7 @@
 }
 
 .desc-expanded {
-  white-space: pre-wrap;
+  white-space: normal;
   overflow: visible;
   cursor: pointer;
   max-width: 500px;

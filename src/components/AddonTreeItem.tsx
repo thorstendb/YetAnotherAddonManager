@@ -3,7 +3,7 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { AddonInfo, CatalogAddon, CharacterSettings, ADDON_CATEGORIES, getCategoryIconUrl, compareVersionStrings } from '../../electron/shared/types';
 import ColoredText from './ColoredText';
-import RichText from './RichText';
+import RichText, { stripBBCode } from './RichText';
 import ImagePreview from './ImagePreview';
 import { shortenCharName } from '../App';
 
@@ -441,7 +441,7 @@ const AddonTreeItem: React.FC<AddonTreeItemProps> = ({
                               title={subDescExpanded.has(sub.folderName) ? 'Click to collapse' : 'Click to expand'}
                             >
                               <span className="detail-label"><span className="desc-chevron">{subDescExpanded.has(sub.folderName) ? '▼' : '▶'}</span>Description:</span>{' '}
-                              <RichText text={sub.description} />
+                              {subDescExpanded.has(sub.folderName) ? <RichText text={sub.description} /> : stripBBCode(sub.description)}
                             </div>
                           )}
                           {/* Sub-addon version detail */}
@@ -604,7 +604,7 @@ const AddonTreeItem: React.FC<AddonTreeItemProps> = ({
               title={descExpanded ? 'Click to collapse' : 'Click to expand'}
             >
               <span className="detail-label"><span className="desc-chevron">{descExpanded ? '▼' : '▶'}</span>Description:</span>{' '}
-              <RichText text={addon.description} />
+              {descExpanded ? <RichText text={addon.description} /> : stripBBCode(addon.description)}
             </div>
           )}
           {/* Contributors */}
@@ -938,7 +938,7 @@ const AddonTreeItem: React.FC<AddonTreeItemProps> = ({
                       title={catalogDescExpanded ? 'Click to collapse' : 'Click to expand'}
                     >
                       <span className="detail-label"><span className="desc-chevron">{catalogDescExpanded ? '▼' : '▶'}</span>Description:</span>{' '}
-                      <RichText text={catalogDetails.description} />
+                      {catalogDescExpanded ? <RichText text={catalogDetails.description} /> : stripBBCode(catalogDetails.description)}
                     </div>
                   )}
                   {catalogDetails?.changeLog && (
