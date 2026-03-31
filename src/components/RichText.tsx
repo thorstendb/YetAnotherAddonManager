@@ -3,9 +3,11 @@
 import React from 'react';
 
 /**
- * Render BBCode-formatted text (from ESOUI API) as styled React elements.
- * Supports: [color="HHHHHH"], [b], [i], [u], [size="N"], [url], [url="..."],
- *           [list], [*], [img], [font], [indent], and ESO |cHHHHHH / |r color codes.
+ * Render BBCode-formatted text as styled React elements.
+ * Full BBCode support: [b], [i], [u], [s], [color], [size], [font], [url], [img],
+ * [center], [left], [right], [quote], [spoiler], [code], [pre], [list], [ol], [ul],
+ * [li], [*], [table], [tr], [td], [th], [indent], [hr], [sub], [sup], [youtube],
+ * [style], and ESO |cHHHHHH / |r color codes.
  */
 export function renderBBCode(raw: string): React.ReactNode {
   if (!raw) return null;
@@ -54,14 +56,8 @@ function parseBBNodes(text: string, start: number, stopTag?: string): ParseResul
         const attr = tagMatch[2] ?? tagMatch[3]; // quoted or unquoted
         const tagEnd = i + tagMatch[0].length;
 
-        if (tag === 'color' && attr) {
-          flushBuffer();
-          const inner = parseBBNodes(text, tagEnd, 'color');
-          const hex = attr.startsWith('#') ? attr : `#${attr}`;
-          nodes.push(<span key={++keyCounter} style={{ color: hex }}>{inner.nodes}</span>);
-          i = inner.pos;
-          continue;
-        } else if (tag === 'b') {
+        // --- Inline formatting ---
+        if (tag === 'b') {
           flushBuffer();
           const inner = parseBBNodes(text, tagEnd, 'b');
           nodes.push(<strong key={++keyCounter}>{inner.nodes}</strong>);
@@ -79,10 +75,36 @@ function parseBBNodes(text: string, start: number, stopTag?: string): ParseResul
           nodes.push(<span key={++keyCounter} style={{ textDecoration: 'underline' }}>{inner.nodes}</span>);
           i = inner.pos;
           continue;
+        } else if (tag === 's') {
+          flushBuffer();
+          const inner = parseBBNodes(text, tagEnd, 's');
+          nodes.push(<span key={++keyCounter} style={{ textDecoration: 'line-through' }}>{inner.nodes}</span>);
+          i = inner.pos;
+          continue;
+        } else if (tag === 'sub') {
+          flushBuffer();
+          const inner = parseBBNodes(text, tagEnd, 'sub');
+          nodes.push(<sub key={++keyCounter}>{inner.nodes}</sub>);
+          i = inner.pos;
+          continue;
+        } else if (tag === 'sup') {
+          flushBuffer();
+          const inner = parseBBNodes(text, tagEnd, 'sup');
+          nodes.push(<sup key={++keyCounter}>{inner.nodes}</sup>);
+          i = inner.pos;
+          continue;
+
+        // --- Color, size, font ---
+        } else if (tag === 'color' && attr) {
+          flushBuffer();
+          const inner = parseBBNodes(text, tagEnd, 'color');
+          const hex = attr.startsWith('#') ? attr : /^[0-9a-fA-F]{6}$/.test(attr) ? `#${attr}` : attr;
+          nodes.push(<span key={++keyCounter} style={{ color: hex }}>{inner.nodes}</span>);
+          i = inner.pos;
+          continue;
         } else if (tag === 'size' && attr) {
           flushBuffer();
           const inner = parseBBNodes(text, tagEnd, 'size');
-          // Handle relative sizes like +1, +2 and absolute sizes
           const relative = attr.startsWith('+') || attr.startsWith('-');
           const num = parseInt(attr, 10) || 0;
           const px = relative
@@ -91,6 +113,34 @@ function parseBBNodes(text: string, start: number, stopTag?: string): ParseResul
           nodes.push(<span key={++keyCounter} style={{ fontSize: `${px}px` }}>{inner.nodes}</span>);
           i = inner.pos;
           continue;
+        } else if (tag === 'font') {
+          flushBuffer();
+          const inner = parseBBNodes(text, tagEnd, 'font');
+          nodes.push(<span key={++keyCounter} style={attr ? { fontFamily: attr } : undefined}>{inner.nodes}</span>);
+          i = inner.pos;
+          continue;
+        } else if (tag === 'style') {
+          // [style size="N" color="X"] — parse inline attributes
+          flushBuffer();
+          const styleStr = tagMatch[0];
+          const sizeM = styleStr.match(/size\s*=\s*"?(\+?-?\d+)"?/i);
+          const colorM = styleStr.match(/color\s*=\s*"?(#?[\w]+)"?/i);
+          const inner = parseBBNodes(text, tagEnd, 'style');
+          const css: React.CSSProperties = {};
+          if (sizeM) {
+            const sn = parseInt(sizeM[1], 10) || 0;
+            const rel = sizeM[1].startsWith('+') || sizeM[1].startsWith('-');
+            css.fontSize = `${rel ? Math.min(Math.max(13 + sn * 2, 8), 28) : Math.min(Math.max(sn, 8), 28)}px`;
+          }
+          if (colorM) {
+            const c = colorM[1];
+            css.color = c.startsWith('#') ? c : /^[0-9a-fA-F]{6}$/.test(c) ? `#${c}` : c;
+          }
+          nodes.push(<span key={++keyCounter} style={css}>{inner.nodes}</span>);
+          i = inner.pos;
+          continue;
+
+        // --- Links & media ---
         } else if (tag === 'url') {
           flushBuffer();
           const inner = parseBBNodes(text, tagEnd, 'url');
@@ -99,7 +149,7 @@ function parseBBNodes(text: string, start: number, stopTag?: string): ParseResul
             nodes.push(
               <a key={++keyCounter} className="online-link" href={href}
                 onClick={(e) => { e.preventDefault(); e.stopPropagation(); window.electronAPI.openExternalUrl(href); }}>
-                {inner.nodes}
+                {attr ? inner.nodes : href}
               </a>
             );
           } else {
@@ -110,41 +160,26 @@ function parseBBNodes(text: string, start: number, stopTag?: string): ParseResul
         } else if (tag === 'img') {
           flushBuffer();
           const inner = parseBBNodes(text, tagEnd, 'img');
-          // Skip images — just show text placeholder
-          const src = inner.nodes.length === 1 && typeof inner.nodes[0] === 'string' ? inner.nodes[0] : '';
-          nodes.push(<span key={++keyCounter} title={src}>[img]</span>);
-          i = inner.pos;
-          continue;
-        } else if (tag === 'font') {
-          flushBuffer();
-          const inner = parseBBNodes(text, tagEnd, 'font');
-          if (attr) {
-            nodes.push(<span key={++keyCounter} style={{ fontFamily: attr }}>{inner.nodes}</span>);
+          const src = inner.nodes.length === 1 && typeof inner.nodes[0] === 'string' ? inner.nodes[0].trim() : '';
+          if (src) {
+            // Parse optional dimensions from [img=WxH] or [img width=W height=H]
+            const dimShort = attr?.match(/^(\d+)x(\d+)$/i);
+            const wM = tagMatch[0].match(/width\s*=\s*"?(\d+)"?/i);
+            const hM = tagMatch[0].match(/height\s*=\s*"?(\d+)"?/i);
+            const w = dimShort ? Number(dimShort[1]) : wM ? Number(wM[1]) : undefined;
+            const h = dimShort ? Number(dimShort[2]) : hM ? Number(hM[1]) : undefined;
+            nodes.push(
+              <img key={++keyCounter} src={src} alt="" style={{
+                maxWidth: '100%', maxHeight: 200, borderRadius: 3,
+                ...(w ? { width: w } : {}), ...(h ? { height: h } : {})
+              }} />
+            );
           } else {
-            nodes.push(<span key={++keyCounter}>{inner.nodes}</span>);
+            nodes.push(<span key={++keyCounter}>[img]</span>);
           }
           i = inner.pos;
           continue;
-        } else if (tag === 'indent') {
-          flushBuffer();
-          const inner = parseBBNodes(text, tagEnd, 'indent');
-          nodes.push(<span key={++keyCounter} style={{ display: 'block', marginLeft: '1.5em' }}>{inner.nodes}</span>);
-          i = inner.pos;
-          continue;
-        } else if (tag === 'center') {
-          flushBuffer();
-          const inner = parseBBNodes(text, tagEnd, 'center');
-          nodes.push(<span key={++keyCounter} style={{ display: 'block', textAlign: 'center' }}>{inner.nodes}</span>);
-          i = inner.pos;
-          continue;
-        } else if (tag === 'code') {
-          flushBuffer();
-          const inner = parseBBNodes(text, tagEnd, 'code');
-          nodes.push(<code key={++keyCounter} style={{ background: 'rgba(255,255,255,0.08)', padding: '1px 4px', borderRadius: 3, fontSize: '0.9em' }}>{inner.nodes}</code>);
-          i = inner.pos;
-          continue;
         } else if (tag === 'youtube') {
-          // [youtube]ID[/youtube] — skip, just show link
           flushBuffer();
           const inner = parseBBNodes(text, tagEnd, 'youtube');
           const videoId = inner.nodes.length === 1 && typeof inner.nodes[0] === 'string' ? inner.nodes[0].trim() : '';
@@ -159,18 +194,177 @@ function parseBBNodes(text: string, start: number, stopTag?: string): ParseResul
           }
           i = inner.pos;
           continue;
-        } else if (tag === 'list') {
+
+        // --- Block alignment ---
+        } else if (tag === 'center') {
           flushBuffer();
-          const inner = parseBBNodes(text, tagEnd, 'list');
-          nodes.push(<span key={++keyCounter}>{inner.nodes}</span>);
+          const inner = parseBBNodes(text, tagEnd, 'center');
+          nodes.push(<div key={++keyCounter} style={{ textAlign: 'center' }}>{inner.nodes}</div>);
           i = inner.pos;
+          continue;
+        } else if (tag === 'left') {
+          flushBuffer();
+          const inner = parseBBNodes(text, tagEnd, 'left');
+          nodes.push(<div key={++keyCounter} style={{ textAlign: 'left' }}>{inner.nodes}</div>);
+          i = inner.pos;
+          continue;
+        } else if (tag === 'right') {
+          flushBuffer();
+          const inner = parseBBNodes(text, tagEnd, 'right');
+          nodes.push(<div key={++keyCounter} style={{ textAlign: 'right' }}>{inner.nodes}</div>);
+          i = inner.pos;
+          continue;
+        } else if (tag === 'indent') {
+          flushBuffer();
+          const inner = parseBBNodes(text, tagEnd, 'indent');
+          nodes.push(<div key={++keyCounter} style={{ marginLeft: '1.5em' }}>{inner.nodes}</div>);
+          i = inner.pos;
+          continue;
+
+        // --- Quote & spoiler ---
+        } else if (tag === 'quote') {
+          flushBuffer();
+          const inner = parseBBNodes(text, tagEnd, 'quote');
+          nodes.push(
+            <div key={++keyCounter} style={{
+              borderLeft: '3px solid var(--border)', marginLeft: 4, paddingLeft: 8,
+              opacity: 0.85, fontStyle: 'italic'
+            }}>
+              {attr && <div style={{ fontWeight: 600, fontStyle: 'normal', marginBottom: 2 }}>{attr}:</div>}
+              {inner.nodes}
+            </div>
+          );
+          i = inner.pos;
+          continue;
+        } else if (tag === 'spoiler') {
+          flushBuffer();
+          const inner = parseBBNodes(text, tagEnd, 'spoiler');
+          const spoilerKey = ++keyCounter;
+          nodes.push(
+            <SpoilerBlock key={spoilerKey} label={attr}>
+              {inner.nodes}
+            </SpoilerBlock>
+          );
+          i = inner.pos;
+          continue;
+
+        // --- Code & preformatted ---
+        } else if (tag === 'code') {
+          flushBuffer();
+          const inner = parseBBNodes(text, tagEnd, 'code');
+          nodes.push(
+            <code key={++keyCounter} style={{
+              display: 'block', background: 'rgba(255,255,255,0.06)', padding: '4px 8px',
+              borderRadius: 3, fontSize: '0.9em', fontFamily: 'monospace', whiteSpace: 'pre-wrap',
+              border: '1px solid var(--border)', margin: '2px 0'
+            }}>
+              {inner.nodes}
+            </code>
+          );
+          i = inner.pos;
+          continue;
+        } else if (tag === 'pre') {
+          flushBuffer();
+          const inner = parseBBNodes(text, tagEnd, 'pre');
+          nodes.push(
+            <pre key={++keyCounter} style={{
+              fontFamily: 'monospace', whiteSpace: 'pre-wrap', margin: '2px 0',
+              fontSize: '0.9em'
+            }}>
+              {inner.nodes}
+            </pre>
+          );
+          i = inner.pos;
+          continue;
+
+        // --- Lists ---
+        } else if (tag === 'list' || tag === 'ul') {
+          flushBuffer();
+          const inner = parseBBNodes(text, tagEnd, tag);
+          nodes.push(
+            <ul key={++keyCounter} style={{ margin: '2px 0', paddingLeft: '1.5em' }}>
+              {inner.nodes}
+            </ul>
+          );
+          i = inner.pos;
+          continue;
+        } else if (tag === 'ol') {
+          flushBuffer();
+          const inner = parseBBNodes(text, tagEnd, 'ol');
+          nodes.push(
+            <ol key={++keyCounter} style={{ margin: '2px 0', paddingLeft: '1.5em' }}>
+              {inner.nodes}
+            </ol>
+          );
+          i = inner.pos;
+          continue;
+        } else if (tag === 'li') {
+          flushBuffer();
+          const inner = parseBBNodes(text, tagEnd, 'li');
+          nodes.push(<li key={++keyCounter}>{inner.nodes}</li>);
+          i = inner.pos;
+          continue;
+
+        // --- Tables ---
+        } else if (tag === 'table') {
+          flushBuffer();
+          const inner = parseBBNodes(text, tagEnd, 'table');
+          nodes.push(
+            <table key={++keyCounter} style={{
+              borderCollapse: 'collapse', margin: '2px 0', fontSize: '0.95em',
+              border: '1px solid var(--border)'
+            }}>
+              <tbody>{inner.nodes}</tbody>
+            </table>
+          );
+          i = inner.pos;
+          continue;
+        } else if (tag === 'tr') {
+          flushBuffer();
+          const inner = parseBBNodes(text, tagEnd, 'tr');
+          nodes.push(<tr key={++keyCounter}>{inner.nodes}</tr>);
+          i = inner.pos;
+          continue;
+        } else if (tag === 'td') {
+          flushBuffer();
+          const inner = parseBBNodes(text, tagEnd, 'td');
+          nodes.push(
+            <td key={++keyCounter} style={{ border: '1px solid var(--border)', padding: '2px 6px' }}>
+              {inner.nodes}
+            </td>
+          );
+          i = inner.pos;
+          continue;
+        } else if (tag === 'th') {
+          flushBuffer();
+          const inner = parseBBNodes(text, tagEnd, 'th');
+          nodes.push(
+            <th key={++keyCounter} style={{
+              border: '1px solid var(--border)', padding: '2px 6px', fontWeight: 600,
+              background: 'rgba(255,255,255,0.04)'
+            }}>
+              {inner.nodes}
+            </th>
+          );
+          i = inner.pos;
+          continue;
+
+        // --- Misc ---
+        } else if (tag === 'hr') {
+          flushBuffer();
+          // Self-closing [hr] — skip to end, consume optional [/hr]
+          nodes.push(<hr key={++keyCounter} style={{ border: 'none', borderTop: '1px solid var(--border)', margin: '4px 0', opacity: 0.4 }} />);
+          i = tagEnd;
           continue;
         }
       }
-      // [*] list item
+      // [*] list item (shorthand without closing tag)
       if (text.substring(i, i + 3) === '[*]') {
         flushBuffer();
-        nodes.push(<span key={++keyCounter}>{'\u2022 '}</span>);
+        nodes.push(<li key={++keyCounter} style={{ listStyle: 'disc' }}>{''}</li>);
+        // Parse until next [*] or [/list] or [/ul] or [/ol] — but simpler: just emit bullet marker
+        nodes.pop(); // remove empty li
+        nodes.push(<span key={++keyCounter}>{'• '}</span>);
         i += 3;
         continue;
       }
@@ -178,6 +372,12 @@ function parseBBNodes(text: string, start: number, stopTag?: string): ParseResul
       const closingMatch = text.substring(i).match(/^\[\/\w+\]/i);
       if (closingMatch) {
         i += closingMatch[0].length;
+        continue;
+      }
+      // Unrecognized opening tag — skip it silently
+      const unknownOpen = text.substring(i).match(/^\[\w+(?:=[^\]]*)?\]/i);
+      if (unknownOpen) {
+        i += unknownOpen[0].length;
         continue;
       }
     }
@@ -209,6 +409,22 @@ function parseBBNodes(text: string, start: number, stopTag?: string): ParseResul
   flushBuffer();
   return { nodes, pos: i };
 }
+
+/** Expandable spoiler block component */
+const SpoilerBlock: React.FC<{ label?: string; children: React.ReactNode }> = ({ label, children }) => {
+  const [open, setOpen] = React.useState(false);
+  return (
+    <div style={{ margin: '2px 0', border: '1px solid var(--border)', borderRadius: 3 }}>
+      <div
+        style={{ padding: '2px 8px', cursor: 'pointer', background: 'rgba(255,255,255,0.04)', fontSize: '0.95em' }}
+        onClick={(e) => { e.stopPropagation(); setOpen(o => !o); }}
+      >
+        {open ? '▼' : '▶'} {label || 'Spoiler'}
+      </div>
+      {open && <div style={{ padding: '4px 8px' }}>{children}</div>}
+    </div>
+  );
+};
 
 /**
  * Convenience component for rendering BBCode text inline.

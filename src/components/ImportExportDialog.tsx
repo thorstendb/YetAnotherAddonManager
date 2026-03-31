@@ -418,13 +418,6 @@ const ImportExportDialog: React.FC<ImportExportDialogProps> = ({
                   </div>
                 </div>
               )}
-              <button
-                className="restore-btn ie-action-btn"
-                onClick={handleExport}
-                disabled={exporting || addons.length === 0}
-              >
-                {exporting ? 'Exporting...' : '📤 Export Profile'}
-              </button>
             </div>
           )}
 
@@ -556,14 +549,6 @@ const ImportExportDialog: React.FC<ImportExportDialogProps> = ({
                 </div>
               )}
 
-              <button
-                className="restore-btn ie-action-btn"
-                onClick={handleImport}
-                disabled={importing || !importFile || !importPreview}
-              >
-                {importing ? 'Importing...' : '📥 Import Profile'}
-              </button>
-
               {!addonPath && (
                 <p className="ie-warning">Set an AddOns path first before importing.</p>
               )}
@@ -571,7 +556,25 @@ const ImportExportDialog: React.FC<ImportExportDialogProps> = ({
           )}
         </div>
 
-        <div style={{ display: 'flex', justifyContent: 'flex-end', padding: '8px 16px 12px', borderTop: '1px solid var(--border)' }}>
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px', padding: '8px 16px 12px', borderTop: '1px solid var(--border)' }}>
+          {activeTab === 'export' && (
+            <button
+              className="restore-btn ie-action-btn"
+              onClick={handleExport}
+              disabled={exporting || addons.length === 0}
+            >
+              {exporting ? 'Exporting...' : '📤 Export Profile'}
+            </button>
+          )}
+          {activeTab === 'import' && (
+            <button
+              className="restore-btn ie-action-btn"
+              onClick={handleImport}
+              disabled={importing || !importFile || !importPreview}
+            >
+              {importing ? 'Importing...' : '📥 Import Profile'}
+            </button>
+          )}
           <button className="restore-btn ie-action-btn" onClick={onClose}>OK</button>
         </div>
       </div>
