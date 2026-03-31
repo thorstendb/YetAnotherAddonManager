@@ -5,7 +5,7 @@ import React from 'react';
 /**
  * Render BBCode-formatted text (from ESOUI API) as styled React elements.
  * Supports: [color="HHHHHH"], [b], [i], [u], [size="N"], [url], [url="..."],
- *           [list], [*], [img], and ESO |cHHHHHH / |r color codes.
+ *           [list], [*], [img], [font], [indent], and ESO |cHHHHHH / |r color codes.
  */
 export function renderBBCode(raw: string): React.ReactNode {
   if (!raw) return null;
@@ -110,6 +110,22 @@ function parseBBNodes(text: string, start: number, stopTag?: string): ParseResul
           // Skip images — just show text placeholder
           const src = inner.nodes.length === 1 && typeof inner.nodes[0] === 'string' ? inner.nodes[0] : '';
           nodes.push(<span key={++keyCounter} title={src}>[img]</span>);
+          i = inner.pos;
+          continue;
+        } else if (tag === 'font') {
+          flushBuffer();
+          const inner = parseBBNodes(text, tagEnd, 'font');
+          if (attr) {
+            nodes.push(<span key={++keyCounter} style={{ fontFamily: attr }}>{inner.nodes}</span>);
+          } else {
+            nodes.push(<span key={++keyCounter}>{inner.nodes}</span>);
+          }
+          i = inner.pos;
+          continue;
+        } else if (tag === 'indent') {
+          flushBuffer();
+          const inner = parseBBNodes(text, tagEnd, 'indent');
+          nodes.push(<span key={++keyCounter} style={{ display: 'block', marginLeft: '1.5em' }}>{inner.nodes}</span>);
           i = inner.pos;
           continue;
         } else if (tag === 'list') {
