@@ -149,8 +149,8 @@ const RestoreDialog: React.FC<RestoreDialogProps> = ({
   }, [snapshots, selectedSnapshot, currentMap]);
 
   return (
-    <div className="unsaved-overlay" onClick={onClose}>
-      <div className="restore-dialog" onClick={(e) => e.stopPropagation()}>
+    <div className="unsaved-overlay">
+      <div className="restore-dialog">
         <div className="restore-header">
           <div className="restore-title">⏪ Restore Previous Versions</div>
           <button ref={closeRef} className="restore-close-btn" onClick={onClose} title="Close">✕</button>

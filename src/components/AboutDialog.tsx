@@ -13,16 +13,12 @@ const AboutDialog: React.FC<AboutDialogProps> = ({ onClose }) => {
     window.electronAPI.getAppVersion().then(setVersion);
   }, []);
 
-  const handleOverlayClick = (e: React.MouseEvent) => {
-    if (e.target === e.currentTarget) onClose();
-  };
-
   const openRepo = () => {
     window.electronAPI.openExternalUrl('https://github.com/thorstendb/YetAnotherAddonManager');
   };
 
   return (
-    <div className="welcome-overlay" onClick={handleOverlayClick}>
+    <div className="welcome-overlay">
       <div className="welcome-dialog" style={{ width: 'min(420px, 90vw)' }}>
         <div className="welcome-header">
           <h2>About YAAM</h2>

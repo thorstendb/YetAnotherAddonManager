@@ -22,8 +22,8 @@ const UnsavedDialog: React.FC<UnsavedDialogProps> = ({ onSave, onDiscard, onCanc
   }, [onCancel]);
 
   return (
-    <div className="unsaved-overlay" onClick={onCancel}>
-      <div className="unsaved-dialog" onClick={(e) => e.stopPropagation()}>
+    <div className="unsaved-overlay">
+      <div className="unsaved-dialog">
         <div className="unsaved-icon">⚠️</div>
         <div className="unsaved-title">Unsaved Changes</div>
         <div className="unsaved-message">

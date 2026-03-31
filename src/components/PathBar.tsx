@@ -12,6 +12,7 @@ interface PathBarProps {
   onCleanup: () => void;
   onCleanupSettings: () => void;
   onCleanupDownloads: () => void;
+  onCleanupBackups: () => void;
   onUpdateAll: () => void;
   onGoBack: () => void;
   onImportExport: () => void;
@@ -37,6 +38,7 @@ const PathBar: React.FC<PathBarProps> = ({
   onCleanup,
   onCleanupSettings,
   onCleanupDownloads,
+  onCleanupBackups,
   onUpdateAll,
   onGoBack,
   onImportExport,
@@ -53,103 +55,130 @@ const PathBar: React.FC<PathBarProps> = ({
 }) => {
   const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === 'Enter') {
-      onSave(path);
+      (e.target as HTMLInputElement).blur();
     }
+  };
+
+  const handleBlur = () => {
+    if (path) onSave(path);
   };
 
   return (
     <div className="toolbar">
-      <label>AddOns Path:</label>
-      <input
-        type="text"
-        value={path}
-        onChange={(e) => onPathChange(e.target.value)}
-        onKeyDown={handleKeyDown}
-        placeholder="~/Documents/Elder Scrolls Online/live/AddOns"
-        spellCheck={false}
-      />
-      <button onClick={onBrowse} title="Browse for folder">
-        📂
-      </button>
-      <button onClick={() => onSave(path)} disabled={!path || loading} title="Save path and scan">
-        💾
-      </button>
-      <button onClick={onRefresh} disabled={!path || loading} title="Re-scan addons">
-        🔄
-      </button>
-      <button onClick={onOpenFolder} disabled={!path} title="Open folder in file manager">
-        📁
-      </button>
-      <div className="toolbar-separator" />
-      <button
-        onClick={onCleanup}
-        disabled={!hasAddons || loading || unreferencedCount === 0}
-        title={`Move ${unreferencedCount} unreferenced libraries to Removed/ folder`}
-        className="btn-warning"
-      >
-        🧹 Cleanup Libs ({unreferencedCount})
-      </button>
-      <button
-        onClick={onCleanupSettings}
-        disabled={!hasAddons || loading}
-        title="Remove orphaned entries from AddOnSettings.txt and SavedVariables (creates backups)"
-        className="btn-warning"
-      >
-        🗑️ Cleanup Settings
-      </button>
-      <button
-        onClick={onCleanupDownloads}
-        disabled={!path || loading}
-        title="Move .zip archives from AddOns folder into Downloads subfolder"
-        className="btn-warning"
-      >
-        📦 Cleanup Archives
-      </button>
-      <button
-        onClick={onUpdateAll}
-        disabled={!updatingAll && (!hasAddons || loading || updateCount === 0)}
-        title={updatingAll ? 'Cancel update' : updateCount > 0 ? `Update ${updateCount} addon(s) with newer versions from catalog` : 'All addons are up-to-date'}
-        className={updatingAll ? 'btn-warning' : 'btn-secondary'}
-      >
-        {updatingAll ? `❌ Cancel Update${updateRemaining ? ` (${updateRemaining} left)` : ''}` : `⬆ Update All${updateCount > 0 ? ` (${updateCount})` : ''}`}
-      </button>
-      <button
-        onClick={onGoBack}
-        disabled={!hasAddons || loading}
-        title="Restore previous addon versions from backups"
-        className="btn-secondary"
-      >
-        ⏪ Go Back
-      </button>
-      <button
-        onClick={onImportExport}
-        disabled={loading}
-        title="Import or export addon profile (addons, settings, saved data)"
-        className="btn-secondary"
-      >
-        📋 Import/Export
-      </button>
-      <button
-        onClick={onSettings}
-        className="theme-toggle"
-        title="Settings"
-      >
-        ⚙️
-      </button>
-      <button
-        onClick={onToggleTheme}
-        className="theme-toggle"
-        title={theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme'}
-      >
-        {theme === 'dark' ? '☀️' : '🌙'}
-      </button>
-      <button
-        onClick={onAbout}
-        className="theme-toggle"
-        title="About YAAM"
-      >
-        ℹ️
-      </button>
+      <fieldset className="toolbar-group path-field">
+        <legend>Addon Path</legend>
+        <input
+          type="text"
+          value={path}
+          onChange={(e) => onPathChange(e.target.value)}
+          onKeyDown={handleKeyDown}
+          onBlur={handleBlur}
+          placeholder="~/Documents/Elder Scrolls Online/live/AddOns"
+          spellCheck={false}
+        />
+      </fieldset>
+      <fieldset className="toolbar-group">
+        <legend>Path</legend>
+        <button onClick={onBrowse} title="Browse for folder" aria-label="Browse for folder">
+          📂
+        </button>
+        <button onClick={onRefresh} disabled={!path || loading} title="Re-scan addons" aria-label="Re-scan addons">
+          🔄
+        </button>
+        <button onClick={onOpenFolder} disabled={!path} title="Open folder in file manager" aria-label="Open folder in file manager">
+          ↗️
+        </button>
+      </fieldset>
+      <fieldset className="toolbar-group">
+        <legend>Cleanup</legend>
+        <button
+          onClick={onCleanup}
+          disabled={!hasAddons || loading || unreferencedCount === 0}
+          title={`Move ${unreferencedCount} unreferenced libraries to Removed/ folder`}
+          className="btn-warning"
+        >
+          🧹 Libs ({unreferencedCount})
+        </button>
+        <button
+          onClick={onCleanupSettings}
+          disabled={!hasAddons || loading}
+          title="Remove orphaned entries from AddOnSettings.txt and SavedVariables (creates backups)"
+          className="btn-warning"
+        >
+          🗑️ Settings
+        </button>
+        <button
+          onClick={onCleanupDownloads}
+          disabled={!path || loading}
+          title="Move .zip archives from AddOns folder into Downloads subfolder"
+          className="btn-warning"
+        >
+          📦 Archives
+        </button>
+        <button
+          onClick={onCleanupBackups}
+          disabled={!hasAddons || loading}
+          title="Delete old addon backups to free disk space"
+          aria-label="Delete old addon backups"
+          className="btn-warning"
+        >
+          🗄️
+        </button>
+      </fieldset>
+      <fieldset className="toolbar-group">
+        <legend>Updates</legend>
+        <button
+          onClick={onUpdateAll}
+          disabled={!updatingAll && (!hasAddons || loading || updateCount === 0)}
+          title={updatingAll ? 'Cancel update' : updateCount > 0 ? `Update ${updateCount} addon(s) with newer versions from catalog` : 'All addons are up-to-date'}
+          className={updatingAll ? 'btn-warning' : 'btn-secondary'}
+        >
+          {updatingAll ? `❌ Cancel Update${updateRemaining ? ` (${updateRemaining} left)` : ''}` : `⬆ Update All${updateCount > 0 ? ` (${updateCount})` : ''}`}
+        </button>
+        <button
+          onClick={onGoBack}
+          disabled={!hasAddons || loading}
+          title="Restore previous addon versions from backups"
+          className="btn-secondary"
+        >
+          ⏪ Go Back
+        </button>
+        <button
+          onClick={onImportExport}
+          disabled={loading}
+          title="Import or export addon profile (addons, settings, saved data)"
+          className="btn-secondary"
+        >
+          📋 Import/Export
+        </button>
+      </fieldset>
+      <fieldset className="toolbar-group">
+        <legend>App</legend>
+        <button
+          onClick={onSettings}
+          className="theme-toggle"
+          title="Settings"
+          aria-label="Settings"
+        >
+          ⚙️
+        </button>
+        <button
+          onClick={onToggleTheme}
+          className="theme-toggle"
+          title={theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme'}
+          aria-label={theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme'}
+        >
+          {theme === 'dark' ? '☀️' : '🌙'}
+        </button>
+        <button
+          onClick={onAbout}
+          className="theme-toggle"
+          title="About YAAM"
+          aria-label="About YAAM"
+        >
+          ℹ️
+        </button>
+      </fieldset>
     </div>
   );
 };

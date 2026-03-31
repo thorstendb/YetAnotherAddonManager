@@ -29,7 +29,7 @@ interface AddonTreeItemProps {
   onDeleteAndRefsWithSV?: (folderName: string) => void;
   onInstall?: (catalogAddon: CatalogAddon) => void;
   onNavigateCatalog?: (addonId: string) => void;
-  installProgress?: Record<string, { phase: string; percent?: number }>;
+  installProgress?: Record<string, { phase: string; percent?: number; current?: number; total?: number }>;
 }
 
 const AddonTreeItem: React.FC<AddonTreeItemProps> = ({
@@ -194,6 +194,9 @@ const AddonTreeItem: React.FC<AddonTreeItemProps> = ({
           <span
             className={`tree-tri-check ${allEnabled ? 'checked' : isIndeterminate ? 'indeterminate' : ''}`}
             onClick={handleTriCheckClick}
+            role="checkbox"
+            aria-checked={allEnabled ? 'true' : isIndeterminate ? 'mixed' : 'false'}
+            aria-label="Toggle addon for all characters"
             title={allEnabled ? 'Enabled for all characters' : noneEnabled ? 'Disabled for all characters' : `Enabled for ${enabledCount}/${totalChars} characters`}
           />
         )}
@@ -219,7 +222,7 @@ const AddonTreeItem: React.FC<AddonTreeItemProps> = ({
               className="row-btn row-btn-install"
               onClick={(e) => { e.stopPropagation(); onInstall(catalogAddon); }}
               disabled={isInstalling}
-              title="Reinstall from catalog"
+              title="Reinstall"
             >
               {isInstalling ? '⏳' : '🔄'}
             </button>
@@ -276,9 +279,10 @@ const AddonTreeItem: React.FC<AddonTreeItemProps> = ({
         if (!progress) return null;
         const isIndeterminate = progress.phase === 'resolving';
         const pct = isIndeterminate ? 100 : (progress.percent || 0);
-        const label = progress.phase === 'resolving' ? 'Resolving...'
-          : progress.phase === 'downloading' ? `Downloading ${progress.percent || 0}%`
-          : `Extracting ${progress.percent || 0}%`;
+        const prefix = progress.total && progress.total > 1 ? `${progress.current}/${progress.total} ` : '';
+        const label = progress.phase === 'resolving' ? `${prefix}Resolving...`
+          : progress.phase === 'downloading' ? `${prefix}Downloading ${progress.percent || 0}%`
+          : `${prefix}Extracting…`;
         return (
           <div className="install-progress-container">
             <div className="install-progress-track">
@@ -391,9 +395,9 @@ const AddonTreeItem: React.FC<AddonTreeItemProps> = ({
                                               className="row-btn row-btn-install dep-btn"
                                               onClick={(e) => { e.stopPropagation(); onInstall(depCatalog); }}
                                               disabled={installingAddonId === depCatalog.id}
-                                              title={isDepInstalled ? 'Reinstall from catalog' : 'Install from catalog'}
+                                              title={isDepInstalled ? 'Reinstall' : 'Install'}
                                             >
-                                              {installingAddonId === depCatalog.id ? '⏳' : isDepInstalled ? '🔄' : '📥'}
+                                              {installingAddonId === depCatalog.id ? '⏳' : isDepInstalled ? '🔄' : '➕'}
                                             </button>
                                           )}
                                           {isDepInstalled && onDelete && (
@@ -443,9 +447,9 @@ const AddonTreeItem: React.FC<AddonTreeItemProps> = ({
                                               className="row-btn row-btn-install dep-btn"
                                               onClick={(e) => { e.stopPropagation(); onInstall(depCatalog); }}
                                               disabled={installingAddonId === depCatalog.id}
-                                              title={isDepInstalled ? 'Reinstall from catalog' : 'Install from catalog'}
+                                              title={isDepInstalled ? 'Reinstall' : 'Install'}
                                             >
-                                              {installingAddonId === depCatalog.id ? '⏳' : isDepInstalled ? '🔄' : '📥'}
+                                              {installingAddonId === depCatalog.id ? '⏳' : isDepInstalled ? '🔄' : '➕'}
                                             </button>
                                           )}
                                           {isDepInstalled && onDelete && (
@@ -606,9 +610,9 @@ const AddonTreeItem: React.FC<AddonTreeItemProps> = ({
                             className="row-btn row-btn-install dep-btn"
                             onClick={(e) => { e.stopPropagation(); onInstall(depCatalog); }}
                             disabled={installingAddonId === depCatalog.id}
-                            title={isDepInstalled ? 'Reinstall from catalog' : 'Install from catalog'}
+                            title={isDepInstalled ? 'Reinstall' : 'Install'}
                           >
-                            {installingAddonId === depCatalog.id ? '⏳' : isDepInstalled ? '🔄' : '📥'}
+                            {installingAddonId === depCatalog.id ? '⏳' : isDepInstalled ? '🔄' : '➕'}
                           </button>
                         )}
                         {isDepInstalled && onDelete && (
@@ -666,9 +670,9 @@ const AddonTreeItem: React.FC<AddonTreeItemProps> = ({
                             className="row-btn row-btn-install dep-btn"
                             onClick={(e) => { e.stopPropagation(); onInstall(depCatalog); }}
                             disabled={installingAddonId === depCatalog.id}
-                            title={isDepInstalled ? 'Reinstall from catalog' : 'Install from catalog'}
+                            title={isDepInstalled ? 'Reinstall' : 'Install'}
                           >
-                            {installingAddonId === depCatalog.id ? '⏳' : isDepInstalled ? '🔄' : '📥'}
+                            {installingAddonId === depCatalog.id ? '⏳' : isDepInstalled ? '🔄' : '➕'}
                           </button>
                         )}
                         {isDepInstalled && onDelete && (
@@ -719,7 +723,7 @@ const AddonTreeItem: React.FC<AddonTreeItemProps> = ({
                             className="row-btn row-btn-install dep-btn"
                             onClick={(e) => { e.stopPropagation(); onInstall(refCatalog); }}
                             disabled={installingAddonId === refCatalog.id}
-                            title="Reinstall from catalog"
+                            title="Reinstall"
                           >
                             {installingAddonId === refCatalog.id ? '⏳' : '🔄'}
                           </button>

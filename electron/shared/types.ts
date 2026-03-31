@@ -214,29 +214,64 @@ export function compareVersionStrings(a: string, b: string, catalogDateEpoch?: n
   const va = parseVersionParts(sa);
   const vb = parseVersionParts(sb);
 
-  // Detect versioning scheme mismatch: one side is date-based, the other is not.
-  // The addon author changed versioning scheme between releases.
-  // Fall back to the catalog upload date as the reliable comparison anchor.
-  if (va.isDate !== vb.isDate && catalogDateEpoch) {
-    const catalogDateParts = parseVersionParts(dateToVersion(catalogDateEpoch)).parts;
-    if (va.isDate) {
-      // local is date-based, catalog switched to semver
-      // → compare local date against catalog upload date
-      for (let i = 0; i < 3; i++) {
-        const na = va.parts[i] ?? 0;
-        const nb = catalogDateParts[i] ?? 0;
-        if (na !== nb) return na - nb;
+  // ── Version scheme mismatch detection ──
+  // When the local version and catalog version use fundamentally different
+  // numbering schemes, raw numeric comparison is meaningless.
+  // In all mismatch cases the catalog upload date is the reliable anchor:
+  //   • a = local version, b = catalog version
+  //   • catalogDateEpoch = catalog upload timestamp (seconds)
+  //
+  // Scheme categories:
+  //   date    – isDate=true (YYYY.MM.DD / YYYY-MM-DD / …)
+  //   semver  – 3+ numeric parts, not date-like  (1.2.3, 4.0.5.6.1)
+  //   short   – 1-2 numeric parts  (49, 2.31, 316.5)
+  //
+  // A mismatch is any transition between these categories.
+
+  if (catalogDateEpoch) {
+    const aIsShort = !va.isDate && va.parts.length <= 2;
+    const bIsShort = !vb.isDate && vb.parts.length <= 2;
+    const aIsSemver = !va.isDate && va.parts.length >= 3;
+    const bIsSemver = !vb.isDate && vb.parts.length >= 3;
+
+    // date ↔ non-date
+    if (va.isDate !== vb.isDate) {
+      const catalogDateParts = parseVersionParts(dateToVersion(catalogDateEpoch)).parts;
+      if (va.isDate) {
+        // local is date-based, catalog switched to semver/short
+        // → compare local date against catalog upload date
+        for (let i = 0; i < 3; i++) {
+          const na = va.parts[i] ?? 0;
+          const nb = catalogDateParts[i] ?? 0;
+          if (na !== nb) return na - nb;
+        }
+        return 0;
+      } else {
+        // local is semver/short, catalog switched to date-based
+        // → compare catalog upload date against local date proxy
+        //   (upload date is the reliable anchor)
+        return -1;
       }
-      return 0;
-    } else {
-      // local is semver, catalog switched to date-based
-      // → We cannot meaningfully compare semver against a date.
-      //   Use catalog upload date vs catalog date-version as sanity check,
-      //   but the key insight is: if the author changed the scheme, a new
-      //   upload to the catalog almost certainly means an update.
-      //   Report update unless the installedCatalogVersions guard already
-      //   caught it (which happens at the call site, not here).
-      return -1;
+    }
+
+    // short (1-2 parts) ↔ semver (3+ parts)
+    // The segment count difference is the strongest signal of a scheme change.
+    // Examples: "49" vs "3.16.5", "316.5" vs "3.16.5", "31605" vs "3.16.5"
+    // Exception: pre-release tags reduce segment count naturally
+    //   ("1.2-beta" parses as [1,2] + preRelease="beta") — NOT a scheme change.
+    if ((aIsShort && bIsSemver) || (aIsSemver && bIsShort)) {
+      const shorter = aIsShort ? va : vb;
+      const longer = aIsShort ? vb : va;
+      // If the shorter side has a pre-release tag AND its numeric parts are
+      // a prefix of the longer side, this is a normal version comparison,
+      // not a scheme change.  e.g. "1.2-beta" vs "1.2.3"
+      const isPreReleasePrefix = shorter.preRelease && shorter.parts.length < longer.parts.length
+        && shorter.parts.every((p, i) => p === longer.parts[i]);
+      if (!isPreReleasePrefix) {
+        // Catalog version (b) is authoritative after a scheme change.
+        // The catalog always reflects the author's latest upload.
+        return -1;
+      }
     }
   }
 
@@ -287,6 +322,8 @@ export interface AppConfig {
   fontSize?: number;
   /** UI font family (CSS value) */
   fontFamily?: string;
+  /** Skip cleanup confirmation dialogs */
+  skipCleanupConfirm?: boolean;
 }
 
 /** Character → enabled map used for per-addon enable/disable display */
@@ -423,4 +460,11 @@ export const IPC_CHANNELS = {
   GET_APP_VERSION: 'get-app-version',
   EXPORT_PROGRESS: 'export-progress',
   GET_SYSTEM_FONTS: 'get-system-fonts',
+  PREVIEW_CLEANUP_LIBS: 'preview-cleanup-libs',
+  PREVIEW_CLEANUP_SETTINGS: 'preview-cleanup-settings',
+  PREVIEW_CLEANUP_DOWNLOADS: 'preview-cleanup-downloads',
+  CLEANUP_LIBS_SELECTED: 'cleanup-libs-selected',
+  CLEANUP_SETTINGS_SELECTED: 'cleanup-settings-selected',
+  CLEANUP_DOWNLOADS_SELECTED: 'cleanup-downloads-selected',
+  DELETE_ADDON_BACKUPS: 'delete-addon-backups',
 } as const;

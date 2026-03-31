@@ -45,11 +45,11 @@ export function loadConfig(): AppConfig {
   try {
     if (fs.existsSync(configPath)) {
       const raw = fs.readFileSync(configPath, 'utf-8');
-      const config = JSON.parse(raw) as AppConfig;
+      const config = JSON.parse(raw) as AppConfig & { installedEsoVersions?: Record<string, string> };
       // Migrate old field name
-      if ((config as any).installedEsoVersions && !config.installedCatalogVersions) {
-        config.installedCatalogVersions = (config as any).installedEsoVersions;
-        delete (config as any).installedEsoVersions;
+      if (config.installedEsoVersions && !config.installedCatalogVersions) {
+        config.installedCatalogVersions = config.installedEsoVersions;
+        delete config.installedEsoVersions;
       }
       // If no path stored, try auto-detection
       if (!config.addonPath) {
@@ -67,11 +67,11 @@ export function loadConfig(): AppConfig {
   try {
     if (fs.existsSync(legacyConfigPath)) {
       const raw = fs.readFileSync(legacyConfigPath, 'utf-8');
-      const config = JSON.parse(raw) as AppConfig;
+      const config = JSON.parse(raw) as AppConfig & { installedEsoVersions?: Record<string, string> };
       // Migrate old field name
-      if ((config as any).installedEsoVersions && !config.installedCatalogVersions) {
-        config.installedCatalogVersions = (config as any).installedEsoVersions;
-        delete (config as any).installedEsoVersions;
+      if (config.installedEsoVersions && !config.installedCatalogVersions) {
+        config.installedCatalogVersions = config.installedEsoVersions;
+        delete config.installedEsoVersions;
       }
       // Save to new location
       saveConfig(config);

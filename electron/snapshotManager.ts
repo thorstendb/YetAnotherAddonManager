@@ -127,24 +127,26 @@ export function backupAddonFolder(
  */
 export function listAddonBackups(
   addonsPath: string
-): { folderName: string; version: string; backupPath: string }[] {
+): { folderName: string; version: string; backupPath: string; sizeBytes: number }[] {
   const backupDir = getAddonBackupDir(addonsPath);
   if (!fs.existsSync(backupDir)) return [];
 
   const entries = fs.readdirSync(backupDir, { withFileTypes: true })
     .filter((d) => d.isDirectory());
 
-  const results: { folderName: string; version: string; backupPath: string }[] = [];
+  const results: { folderName: string; version: string; backupPath: string; sizeBytes: number }[] = [];
   for (const entry of entries) {
     // Parse "FolderName-Version" format (split on last hyphen)
     const lastDash = entry.name.lastIndexOf('-');
     if (lastDash <= 0) continue;
     const folderName = entry.name.substring(0, lastDash);
     const version = entry.name.substring(lastDash + 1);
+    const fullPath = path.join(backupDir, entry.name);
     results.push({
       folderName,
       version,
-      backupPath: path.join(backupDir, entry.name),
+      backupPath: fullPath,
+      sizeBytes: getDirSize(fullPath),
     });
   }
 
@@ -168,6 +170,37 @@ export function restoreAddonFromBackup(
   }
   copyDirSync(backupPath, dest);
   return true;
+}
+
+/**
+ * Delete specific addon backup folders by their paths.
+ */
+export function deleteAddonBackups(backupPaths: string[]): number {
+  let deleted = 0;
+  for (const bp of backupPaths) {
+    if (fs.existsSync(bp)) {
+      fs.rmSync(bp, { recursive: true, force: true });
+      deleted++;
+    }
+  }
+  return deleted;
+}
+
+/**
+ * Get the total size of a directory in bytes.
+ */
+export function getDirSize(dirPath: string): number {
+  let total = 0;
+  const entries = fs.readdirSync(dirPath, { withFileTypes: true });
+  for (const entry of entries) {
+    const full = path.join(dirPath, entry.name);
+    if (entry.isDirectory()) {
+      total += getDirSize(full);
+    } else {
+      total += fs.statSync(full).size;
+    }
+  }
+  return total;
 }
 
 /** Recursively copy a directory */

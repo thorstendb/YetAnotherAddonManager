@@ -190,7 +190,7 @@ function parseManifest(
   // ─── Discover sub-addons (recursive, any depth) ───
   const subAddons: AddonInfo[] = [];
   if (!parentAddon) {
-    collectSubAddons(folderPath, folderName, folderName, subAddons, addonsRootPath);
+    collectSubAddons(folderPath, folderName, folderName, subAddons);
   }
 
   // Build the complete SavedVariable name list (self + all sub-addons)
@@ -245,7 +245,6 @@ function collectSubAddons(
   selfName: string,
   topParent: string,
   results: AddonInfo[],
-  addonsRoot?: string,
 ): void {
   let entries: fs.Dirent[];
   try {
@@ -284,7 +283,7 @@ function collectSubAddons(
     }
 
     // Recurse deeper (e.g. HarvestMap/Modules/HarvestMapAD/)
-    collectSubAddons(subDir, selfName, topParent, results, addonsRoot);
+    collectSubAddons(subDir, selfName, topParent, results);
   }
 }
 
@@ -388,6 +387,29 @@ function moveToRemoved(addonsPath: string, folderNames: string[]): string[] {
 /**
  * Move all unreferenced libraries into Removed/.
  */
+export function previewUnusedLibraries(addonsPath: string): string[] {
+  const allAddons = scanAddonsFolder(addonsPath);
+  const referenced = new Set<string>();
+  for (const addon of allAddons) {
+    for (const dep of addon.dependsOn) referenced.add(dep.name);
+    for (const dep of addon.optionalDependsOn) referenced.add(dep.name);
+    for (const sub of addon.subAddons) {
+      for (const dep of sub.dependsOn) referenced.add(dep.name);
+      for (const dep of sub.optionalDependsOn) referenced.add(dep.name);
+    }
+  }
+  return allAddons
+    .filter((a) => a.isLibrary && !referenced.has(a.folderName) && !referenced.has(a.title))
+    .map((a) => a.folderName)
+    .sort();
+}
+
+export function cleanupSelectedLibraries(addonsPath: string, folderNames: string[]): { moved: string[]; addons: AddonInfo[] } {
+  const moved = moveToRemoved(addonsPath, folderNames);
+  const updatedAddons = scanAddonsFolder(addonsPath);
+  return { moved, addons: updatedAddons };
+}
+
 export function cleanupUnusedLibraries(addonsPath: string): { moved: string[]; addons: AddonInfo[] } {
   const allAddons = scanAddonsFolder(addonsPath);
 

@@ -2,6 +2,10 @@
 // SPDX-License-Identifier: MIT
 import React, { useEffect, useRef, useState } from 'react';
 
+function errMsg(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
 interface ImportExportDialogProps {
   addonPath: string;
   addons: { folderName: string; version: string; isLibrary: boolean; dependsOn: string[] }[];
@@ -34,6 +38,7 @@ const ImportExportDialog: React.FC<ImportExportDialogProps> = ({
     bundledCount: number;
     hasSettings: boolean;
     hasUserSettings: boolean;
+    hasMachineSettings: boolean;
     savedVarsCount: number;
     exportedAt: string;
   } | null>(null);
@@ -45,9 +50,11 @@ const ImportExportDialog: React.FC<ImportExportDialogProps> = ({
   const [includeAddonSettings, setIncludeAddonSettings] = useState(true);
   const [includeSavedVars, setIncludeSavedVars] = useState(true);
   const [includeUserSettings, setIncludeUserSettings] = useState(true);
+  const [includeMachineSettings, setIncludeMachineSettings] = useState(true);
   // Import checkboxes for settings files
   const [importAddonSettings, setImportAddonSettings] = useState(true);
   const [importUserSettings, setImportUserSettings] = useState(true);
+  const [importMachineSettings, setImportMachineSettings] = useState(true);
 
   useEffect(() => {
     closeRef.current?.focus();
@@ -148,6 +155,9 @@ const ImportExportDialog: React.FC<ImportExportDialogProps> = ({
       if (!includeUserSettings) {
         result.userSettings = null;
       }
+      if (!includeMachineSettings) {
+        result.machineSettings = null;
+      }
 
       // Trigger download as JSON file
       setExportProgress({ phase: 'Writing file…', percent: 98 });
@@ -174,8 +184,8 @@ const ImportExportDialog: React.FC<ImportExportDialogProps> = ({
         (result.userSettings ? ', UserSettings.txt' : ''),
         'success'
       );
-    } catch (err: any) {
-      onLog(`Export failed: ${err.message || err}`, 'error');
+    } catch (err: unknown) {
+      onLog(`Export failed: ${errMsg(err)}`, 'error');
     } finally {
       setExporting(false);
       setExportProgress(null);
@@ -199,17 +209,19 @@ const ImportExportDialog: React.FC<ImportExportDialogProps> = ({
       // Reset import checkboxes for settings files
       setImportAddonSettings(!!data.addonSettings);
       setImportUserSettings(!!data.userSettings);
+      setImportMachineSettings(!!data.machineSettings);
 
       // Build checkbox map for SavedVariables (all enabled by default)
       const svKeys = Object.keys(data.savedVariables || {}).sort();
       setSavedVarFiles(new Map(svKeys.map((k) => [k, true])));
 
       setImportPreview({
-        totalAddons: data.addons.filter((a: any) => !a.isLibrary).length,
-        totalLibraries: data.addons.filter((a: any) => a.isLibrary).length,
+        totalAddons: data.addons.filter((a: { isLibrary: boolean }) => !a.isLibrary).length,
+        totalLibraries: data.addons.filter((a: { isLibrary: boolean }) => a.isLibrary).length,
         bundledCount: data.bundledAddons ? Object.keys(data.bundledAddons).length : 0,
         hasSettings: !!data.addonSettings,
         hasUserSettings: !!data.userSettings,
+        hasMachineSettings: !!data.machineSettings,
         savedVarsCount: svKeys.length,
         exportedAt: data.exportedAt,
       });
@@ -235,6 +247,9 @@ const ImportExportDialog: React.FC<ImportExportDialogProps> = ({
       }
       if (!importUserSettings) {
         data.userSettings = null;
+      }
+      if (!importMachineSettings) {
+        data.machineSettings = null;
       }
       if (data.savedVariables) {
         const filtered: Record<string, string> = {};
@@ -275,20 +290,27 @@ const ImportExportDialog: React.FC<ImportExportDialogProps> = ({
         setImportProgress({ phase: `Installing 0/${uniqueIds.length} addon(s)…`, percent: 30 });
         onLog(`Installing ${uniqueIds.length} missing addon(s) from catalog...`);
 
-        // Listen for install progress to update the bar
+        // Listen for per-addon 'done' events in real-time to update the progress bar
         let installedSoFar = 0;
         const totalToInstall = uniqueIds.length;
-        const updateInstallProgress = () => {
-          installedSoFar++;
-          const pct = 30 + Math.round((installedSoFar / totalToInstall) * 65);
-          setImportProgress({ phase: `Installing ${installedSoFar}/${totalToInstall} addon(s)…`, percent: pct });
-        };
+        const cleanupProgress = window.electronAPI.onInstallProgress((data) => {
+          if (data.phase === 'done') {
+            installedSoFar++;
+            const shown = Math.min(installedSoFar, totalToInstall);
+            const pct = 30 + Math.round((shown / totalToInstall) * 65);
+            setImportProgress({ phase: `Installing ${shown}/${totalToInstall} addon(s)…`, percent: pct });
+          }
+        });
 
-        const installResults = await window.electronAPI.batchInstallAddons(addonPath, uniqueIds);
+        let installResults;
+        try {
+          installResults = await window.electronAPI.batchInstallAddons(addonPath, uniqueIds);
+        } finally {
+          cleanupProgress();
+        }
         let installed = 0;
         let failed = 0;
         for (const r of installResults) {
-          updateInstallProgress();
           if (r.error) {
             onLog(`Failed to install ${r.addonId}: ${r.error}`, 'error');
             failed++;
@@ -307,8 +329,8 @@ const ImportExportDialog: React.FC<ImportExportDialogProps> = ({
       setImportProgress({ phase: 'Done!', percent: 100 });
       onLog('Import complete', 'success');
       onScanPath(addonPath);
-    } catch (err: any) {
-      onLog(`Import failed: ${err.message || err}`, 'error');
+    } catch (err: unknown) {
+      onLog(`Import failed: ${errMsg(err)}`, 'error');
       setImportProgress(null);
     } finally {
       setImporting(false);
@@ -316,7 +338,7 @@ const ImportExportDialog: React.FC<ImportExportDialogProps> = ({
   };
 
   return (
-    <div className="unsaved-overlay" onClick={onClose}>
+    <div className="unsaved-overlay">
       <div className="restore-dialog" style={{ width: 'min(560px, 90vw)' }} onClick={(e) => e.stopPropagation()}>
         <div className="restore-header">
           <div className="restore-title">📋 Import / Export Profile</div>
@@ -365,6 +387,14 @@ const ImportExportDialog: React.FC<ImportExportDialogProps> = ({
                     onChange={(e) => setIncludeUserSettings(e.target.checked)}
                   />
                   Include UserSettings.txt (keybinds, graphics, audio)
+                </label>
+                <label className="ie-option">
+                  <input
+                    type="checkbox"
+                    checked={includeMachineSettings}
+                    onChange={(e) => setIncludeMachineSettings(e.target.checked)}
+                  />
+                  Include MachineSettings.txt (GPU, resolution)
                 </label>
                 <label className="ie-option">
                   <input
@@ -436,31 +466,45 @@ const ImportExportDialog: React.FC<ImportExportDialogProps> = ({
                   <div className="ie-date">
                     Exported: {new Date(importPreview.exportedAt).toLocaleString()}
                   </div>
-                  <div className="ie-options" style={{ marginTop: 10 }}>
-                    {importPreview.hasSettings && (
-                      <label className="ie-option">
-                        <input
-                          type="checkbox"
-                          checked={importAddonSettings}
-                          onChange={(e) => setImportAddonSettings(e.target.checked)}
-                        />
-                        ⚙️ AddOnSettings.txt (addon on/off per character)
-                      </label>
-                    )}
-                    {importPreview.hasUserSettings && (
-                      <label className="ie-option">
-                        <input
-                          type="checkbox"
-                          checked={importUserSettings}
-                          onChange={(e) => setImportUserSettings(e.target.checked)}
-                        />
-                        🎮 UserSettings.txt (keybinds, graphics, audio)
-                      </label>
-                    )}
-                  </div>
+
+                  {(importPreview.hasSettings || importPreview.hasUserSettings || importPreview.hasMachineSettings) && (
+                    <div className="ie-options" style={{ marginTop: 10 }}>
+                      <div style={{ fontSize: '11px', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: 4 }}>General Settings</div>
+                      {importPreview.hasSettings && (
+                        <label className="ie-option">
+                          <input
+                            type="checkbox"
+                            checked={importAddonSettings}
+                            onChange={(e) => setImportAddonSettings(e.target.checked)}
+                          />
+                          ⚙️ AddOnSettings.txt (addon on/off per character)
+                        </label>
+                      )}
+                      {importPreview.hasUserSettings && (
+                        <label className="ie-option">
+                          <input
+                            type="checkbox"
+                            checked={importUserSettings}
+                            onChange={(e) => setImportUserSettings(e.target.checked)}
+                          />
+                          🎮 UserSettings.txt (keybinds, graphics, audio)
+                        </label>
+                      )}
+                      {importPreview.hasMachineSettings && (
+                        <label className="ie-option">
+                          <input
+                            type="checkbox"
+                            checked={importMachineSettings}
+                            onChange={(e) => setImportMachineSettings(e.target.checked)}
+                          />
+                          🖥️ MachineSettings.txt (GPU, resolution)
+                        </label>
+                      )}
+                    </div>
+                  )}
 
                   {savedVarFiles.size > 0 && (
-                    <div className="ie-sv-section">
+                    <div className="ie-sv-section" style={{ borderTop: '1px solid var(--border-color)', paddingTop: 10, marginTop: 10 }}>
                       <div className="ie-sv-header">
                         <span>💾 SavedVariables ({Array.from(savedVarFiles.values()).filter(Boolean).length}/{savedVarFiles.size})</span>
                         <span className="ie-sv-toggle-all">
@@ -525,6 +569,10 @@ const ImportExportDialog: React.FC<ImportExportDialogProps> = ({
               )}
             </div>
           )}
+        </div>
+
+        <div style={{ display: 'flex', justifyContent: 'flex-end', padding: '8px 16px 12px', borderTop: '1px solid var(--border)' }}>
+          <button className="restore-btn ie-action-btn" onClick={onClose}>OK</button>
         </div>
       </div>
     </div>

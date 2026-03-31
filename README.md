@@ -67,8 +67,34 @@ yarn start      # Build + launch Electron
 ### Build Distributable
 ```bash
 yarn dist           # Windows (NSIS installer + portable)
-yarn dist:mac       # macOS
-yarn dist:linux     # Linux
+yarn dist:mac       # macOS (DMG + ZIP)
+yarn dist:linux     # Linux (AppImage)
+```
+
+## Installation
+
+### Windows
+Download the `-setup.exe` (installer) or `-portable.exe` from the [latest release](https://github.com/thorstendb/YetAnotherAddonManager/releases/latest) and run it.
+
+### macOS
+The macOS build is currently **unsigned** (no Apple Developer certificate). macOS Gatekeeper will block the app on first launch. To open it:
+
+1. Download the `.dmg` file from the [latest release](https://github.com/thorstendb/YetAnotherAddonManager/releases/latest)
+2. Open the DMG and drag **YAAM** into your Applications folder
+3. **Right-click** (or Ctrl+click) the app → select **"Open"**
+4. A dialog will warn that the app is from an unidentified developer — click **"Open"**
+5. From now on the app opens normally with a double-click
+
+If that doesn't work (some macOS versions), run this in Terminal:
+```bash
+xattr -cr /Applications/YAAM.app
+```
+
+### Linux
+Download the `.AppImage` from the [latest release](https://github.com/thorstendb/YetAnotherAddonManager/releases/latest), make it executable, and run it:
+```bash
+chmod +x YAAM-*.AppImage
+./YAAM-*.AppImage
 ```
 
 ## License

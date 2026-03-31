@@ -66,6 +66,8 @@ describe('parseVersionParts', () => {
 });
 
 describe('compareVersionStrings', () => {
+  // ── Basic equality and ordering ──
+
   it('equal versions return 0', () => {
     expect(compareVersionStrings('1.2.3', '1.2.3')).toBe(0);
   });
@@ -98,17 +100,203 @@ describe('compareVersionStrings', () => {
     expect(compareVersionStrings('2026.03.30', '2026-03-30')).toBe(0);
   });
 
-  it('scheme mismatch: semver→date trusts catalog is newer', () => {
+  // ── Normal same-scheme comparisons (no catalogDate needed) ──
+
+  it('semver: 1.2.3 < 1.2.4', () => {
+    expect(compareVersionStrings('1.2.3', '1.2.4')).toBeLessThan(0);
+  });
+
+  it('semver: 3.16.5 < 3.17.0', () => {
+    expect(compareVersionStrings('3.16.5', '3.17.0')).toBeLessThan(0);
+  });
+
+  it('semver: 5.0.0 > 3.16.5', () => {
+    expect(compareVersionStrings('5.0.0', '3.16.5')).toBeGreaterThan(0);
+  });
+
+  it('two-part: 1.2 < 1.3', () => {
+    expect(compareVersionStrings('1.2', '1.3')).toBeLessThan(0);
+  });
+
+  it('single int: 85 < 86', () => {
+    expect(compareVersionStrings('85', '86')).toBeLessThan(0);
+  });
+
+  it('date: 2025.08.08 < 2026.03.30', () => {
+    expect(compareVersionStrings('2025.08.08', '2026.03.30')).toBeLessThan(0);
+  });
+
+  // ── Scheme mismatch: date ↔ semver ──
+
+  it('date→semver without catalogDate: raw comparison (2025>1, a>b)', () => {
+    // Without catalogDate the fallback is raw numeric: 2025 > 1
+    expect(compareVersionStrings('2025.08.08', '1.2.3')).toBeGreaterThan(0);
+  });
+
+  it('semver→date without catalogDate: raw comparison (1<2026, a<b)', () => {
     expect(compareVersionStrings('1.2.3', '2026-03-30')).toBeLessThan(0);
   });
 
-  it('scheme mismatch with catalogDate: date→semver, catalog newer', () => {
-    // catalogDate 2026-03-30, local date 2025-08-08
+  it('date→semver with catalogDate: catalog newer', () => {
+    // local=2025-08-08, catalog=2.0.0, catalogDate=2026-03-30
     expect(compareVersionStrings('2025-08-08', '2.0.0', 1774828800)).toBeLessThan(0);
   });
 
-  it('scheme mismatch with catalogDate: date→semver, local newer', () => {
-    // catalogDate 2026-01-01, local date 2026-03-30
+  it('date→semver with catalogDate: local newer', () => {
+    // local=2026-03-30, catalog=2.0.0, catalogDate=2026-01-01
     expect(compareVersionStrings('2026-03-30', '2.0.0', 1767225600)).toBeGreaterThan(0);
+  });
+
+  it('semver→date with catalogDate: catalog always wins', () => {
+    // local=1.2.3, catalog=2026-03-30, catalogDate=2026-03-30
+    expect(compareVersionStrings('1.2.3', '2026-03-30', 1774828800)).toBeLessThan(0);
+  });
+
+  // ── Scheme mismatch: date ↔ short (1-2 parts) ──
+
+  it('date→short with catalogDate: catalog wins', () => {
+    // local=2025.08.08, catalog=49, catalogDate=2026-03-30
+    // isDate mismatch → semver/short wins when catalog is newer by date
+    expect(compareVersionStrings('2025.08.08', '49', 1774828800)).toBeLessThan(0);
+  });
+
+  it('short→date with catalogDate: catalog wins', () => {
+    // local=49, catalog=2026-03-30, catalogDate=2026-03-30
+    expect(compareVersionStrings('49', '2026-03-30', 1774828800)).toBeLessThan(0);
+  });
+
+  // ── Scheme mismatch: short (1-2 parts) ↔ semver (3+ parts) ──
+  // The HarvestMap-style problem: "49" vs "3.16.5"
+
+  it('short→semver: single int "49" vs semver "3.16.5" (HarvestMap)', () => {
+    expect(compareVersionStrings('49', '3.16.5', 1762720907)).toBeLessThan(0);
+  });
+
+  it('short→semver: large int "31605" vs semver "3.16.5"', () => {
+    expect(compareVersionStrings('31605', '3.16.5', 1762720907)).toBeLessThan(0);
+  });
+
+  it('short→semver: two-part "316.5" vs semver "3.16.5"', () => {
+    expect(compareVersionStrings('316.5', '3.16.5', 1762720907)).toBeLessThan(0);
+  });
+
+  it('short→semver: two-part "1.2" vs semver "3.16.5"', () => {
+    expect(compareVersionStrings('1.2', '3.16.5', 1762720907)).toBeLessThan(0);
+  });
+
+  it('semver→short: "3.16.5" vs "49" (reverse direction)', () => {
+    // Catalog now publishes a single-int build number
+    expect(compareVersionStrings('3.16.5', '49', 1762720907)).toBeLessThan(0);
+  });
+
+  it('semver→short: "1.2.3" vs "100" (reverse direction)', () => {
+    expect(compareVersionStrings('1.2.3', '100', 1762720907)).toBeLessThan(0);
+  });
+
+  // ── No false positives: same-scheme with catalogDate present ──
+
+  it('same-scheme semver: 5.0.0 > 3.16.5 (no false positive)', () => {
+    expect(compareVersionStrings('5.0.0', '3.16.5', 1762720907)).toBeGreaterThan(0);
+  });
+
+  it('same-scheme semver: 1.0.0 < 3.16.5 (no false positive)', () => {
+    expect(compareVersionStrings('1.0.0', '3.16.5', 1762720907)).toBeLessThan(0);
+  });
+
+  it('same-scheme single int: 100 > 49 (no false positive)', () => {
+    expect(compareVersionStrings('100', '49', 1762720907)).toBeGreaterThan(0);
+  });
+
+  it('same-scheme two-part: 2.0 > 1.5 (no false positive)', () => {
+    expect(compareVersionStrings('2.0', '1.5', 1762720907)).toBeGreaterThan(0);
+  });
+
+  it('same-scheme date: 2025.08.08 < 2026.03.30 with catalogDate', () => {
+    expect(compareVersionStrings('2025.08.08', '2026.03.30', 1774828800)).toBeLessThan(0);
+  });
+
+  // ── Without catalogDate, short↔semver falls back to raw comparison ──
+
+  it('short→semver without catalogDate: raw comparison (49 > 3)', () => {
+    expect(compareVersionStrings('49', '3.16.5')).toBeGreaterThan(0);
+  });
+
+  it('short→semver without catalogDate: raw comparison (2 < 3)', () => {
+    expect(compareVersionStrings('2', '3.16.5')).toBeLessThan(0);
+  });
+
+  // ── Pre-release transitions (NOT scheme changes) ──
+
+  it('pre-release: 1.2-beta < 1.2.3 (not a scheme change)', () => {
+    // "1.2-beta" parses as [1,2] + pre=beta → short
+    // "1.2.3" parses as [1,2,3] → semver
+    // But this is NOT a scheme change since "1.2-beta" is a pre-release of the 1.2 line
+    expect(compareVersionStrings('1.2-beta', '1.2.3', 1774828800)).toBeLessThan(0);
+  });
+
+  it('pre-release: 1.2.3 > 1.2-beta (not a scheme change)', () => {
+    expect(compareVersionStrings('1.2.3', '1.2-beta', 1774828800)).toBeGreaterThan(0);
+  });
+
+  it('pre-release: 1.2.3-beta1 < 1.2.3 (same-scheme, pre < release)', () => {
+    expect(compareVersionStrings('1.2.3-beta1', '1.2.3', 1774828800)).toBeLessThan(0);
+  });
+
+  it('pre-release: 1.2-rc < 1.2.0 (prefix match, pre-release is older)', () => {
+    expect(compareVersionStrings('1.2-rc', '1.2.0', 1774828800)).toBeLessThan(0);
+  });
+
+  it('pre-release: v1.0-alpha < 1.0.1 (v-prefix + pre-release)', () => {
+    expect(compareVersionStrings('v1.0-alpha', '1.0.1', 1774828800)).toBeLessThan(0);
+  });
+
+  // ── All possible scheme transitions (comprehensive matrix) ──
+  // Catalog date: 2026-03-30 = 1774828800
+
+  // short→date
+  it('transition: short "v1." → date "2026-01-27"', () => {
+    expect(compareVersionStrings('v1.', '2026-01-27', 1774828800)).toBeLessThan(0);
+  });
+
+  // date→semver
+  it('transition: date "2026-01-27" → semver "1.2.3"', () => {
+    // catalogDate=2026-03-30, local date=2026-01-27 → catalog is newer
+    expect(compareVersionStrings('2026-01-27', '1.2.3', 1774828800)).toBeLessThan(0);
+  });
+
+  // semver→short+pre
+  it('transition: semver "1.2.3" → short+pre "1.2-beta"', () => {
+    // This is NOT a scheme change (pre-release prefix match)
+    // "1.2-beta" → [1,2]+pre, which is a prefix of [1,2,3]
+    // So numeric: 1.2.0 < 1.2.3, plus pre-release makes it even older
+    expect(compareVersionStrings('1.2.3', '1.2-beta', 1774828800)).toBeGreaterThan(0);
+  });
+
+  // short→semver+pre
+  it('transition: short "49" → semver+pre "1.2.3-beta1"', () => {
+    // "49" → [49] (short), "1.2.3-beta1" → [1,2,3]+pre (semver)
+    // No pre-release prefix match since [49] != [1,2,3] prefix → scheme change
+    expect(compareVersionStrings('49', '1.2.3-beta1', 1774828800)).toBeLessThan(0);
+  });
+
+  // date→short
+  it('transition: date "2025.08.08" → short "42"', () => {
+    // catalogDate=2026-03-30, local date=2025-08-08 → catalog is newer
+    expect(compareVersionStrings('2025.08.08', '42', 1774828800)).toBeLessThan(0);
+  });
+
+  // short→short (same scheme, not a mismatch)
+  it('same-scheme: short "5" < short "10"', () => {
+    expect(compareVersionStrings('5', '10', 1774828800)).toBeLessThan(0);
+  });
+
+  // date→date (same scheme)
+  it('same-scheme: date "2025.01.01" < date "2026.03.30"', () => {
+    expect(compareVersionStrings('2025.01.01', '2026.03.30', 1774828800)).toBeLessThan(0);
+  });
+
+  // semver→date→semver chain: local was date, catalog now semver (local still date)
+  it('transition: date "2025-08-08" → semver "2.0.0" catalog newer', () => {
+    expect(compareVersionStrings('2025-08-08', '2.0.0', 1774828800)).toBeLessThan(0);
   });
 });

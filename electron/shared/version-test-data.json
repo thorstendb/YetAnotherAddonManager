@@ -309,6 +309,101 @@
       "b": "2026-03-30",
       "expected": "a<b",
       "_note": "without catalogDate, raw numeric comparison still says 1 < 2026"
+    },
+    {
+      "description": "scheme change: short int→semver (HarvestMap: 49→3.16.5)",
+      "a": "49",
+      "b": "3.16.5",
+      "catalogDate": 1762720907,
+      "expected": "a<b",
+      "_note": "AddOnVersion integer vs proper semver; catalog is authoritative"
+    },
+    {
+      "description": "scheme change: large int→semver (31605→3.16.5)",
+      "a": "31605",
+      "b": "3.16.5",
+      "catalogDate": 1762720907,
+      "expected": "a<b",
+      "_note": "collapsed AddOnVersion integer mistakenly larger than semver major"
+    },
+    {
+      "description": "scheme change: two-part→semver (316.5→3.16.5)",
+      "a": "316.5",
+      "b": "3.16.5",
+      "catalogDate": 1762720907,
+      "expected": "a<b",
+      "_note": "two-part version where first part dwarfs the semver major"
+    },
+    {
+      "description": "scheme change: two-part→semver (1.2→3.16.5)",
+      "a": "1.2",
+      "b": "3.16.5",
+      "catalogDate": 1762720907,
+      "expected": "a<b",
+      "_note": "small two-part version upgraded to proper semver"
+    },
+    {
+      "description": "scheme change: semver→short (3.16.5→49, reverse)",
+      "a": "3.16.5",
+      "b": "49",
+      "catalogDate": 1762720907,
+      "expected": "a<b",
+      "_note": "catalog switched from semver to build number; catalog wins"
+    },
+    {
+      "description": "scheme change: semver→single int (1.2.3→100)",
+      "a": "1.2.3",
+      "b": "100",
+      "catalogDate": 1762720907,
+      "expected": "a<b",
+      "_note": "catalog switched to single revision number"
+    },
+    {
+      "description": "scheme change: date→short with catalogDate",
+      "a": "2025.08.08",
+      "b": "49",
+      "catalogDate": 1774828800,
+      "expected": "a<b",
+      "_note": "local is date-based, catalog switched to build number, catalog date = 2026-03-30"
+    },
+    {
+      "description": "scheme change: short→date with catalogDate",
+      "a": "49",
+      "b": "2026-03-30",
+      "catalogDate": 1774828800,
+      "expected": "a<b",
+      "_note": "local is build number, catalog switched to date-based"
+    },
+    {
+      "description": "no false positive: same-scheme semver 5.0.0 > 3.16.5",
+      "a": "5.0.0",
+      "b": "3.16.5",
+      "catalogDate": 1762720907,
+      "expected": "a>b",
+      "_note": "both are 3-part semver, no scheme mismatch"
+    },
+    {
+      "description": "no false positive: same-scheme single int 100 > 49",
+      "a": "100",
+      "b": "49",
+      "catalogDate": 1762720907,
+      "expected": "a>b",
+      "_note": "both are single integers, normal comparison"
+    },
+    {
+      "description": "no false positive: same-scheme two-part 2.0 > 1.5",
+      "a": "2.0",
+      "b": "1.5",
+      "catalogDate": 1762720907,
+      "expected": "a>b",
+      "_note": "both are two-part, normal comparison"
+    },
+    {
+      "description": "short→semver without catalogDate: raw fallback (49 > 3)",
+      "a": "49",
+      "b": "3.16.5",
+      "expected": "a>b",
+      "_note": "without catalogDate, raw numeric comparison: 49 > 3"
     }
   ]
 }

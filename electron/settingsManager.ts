@@ -125,7 +125,81 @@ export function parseAddonSettings(addonsPath: string): AddonSettingsData {
     }
   }
 
+  // Supplement character list from SavedVariables $LastCharacterName entries.
+  // AddOnSettings.txt may only contain chars that changed addon settings, but
+  // SavedVariables contain data for every character that has logged in.
+  enrichCharactersFromSavedVars(addonsPath, result);
+
   return result;
+}
+
+/**
+ * Scan SavedVariables .lua files for ["$LastCharacterName"] = "Name" entries
+ * and add any missing characters to the settings data.
+ */
+function enrichCharactersFromSavedVars(addonsPath: string, settings: AddonSettingsData): void {
+  const svDir = getSavedVarsDir(addonsPath);
+  if (!fs.existsSync(svDir)) return;
+
+  // Determine the server prefix from existing characters (e.g. "EU Megaserver")
+  const existingKeys = Object.keys(settings.characters);
+  let serverPrefix = '';
+  for (const key of existingKeys) {
+    const dashIdx = key.lastIndexOf('-');
+    if (dashIdx > 0) {
+      serverPrefix = key.substring(0, dashIdx);
+      break;
+    }
+  }
+
+  // Collect known character names (just the name part after the dash)
+  const knownNames = new Set<string>();
+  for (const key of existingKeys) {
+    const dashIdx = key.lastIndexOf('-');
+    if (dashIdx > 0) {
+      knownNames.add(key.substring(dashIdx + 1));
+    }
+  }
+
+  // Scan SavedVariables files for $LastCharacterName (stop early when possible)
+  const charNameRe = /\["\$LastCharacterName"\]\s*=\s*"([^"]+)"/g;
+  const discoveredNames = new Set<string>();
+
+  const files = fs.readdirSync(svDir).filter((f) => f.endsWith('.lua'));
+  let staleCount = 0;
+  for (const file of files) {
+    const sizeBefore = discoveredNames.size;
+    const filePath = path.join(svDir, file);
+    let content: string;
+    try {
+      content = fs.readFileSync(filePath, 'utf-8');
+    } catch {
+      continue;
+    }
+    let match: RegExpExecArray | null;
+    charNameRe.lastIndex = 0;
+    while ((match = charNameRe.exec(content)) !== null) {
+      discoveredNames.add(match[1]);
+    }
+    // Stop early if no new names found in 5 consecutive files
+    staleCount = discoveredNames.size > sizeBefore ? 0 : staleCount + 1;
+    if (staleCount >= 5 && discoveredNames.size > 0) break;
+  }
+
+  // Add missing characters
+  for (const name of discoveredNames) {
+    if (knownNames.has(name)) continue;
+    // If we couldn't determine server prefix, try to build one from the SV data
+    if (!serverPrefix) {
+      // Fall back: look for server info in SV keys like ["EU Megaserver"]
+      // Without a prefix we cannot construct the proper key, so skip
+      continue;
+    }
+    const key = `${serverPrefix}-${name}`;
+    if (!settings.characters[key]) {
+      settings.characters[key] = {};
+    }
+  }
 }
 
 /**
@@ -379,6 +453,128 @@ export function deleteSavedVars(
 
 /**
  * Remove entries from AddOnSettings.txt for addons that no longer exist.
+ */
+export function previewCleanupSettings(
+  addonsPath: string,
+  existingAddonNames: string[]
+): { orphanedSettings: string[]; orphanedSavedVars: string[] } {
+  const existingSet = new Set(existingAddonNames);
+  const settingsPath = getSettingsPath(addonsPath);
+  const orphanedSettings: string[] = [];
+  const orphanedSavedVars: string[] = [];
+
+  // Preview orphaned settings
+  if (fs.existsSync(settingsPath)) {
+    const content = fs.readFileSync(settingsPath, 'utf-8');
+    const lines = content.split(/\r?\n/);
+    const seen = new Set<string>();
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (trimmed.startsWith('#') || trimmed === '') continue;
+      const dataMatch = trimmed.match(/^(\S+)\s+\d+$/);
+      if (dataMatch) {
+        const addonName = dataMatch[1];
+        if (!existingSet.has(addonName) && !addonName.startsWith('ZO_') && !seen.has(addonName)) {
+          seen.add(addonName);
+          orphanedSettings.push(addonName);
+        }
+      }
+    }
+  }
+
+  // Preview orphaned SavedVariables
+  const svDir = getSavedVarsDir(addonsPath);
+  if (fs.existsSync(svDir)) {
+    const files = fs.readdirSync(svDir).filter((f) => f.endsWith('.lua'));
+    const sortedNames = [...existingAddonNames].sort((a, b) => b.length - a.length);
+    for (const file of files) {
+      const baseName = file.replace(/\.lua$/, '');
+      const hasMatch = baseName.startsWith('ZO_') ||
+        existingSet.has(baseName) ||
+        sortedNames.some((name) => baseName.startsWith(name));
+      if (!hasMatch) {
+        orphanedSavedVars.push(file);
+      }
+    }
+  }
+
+  return { orphanedSettings: orphanedSettings.sort(), orphanedSavedVars: orphanedSavedVars.sort() };
+}
+
+export function cleanupSettingsSelected(
+  addonsPath: string,
+  existingAddonNames: string[],
+  settingsToRemove: string[],
+  savedVarsToRemove: string[]
+): { removedFromSettings: string[]; removedSavedVars: string[]; backupPath: string; svBackupDir: string } {
+  const settingsPath = getSettingsPath(addonsPath);
+  const removedFromSettings: string[] = [];
+  const removedSavedVars: string[] = [];
+  let backupPath = '';
+  let svBackupDir = '';
+  const settingsSet = new Set(settingsToRemove);
+  const svSet = new Set(savedVarsToRemove);
+
+  // Cleanup AddOnSettings.txt — only remove selected entries
+  if (settingsSet.size > 0 && fs.existsSync(settingsPath)) {
+    backupPath = backupFile(settingsPath, getBackupDir(addonsPath, 'AddOnSettings'));
+    const content = fs.readFileSync(settingsPath, 'utf-8');
+    const lines = content.split(/\r?\n/);
+    const newLines: string[] = [];
+    const removedSet = new Set<string>();
+
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (trimmed.startsWith('#') || trimmed === '') {
+        newLines.push(line);
+        continue;
+      }
+      const dataMatch = trimmed.match(/^(\S+)\s+\d+$/);
+      if (dataMatch) {
+        const addonName = dataMatch[1];
+        if (settingsSet.has(addonName)) {
+          if (!removedSet.has(addonName)) {
+            removedSet.add(addonName);
+            removedFromSettings.push(addonName);
+          }
+        } else {
+          newLines.push(line);
+        }
+      } else {
+        newLines.push(line);
+      }
+    }
+    fs.writeFileSync(settingsPath, newLines.join('\r\n'), 'utf-8');
+  }
+
+  // Cleanup selected SavedVariables
+  if (svSet.size > 0) {
+    const svDir = getSavedVarsDir(addonsPath);
+    if (fs.existsSync(svDir)) {
+      const ts = new Date().toISOString().replace(/[:.]/g, '-').replace('T', '_').slice(0, 19);
+      const bkDir = path.join(getBackupDir(addonsPath, 'SavedVariables'), `_cleanup_backup_${ts}`);
+      let backupCreated = false;
+
+      for (const file of svSet) {
+        const src = path.join(svDir, file);
+        if (fs.existsSync(src)) {
+          if (!backupCreated) {
+            fs.mkdirSync(bkDir, { recursive: true });
+            backupCreated = true;
+          }
+          fs.copyFileSync(src, path.join(bkDir, file));
+          fs.unlinkSync(src);
+          removedSavedVars.push(file);
+        }
+      }
+      if (backupCreated) svBackupDir = bkDir;
+    }
+  }
+
+  return { removedFromSettings, removedSavedVars, backupPath, svBackupDir };
+}
+
+/**
  * Also remove SavedVariables files for non-existent addons.
  * Creates a backup before modifying.
  */
@@ -505,8 +701,8 @@ export function undoCleanupSettings(
     }
 
     return { restoredSettings, restoredSavedVars };
-  } catch (err: any) {
-    return { restoredSettings, restoredSavedVars, error: err.message || String(err) };
+  } catch (err: unknown) {
+    return { restoredSettings, restoredSavedVars, error: err instanceof Error ? err.message : String(err) };
   }
 }
 
@@ -589,8 +785,8 @@ export function restoreSavedVarsFile(
     fs.copyFileSync(backupFilePath, dest);
 
     return { restored: true, fileName };
-  } catch (err: any) {
-    return { restored: false, fileName: path.basename(backupFilePath), error: err.message || String(err) };
+  } catch (err: unknown) {
+    return { restored: false, fileName: path.basename(backupFilePath), error: err instanceof Error ? err.message : String(err) };
   }
 }
 
@@ -608,6 +804,8 @@ export interface ExportData {
   addonSettings: string | null;
   /** Game settings: UserSettings.txt content */
   userSettings: string | null;
+  /** Machine-specific settings: MachineSettings.txt content */
+  machineSettings?: string | null;
   /** SavedVariables: filename → base64-encoded content */
   savedVariables: Record<string, string>;
   /** Non-catalog addon folders bundled as base64-encoded zip per folder */
@@ -641,6 +839,12 @@ export function exportProfile(
     ? fs.readFileSync(userSettingsPath, 'utf-8')
     : null;
 
+  // MachineSettings.txt (GPU, resolution, etc.)
+  const machineSettingsPath = path.join(liveDir, 'MachineSettings.txt');
+  const machineSettings = fs.existsSync(machineSettingsPath)
+    ? fs.readFileSync(machineSettingsPath, 'utf-8')
+    : null;
+
   onProgress?.('Reading SavedVariables…', 20);
 
   // SavedVariables – each .lua file base64-encoded
@@ -665,7 +869,8 @@ export function exportProfile(
       onProgress?.(`Bundling ${folder}… (${i + 1}/${bundleFolders.length})`, 70 + Math.round(((i + 1) / bundleFolders.length) * 20));
       if (!fs.existsSync(folderPath) || !fs.statSync(folderPath).isDirectory()) continue;
       // Validate folder name to prevent path traversal
-      if (folder.includes('..') || folder.includes('/') || folder.includes('\\')) continue;
+      const resolvedExport = path.resolve(addonsPath, folder);
+      if (!resolvedExport.startsWith(addonsPath + path.sep) || folder.includes('..')) continue;
       try {
         const zip = new AdmZip();
         zip.addLocalFolder(folderPath, folder);
@@ -685,6 +890,7 @@ export function exportProfile(
     addons: addonList,
     addonSettings,
     userSettings,
+    machineSettings,
     savedVariables,
     ...(Object.keys(bundledAddons).length > 0 ? { bundledAddons } : {}),
   };
@@ -713,8 +919,8 @@ export function importProfile(
       }
       fs.writeFileSync(settingsPath, data.addonSettings, 'utf-8');
       restoredSettings.push('AddOnSettings.txt');
-    } catch (err: any) {
-      errors.push(`AddOnSettings.txt: ${err.message}`);
+    } catch (err: unknown) {
+      errors.push(`AddOnSettings.txt: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
 
@@ -727,8 +933,22 @@ export function importProfile(
       }
       fs.writeFileSync(userSettingsPath, data.userSettings, 'utf-8');
       restoredSettings.push('UserSettings.txt');
-    } catch (err: any) {
-      errors.push(`UserSettings.txt: ${err.message}`);
+    } catch (err: unknown) {
+      errors.push(`UserSettings.txt: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  // Restore MachineSettings.txt
+  if (data.machineSettings) {
+    try {
+      const machineSettingsPath = path.join(liveDir, 'MachineSettings.txt');
+      if (fs.existsSync(machineSettingsPath)) {
+        backupFile(machineSettingsPath, getBackupDir(addonsPath, 'MachineSettings'));
+      }
+      fs.writeFileSync(machineSettingsPath, data.machineSettings, 'utf-8');
+      restoredSettings.push('MachineSettings.txt');
+    } catch (err: unknown) {
+      errors.push(`MachineSettings.txt: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
 
@@ -747,13 +967,16 @@ export function importProfile(
       for (const file of existingSvFiles) {
         try {
           fs.copyFileSync(path.join(svDir, file), path.join(svBackupDir, file));
-        } catch {}
+        } catch (err) {
+          errors.push(`Backup ${file}: ${err instanceof Error ? err.message : String(err)}`);
+        }
       }
     }
 
     for (const [fileName, base64Content] of Object.entries(data.savedVariables)) {
       // Validate filename to prevent path traversal
-      if (fileName.includes('..') || fileName.includes('/') || fileName.includes('\\')) {
+      const resolvedSv = path.resolve(svDir, fileName);
+      if (!resolvedSv.startsWith(svDir + path.sep) || fileName.includes('..')) {
         errors.push(`Skipped unsafe filename: ${fileName}`);
         continue;
       }
@@ -761,8 +984,8 @@ export function importProfile(
         const buffer = Buffer.from(base64Content, 'base64');
         fs.writeFileSync(path.join(svDir, fileName), buffer);
         restoredSettings.push(`SavedVariables/${fileName}`);
-      } catch (err: any) {
-        errors.push(`SavedVariables/${fileName}: ${err.message}`);
+      } catch (err: unknown) {
+        errors.push(`SavedVariables/${fileName}: ${err instanceof Error ? err.message : String(err)}`);
       }
     }
   }
@@ -771,7 +994,8 @@ export function importProfile(
   if (data.bundledAddons) {
     for (const [folderName, base64Zip] of Object.entries(data.bundledAddons)) {
       // Validate folder name to prevent path traversal
-      if (folderName.includes('..') || folderName.includes('/') || folderName.includes('\\')) {
+      const resolvedBundle = path.resolve(addonsPath, folderName);
+      if (!resolvedBundle.startsWith(addonsPath + path.sep) || folderName.includes('..')) {
         errors.push(`Skipped unsafe bundled addon folder: ${folderName}`);
         continue;
       }
@@ -780,8 +1004,8 @@ export function importProfile(
         const zip = new AdmZip(zipBuffer);
         zip.extractAllTo(addonsPath, true);
         restoredBundles.push(folderName);
-      } catch (err: any) {
-        errors.push(`Bundled addon ${folderName}: ${err.message}`);
+      } catch (err: unknown) {
+        errors.push(`Bundled addon ${folderName}: ${err instanceof Error ? err.message : String(err)}`);
       }
     }
   }

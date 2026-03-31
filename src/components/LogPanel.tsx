@@ -47,8 +47,7 @@ const LogPanel: React.FC<LogPanelProps> = ({ logs, height, knownNames, onNavigat
       parts.push(
         <span
           key={`${match.index}-${name}`}
-          className="log-link"
-          onClick={() => onNavigate(name)}
+          className="log-link"          role="link"          onClick={() => onNavigate(name)}
           title={`Go to ${name}`}
         >
           {name}

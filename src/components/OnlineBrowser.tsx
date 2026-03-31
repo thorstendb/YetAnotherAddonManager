@@ -1,9 +1,13 @@
 // Copyright (c) 2026 thorstendb
 // SPDX-License-Identifier: MIT
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
-import { AddonInfo, CatalogAddon, CharacterSettings, ADDON_CATEGORIES, getCategoryIconUrl } from '../../electron/shared/types';
+import { AddonInfo, CatalogAddon, CharacterSettings, ADDON_CATEGORIES, getCategoryIconUrl, compareVersionStrings } from '../../electron/shared/types';
 import ImagePreview from './ImagePreview';
 import { shortenCharName } from '../App';
+
+function errMsg(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
 
 interface OnlineBrowserProps {
   installedDirNames: Set<string>;
@@ -20,7 +24,7 @@ interface OnlineBrowserProps {
   highlightAddonId?: string | null;
   catalogByDir?: Map<string, CatalogAddon>;
   installingAddonId?: string | null;
-  installProgress?: Record<string, { phase: string; percent?: number }>;
+  installProgress?: Record<string, { phase: string; percent?: number; current?: number; total?: number }>;
   /** Central update-availability check shared with Update All */
   checkUpdateAvailable?: (addon: AddonInfo, catalogAddon: CatalogAddon) => boolean;
 }
@@ -88,8 +92,8 @@ const OnlineBrowser: React.FC<OnlineBrowserProps> = ({
       } else {
         onLog(`Loaded addon catalog: ${list.length} addons`, 'info');
       }
-    } catch (err: any) {
-      onLog(`Failed to load addon catalog: ${err.message || err}`, 'error');
+    } catch (err: unknown) {
+      onLog(`Failed to load addon catalog: ${errMsg(err)}`, 'error');
     } finally {
       setLoading(false);
     }
@@ -187,8 +191,8 @@ const OnlineBrowser: React.FC<OnlineBrowserProps> = ({
         }
         onInstall(addon);
       }
-    } catch (err: any) {
-      onLog(`Error installing "${addon.name}": ${err.message || err}`, 'error');
+    } catch (err: unknown) {
+      onLog(`Error installing "${addon.name}": ${errMsg(err)}`, 'error');
     } finally {
       setInstalling(null);
     }
@@ -374,7 +378,7 @@ const OnlineBrowser: React.FC<OnlineBrowserProps> = ({
           className="online-refresh-btn"
           onClick={() => loadList(true)}
           disabled={loading}
-          title="Refresh addon catalog"
+          title="Refresh catalog from ESOUI"
         >
           🔄
         </button>
@@ -401,6 +405,9 @@ const OnlineBrowser: React.FC<OnlineBrowserProps> = ({
             const hasUpdate = installed && localAddonInfo && checkUpdateAvailable
               ? checkUpdateAvailable(localAddonInfo, addon)
               : false;
+            const isLocalNewer = installed && localVer && addon.version
+              ? compareVersionStrings(localVer, addon.version, addon.date) > 0
+              : false;
             const isExpanded = expandedId === addon.id;
             const isCurrentlyInstalling = installing === addon.id;
             const catName = ADDON_CATEGORIES[addon.categoryId] || `Cat ${addon.categoryId}`;
@@ -418,6 +425,7 @@ const OnlineBrowser: React.FC<OnlineBrowserProps> = ({
                   onClick={() => setExpandedId(isExpanded ? null : addon.id)}
                 >
                   <span className={`tree-chevron ${isExpanded ? 'expanded' : ''}`}>▶</span>
+                  <span className="tree-icon" title={installed ? 'Installed locally' : bundledOnly ? 'Not installed (shared library present)' : 'Not installed'}>{installed ? '🟢' : bundledOnly ? '🟡' : '⚪'}</span>
                   {addon.categoryId && (
                     <img
                       className="tree-cat-icon"
@@ -426,12 +434,12 @@ const OnlineBrowser: React.FC<OnlineBrowserProps> = ({
                       onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }}
                     />
                   )}
-                  <span className="tree-icon">{installed ? '✅' : bundledOnly ? '📦' : '🌐'}</span>
                   <span className="tree-label">
                     {addon.name}
                     {addon.version && <span className="tree-version"> v{addon.version}</span>}
                     {localVer && <span className="tree-local-version"> [local: v{localVer}]</span>}
-                    {hasUpdate && <span className="tree-update-badge" title="Update available">⬆️</span>}
+                    {hasUpdate && <span className="tree-update-badge" title="Update available — catalog has a newer version">⬆️</span>}
+                    {isLocalNewer && <span className="tree-regression-badge" title="Local version is newer than catalog — possible version scheme change">⚠️</span>}
                   </span>
                   <span className="tree-row-actions">
                     <button
@@ -441,9 +449,9 @@ const OnlineBrowser: React.FC<OnlineBrowserProps> = ({
                         handleInstall(addon);
                       }}
                       disabled={isCurrentlyInstalling}
-                      title={installed ? 'Reinstall from catalog' : bundledOnly ? 'Install (bundled lib present)' : 'Install from catalog'}
+                      title={isLocalNewer ? `Downgrade to catalog version (v${addon.version})` : installed ? 'Reinstall' : bundledOnly ? 'Install (bundled library already present)' : 'Install'}
                     >
-                      {isCurrentlyInstalling ? '⏳' : installed ? '🔄' : '📥'}
+                      {isCurrentlyInstalling ? '⏳' : isLocalNewer ? '⬇️' : installed ? '🔄' : '➕'}
                     </button>
                     {installed && onDelete && installedDir && (
                       <button
@@ -461,9 +469,10 @@ const OnlineBrowser: React.FC<OnlineBrowserProps> = ({
                   if (!progress) return null;
                   const isIndeterminate = progress.phase === 'resolving';
                   const pct = isIndeterminate ? 100 : (progress.percent || 0);
-                  const label = progress.phase === 'resolving' ? 'Resolving...'
-                    : progress.phase === 'downloading' ? `Downloading ${progress.percent || 0}%`
-                    : `Extracting ${progress.percent || 0}%`;
+                  const prefix = progress.total && progress.total > 1 ? `${progress.current}/${progress.total} ` : '';
+                  const label = progress.phase === 'resolving' ? `${prefix}Resolving...`
+                    : progress.phase === 'downloading' ? `${prefix}Downloading ${progress.percent || 0}%`
+                    : `${prefix}Extracting…`;
                   return (
                     <div className="install-progress-container">
                       <div className="install-progress-track">
@@ -576,9 +585,9 @@ const OnlineBrowser: React.FC<OnlineBrowserProps> = ({
                                       className="row-btn row-btn-install dep-btn"
                                       onClick={(e) => { e.stopPropagation(); handleInstall(depCatalog); }}
                                       disabled={!!isDepInstalling}
-                                      title={isDepInstalled ? 'Reinstall from catalog' : 'Install from catalog'}
+                                      title={isDepInstalled ? 'Reinstall' : 'Install'}
                                     >
-                                      {isDepInstalling ? '⏳' : isDepInstalled ? '🔄' : '📥'}
+                                      {isDepInstalling ? '⏳' : isDepInstalled ? '🔄' : '➕'}
                                     </button>
                                   )}
                                   {isDepInstalled && onDelete && (
@@ -645,16 +654,16 @@ const OnlineBrowser: React.FC<OnlineBrowserProps> = ({
                                       className="row-btn row-btn-install dep-btn"
                                       onClick={(e) => { e.stopPropagation(); handleInstall(depCatalog); }}
                                       disabled={!!isDepInstalling}
-                                      title={isDepInstalled ? 'Reinstall from catalog' : 'Install from catalog'}
+                                      title={isDepInstalled ? 'Reinstall' : 'Install'}
                                     >
-                                      {isDepInstalling ? '⏳' : isDepInstalled ? '🔄' : '📥'}
+                                      {isDepInstalling ? '⏳' : isDepInstalled ? '🔄' : '➕'}
                                     </button>
                                   )}
                                   {isDepInstalled && onDelete && (
                                     <button
                                       className="row-btn row-btn-delete dep-btn"
                                       onClick={(e) => { e.stopPropagation(); onDelete(dep.name); }}
-                                      title="Delete dependency"
+                                      title="Delete optional dependency"
                                     >
                                       🗑️
                                     </button>

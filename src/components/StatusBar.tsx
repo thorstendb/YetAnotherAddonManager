@@ -58,32 +58,28 @@ const StatusBar: React.FC<StatusBarProps> = ({
             {unreferencedCount}
           </span>
         </div>
-        {loading && (
-          <div className="stat" style={{ color: 'var(--accent)' }}>
-            Scanning...
+        <div className="stat" style={{ color: 'var(--accent)', visibility: loading ? 'visible' : 'hidden' }}>
+          Scanning...
+        </div>
+      </div>
+      <div className="status-bar-progress" style={{ opacity: hasCurrentProgress || hasBatchProgress ? 1 : 0 }}>
+        {hasCurrentProgress && (
+          <div className="status-progress-track" title={`${currentProgress!.phase} ${currentProgress!.percent}%`}>
+            <div
+              className="status-progress-fill status-progress-current"
+              style={{ width: `${currentProgress!.percent}%` }}
+            />
+          </div>
+        )}
+        {hasBatchProgress && (
+          <div className="status-progress-track" title={`Overall: ${updateTotal - updateRemaining}/${updateTotal}`}>
+            <div
+              className="status-progress-fill status-progress-batch"
+              style={{ width: `${batchPercent}%` }}
+            />
           </div>
         )}
       </div>
-      {(hasCurrentProgress || hasBatchProgress) && (
-        <div className="status-bar-progress">
-          {hasCurrentProgress && (
-            <div className="status-progress-track" title={`${currentProgress!.phase} ${currentProgress!.percent}%`}>
-              <div
-                className="status-progress-fill status-progress-current"
-                style={{ width: `${currentProgress!.percent}%` }}
-              />
-            </div>
-          )}
-          {hasBatchProgress && (
-            <div className="status-progress-track" title={`Overall: ${updateTotal - updateRemaining}/${updateTotal}`}>
-              <div
-                className="status-progress-fill status-progress-batch"
-                style={{ width: `${batchPercent}%` }}
-              />
-            </div>
-          )}
-        </div>
-      )}
     </div>
   );
 };

@@ -1,6 +1,6 @@
 // Copyright (c) 2026 thorstendb
 // SPDX-License-Identifier: MIT
-import { contextBridge, ipcRenderer } from 'electron';
+import { contextBridge, ipcRenderer, IpcRendererEvent } from 'electron';
 import { AddonInfo, AddonSettingsData, AppConfig, CatalogAddon, SavedVarsInfo, IPC_CHANNELS } from './shared/types';
 import { SnapshotAddon, AddonSnapshot } from './snapshotManager';
 import { SvBackupEntry, ExportData } from './settingsManager';
@@ -65,17 +65,17 @@ contextBridge.exposeInMainWorld('electronAPI', {
     addonsPath: string
   ): Promise<{ moved: string[]; error?: string }> =>
     ipcRenderer.invoke(IPC_CHANNELS.CLEANUP_DOWNLOADS, addonsPath),
-  saveUiSettings: (settings: { logHeight?: number; panelWidths?: number[]; fontSize?: number; fontFamily?: string }): Promise<AppConfig> =>
+  saveUiSettings: (settings: { logHeight?: number; panelWidths?: number[]; fontSize?: number; fontFamily?: string; skipCleanupConfirm?: boolean }): Promise<AppConfig> =>
     ipcRenderer.invoke(IPC_CHANNELS.SAVE_UI_SETTINGS, settings),
   saveInstalledVersions: (versions: Record<string, string>): Promise<void> =>
     ipcRenderer.invoke(IPC_CHANNELS.SAVE_INSTALLED_VERSIONS, versions),
-  onInstallProgress: (callback: (data: { addonId: string; phase: string; percent?: number }) => void) => {
-    const handler = (_event: any, data: any) => callback(data);
+  onInstallProgress: (callback: (data: { addonId: string; phase: string; percent?: number; current?: number; total?: number }) => void) => {
+    const handler = (_event: IpcRendererEvent, data: { addonId: string; phase: string; percent?: number; current?: number; total?: number }) => callback(data);
     ipcRenderer.on(IPC_CHANNELS.INSTALL_PROGRESS, handler);
     return () => { ipcRenderer.removeListener(IPC_CHANNELS.INSTALL_PROGRESS, handler); };
   },
   onExportProgress: (callback: (data: { phase: string; percent: number }) => void) => {
-    const handler = (_event: any, data: any) => callback(data);
+    const handler = (_event: IpcRendererEvent, data: { phase: string; percent: number }) => callback(data);
     ipcRenderer.on(IPC_CHANNELS.EXPORT_PROGRESS, handler);
     return () => { ipcRenderer.removeListener(IPC_CHANNELS.EXPORT_PROGRESS, handler); };
   },
@@ -108,12 +108,14 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.invoke(IPC_CHANNELS.SAVE_SNAPSHOT, addonsPath, addons),
   listSnapshots: (addonsPath: string): Promise<AddonSnapshot[]> =>
     ipcRenderer.invoke(IPC_CHANNELS.LIST_SNAPSHOTS, addonsPath),
-  listAddonBackups: (addonsPath: string): Promise<{ folderName: string; version: string; backupPath: string }[]> =>
+  listAddonBackups: (addonsPath: string): Promise<{ folderName: string; version: string; backupPath: string; sizeBytes: number }[]> =>
     ipcRenderer.invoke(IPC_CHANNELS.LIST_ADDON_BACKUPS, addonsPath),
   restoreAddonBackup: (addonsPath: string, folderName: string, backupPath: string): Promise<boolean> =>
     ipcRenderer.invoke(IPC_CHANNELS.RESTORE_ADDON_BACKUP, addonsPath, folderName, backupPath),
   backupAddonFolder: (addonsPath: string, folderName: string, version: string): Promise<string> =>
     ipcRenderer.invoke(IPC_CHANNELS.BACKUP_ADDON_FOLDER, addonsPath, folderName, version),
+  deleteAddonBackups: (backupPaths: string[]): Promise<number> =>
+    ipcRenderer.invoke(IPC_CHANNELS.DELETE_ADDON_BACKUPS, backupPaths),
   listSvBackups: (addonsPath: string): Promise<SvBackupEntry[]> =>
     ipcRenderer.invoke(IPC_CHANNELS.LIST_SV_BACKUPS, addonsPath),
   restoreSvFile: (addonsPath: string, backupFilePath: string): Promise<{ restored: boolean; fileName: string; error?: string }> =>
@@ -142,4 +144,21 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.invoke(IPC_CHANNELS.BATCH_INSTALL_ADDONS, addonsPath, addonIds),
   getSystemFonts: (): Promise<string[]> =>
     ipcRenderer.invoke(IPC_CHANNELS.GET_SYSTEM_FONTS),
+  previewCleanupLibs: (addonsPath: string): Promise<string[]> =>
+    ipcRenderer.invoke(IPC_CHANNELS.PREVIEW_CLEANUP_LIBS, addonsPath),
+  cleanupLibsSelected: (addonsPath: string, folderNames: string[]): Promise<{ moved: string[]; addons: AddonInfo[] }> =>
+    ipcRenderer.invoke(IPC_CHANNELS.CLEANUP_LIBS_SELECTED, addonsPath, folderNames),
+  previewCleanupSettings: (addonsPath: string, existingAddonNames: string[]): Promise<{ orphanedSettings: string[]; orphanedSavedVars: string[] }> =>
+    ipcRenderer.invoke(IPC_CHANNELS.PREVIEW_CLEANUP_SETTINGS, addonsPath, existingAddonNames),
+  cleanupSettingsSelected: (
+    addonsPath: string,
+    existingAddonNames: string[],
+    settingsToRemove: string[],
+    savedVarsToRemove: string[]
+  ): Promise<{ removedFromSettings: string[]; removedSavedVars: string[]; backupPath: string; svBackupDir: string; error?: string }> =>
+    ipcRenderer.invoke(IPC_CHANNELS.CLEANUP_SETTINGS_SELECTED, addonsPath, existingAddonNames, settingsToRemove, savedVarsToRemove),
+  previewCleanupDownloads: (addonsPath: string): Promise<string[]> =>
+    ipcRenderer.invoke(IPC_CHANNELS.PREVIEW_CLEANUP_DOWNLOADS, addonsPath),
+  cleanupDownloadsSelected: (addonsPath: string, fileNames: string[]): Promise<{ moved: string[] }> =>
+    ipcRenderer.invoke(IPC_CHANNELS.CLEANUP_DOWNLOADS_SELECTED, addonsPath, fileNames),
 });

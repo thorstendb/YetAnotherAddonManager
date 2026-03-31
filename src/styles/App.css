@@ -24,6 +24,11 @@
   white-space: nowrap;
 }
 
+.path-field {
+  flex: 1;
+  min-width: 0;
+}
+
 .toolbar input[type="text"] {
   flex: 1;
   padding: 6px 10px;
@@ -83,11 +88,20 @@
   background: #8cd498;
 }
 
-.toolbar-separator {
-  width: 1px;
-  height: 24px;
-  background: var(--border);
-  flex-shrink: 0;
+.toolbar-group {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 2px 6px 4px;
+  margin: 0;
+}
+
+.toolbar-group legend {
+  font-size: 10px;
+  color: var(--text-secondary);
+  padding: 0 4px;
 }
 
 /* ---- Theme toggle ---- */
@@ -131,13 +145,17 @@
   font-size: 12px;
   color: var(--text-muted);
   display: flex;
+  align-items: center;
   gap: 20px;
   flex-shrink: 0;
+  height: 24px;
+  box-sizing: border-box;
 }
 
 .status-bar .stat {
   display: flex;
   gap: 4px;
+  white-space: nowrap;
 }
 
 .status-bar .stat-value {
@@ -149,16 +167,17 @@
   display: flex;
   gap: 20px;
   flex: 1;
+  min-width: 0;
 }
 
 .status-bar-progress {
   display: flex;
   flex-direction: row;
   gap: 4px;
-  flex: 1;
-  max-width: 320px;
-  justify-content: center;
+  width: 320px;
+  flex-shrink: 0;
   align-items: center;
+  transition: opacity 0.2s;
 }
 
 .status-progress-track {
@@ -441,15 +460,6 @@
   color: var(--text-muted);
   font-size: 11px;
   font-weight: 400;
-}
-
-.tree-badge {
-  font-size: 11px;
-  color: var(--text-muted);
-  padding: 0 6px;
-  background: var(--bg-secondary);
-  border-radius: 3px;
-  flex-shrink: 0;
 }
 
 /* ---- Row-level action buttons (right-aligned) ---- */
@@ -1071,6 +1081,11 @@
   margin-left: 4px;
 }
 
+.tree-regression-badge {
+  font-size: 12px;
+  margin-left: 4px;
+}
+
 .category-icon {
   width: 16px;
   height: 16px;
@@ -1085,14 +1100,6 @@
   flex-shrink: 0;
   border-radius: 2px;
   object-fit: contain;
-}
-
-.online-actions {
-  display: flex;
-  gap: 8px;
-  align-items: center;
-  padding: 4px 12px 4px calc(38px + var(--tree-indent));
-  flex-wrap: wrap;
 }
 
 .online-link {
@@ -1248,52 +1255,6 @@
   border-radius: 12px;
   font-size: 12px;
   border: 1px solid var(--border);
-}
-
-.online-install-btn {
-  padding: 3px 10px;
-  background: var(--green);
-  color: var(--contrast-on-color);
-  border: none;
-  border-radius: 4px;
-  font-size: 12px;
-  font-weight: 600;
-  cursor: pointer;
-  transition: background 0.15s;
-}
-
-.online-install-btn:hover {
-  background: #8cd498;
-}
-
-.online-install-btn:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-
-/* ---- Tree node actions row ---- */
-.tree-node-actions {
-  display: flex;
-  gap: 8px;
-  align-items: center;
-  padding: 4px 12px 4px calc(38px + var(--tree-indent));
-  flex-wrap: wrap;
-}
-
-.tree-delete-btn {
-  padding: 3px 10px;
-  background: var(--red);
-  color: var(--contrast-on-color);
-  border: none;
-  border-radius: 4px;
-  font-size: 12px;
-  font-weight: 600;
-  cursor: pointer;
-  transition: background 0.15s;
-}
-
-.tree-delete-btn:hover {
-  background: #e07888;
 }
 
 /* ---- Welcome Dialog ---- */
@@ -1861,12 +1822,6 @@
   margin-top: 8px;
 }
 
-.ie-progress {
-  font-size: 13px;
-  color: var(--accent);
-  font-weight: 500;
-}
-
 .ie-warning {
   font-size: 12px;
   color: var(--yellow, #e0c478);
@@ -2003,4 +1958,67 @@
   justify-content: flex-end;
   gap: 8px;
   margin-top: 12px;
+}
+
+/* ---- Cleanup dialog ---- */
+.cleanup-dialog {
+  width: min(500px, 90vw);
+}
+
+.cleanup-section-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  margin-bottom: 6px;
+}
+
+.cleanup-select-all {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+  cursor: pointer;
+  user-select: none;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 4px;
+}
+
+.cleanup-items {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+.cleanup-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 8px;
+  font-size: 12px;
+  color: var(--text-primary);
+  cursor: pointer;
+  user-select: none;
+  border-radius: 3px;
+}
+
+.cleanup-item:hover {
+  background: var(--bg-hover);
+}
+
+.link-btn {
+  background: none;
+  border: none;
+  color: var(--accent);
+  cursor: pointer;
+  padding: 0;
+  font-size: inherit;
+  text-decoration: underline;
+}
+.link-btn:hover {
+  opacity: 0.8;
 }

@@ -16,7 +16,13 @@ import RestoreDialog from './components/RestoreDialog';
 import ImportExportDialog from './components/ImportExportDialog';
 import AboutDialog from './components/AboutDialog';
 import SettingsDialog from './components/SettingsDialog';
+import CleanupDialog, { CleanupType } from './components/CleanupDialog';
+import BackupCleanupDialog from './components/BackupCleanupDialog';
 import './styles/App.css';
+
+function errMsg(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
 
 /** Shorten "EU Megaserver-Alandhur" → "EU Alandhur" for display. */
 export function shortenCharName(name: string): string {
@@ -50,7 +56,7 @@ function App() {
   const [catalogHighlightId, setCatalogHighlightId] = useState<string | null>(null);
   const [recentlyUpdated, setRecentlyUpdated] = useState<Set<string>>(new Set());
   const [installedCatalogVersions, setInstalledCatalogVersions] = useState<Record<string, string>>({});
-  const [installProgress, setInstallProgress] = useState<Record<string, { phase: string; percent?: number }>>({});
+  const [installProgress, setInstallProgress] = useState<Record<string, { phase: string; percent?: number; current?: number; total?: number }>>({});
   const [welcomeAccepted, setWelcomeAccepted] = useState<boolean | null>(null); // null = loading
   // Pending character setting changes: { "character\0addonName": enabled }
   const [pendingCharSettings, setPendingCharSettings] = useState<Map<string, boolean>>(new Map());
@@ -66,6 +72,20 @@ function App() {
   const [showSettings, setShowSettings] = useState(false);
   const [fontSize, setFontSize] = useState(14);
   const [fontFamily, setFontFamily] = useState("'Segoe UI', sans-serif");
+  const [skipCleanupConfirm, setSkipCleanupConfirm] = useState(false);
+  const [cleanupDialog, setCleanupDialog] = useState<{
+    type: CleanupType;
+    items: string[];
+    savedVarItems?: string[];
+  } | null>(null);
+  const [backupCleanupBackups, setBackupCleanupBackups] = useState<{
+    folderName: string; version: string; backupPath: string; sizeBytes: number;
+  }[] | null>(null);
+  const [deleteConfirm, setDeleteConfirm] = useState<{
+    folderName: string;
+    title: string;
+    action: () => void;
+  } | null>(null);
 
   // Theme state: persisted in localStorage
   const [theme, setTheme] = useState<'dark' | 'light'>(() => {
@@ -107,6 +127,7 @@ function App() {
       if (config.installedCatalogVersions) setInstalledCatalogVersions(config.installedCatalogVersions);
       if (config.fontSize) setFontSize(config.fontSize);
       if (config.fontFamily) setFontFamily(config.fontFamily);
+      if (config.skipCleanupConfirm) setSkipCleanupConfirm(config.skipCleanupConfirm);
       if (config.welcomeAccepted) {
         setWelcomeAccepted(true);
         addLog('YAAM started', 'info');
@@ -130,7 +151,7 @@ function App() {
           return next;
         });
       } else {
-        setInstallProgress(prev => ({ ...prev, [data.addonId]: { phase: data.phase, percent: data.percent } }));
+        setInstallProgress(prev => ({ ...prev, [data.addonId]: { phase: data.phase, percent: data.percent, current: data.current, total: data.total } }));
       }
     });
     return cleanup;
@@ -173,8 +194,8 @@ function App() {
       // Save a snapshot of the current addon state (only if changed)
       const snapshotAddons = results.map((a: AddonInfo) => ({ folderName: a.folderName, version: a.version }));
       window.electronAPI.saveSnapshot(pathToScan, snapshotAddons).catch(() => {});
-    } catch (err: any) {
-      addLog(`Scan failed: ${err.message || err}`, 'error');
+    } catch (err: unknown) {
+      addLog(`Scan failed: ${errMsg(err)}`, 'error');
     } finally {
       setLoading(false);
     }
@@ -198,8 +219,8 @@ function App() {
   }, [handleSetPath]);
 
   const handleRefresh = useCallback(() => {
-    if (addonPath) scanPath(addonPath);
-  }, [addonPath, scanPath]);
+    if (addonPath) handleSetPath(addonPath);
+  }, [addonPath, handleSetPath]);
 
   // --- Computed data ---
 
@@ -321,8 +342,8 @@ function App() {
       const newSettings = await window.electronAPI.getAddonSettings(addonPath);
       setAddonSettings(newSettings);
       setPendingCharSettings(new Map());
-    } catch (err: any) {
-      addLog(`Save failed: ${err.message || err}`, 'error');
+    } catch (err: unknown) {
+      addLog(`Save failed: ${errMsg(err)}`, 'error');
     } finally {
       setLoading(false);
     }
@@ -559,105 +580,226 @@ function App() {
     async (folderName: string, alsoDeleteSavedVars: boolean = false) => {
       if (!addonPath) return;
       addLog(`Deleting "${folderName}"...`, 'warn');
-      // Backup addon before deletion so it appears in Go Back
-      const addon = addons.find(a => a.folderName === folderName);
-      if (addon && addon.version) {
-        await window.electronAPI.backupAddonFolder(addonPath, folderName, addon.version);
-      }
-      if (alsoDeleteSavedVars) {
-        // Delete SavedVars for parent + all sub-addon names
-        const names = [folderName, ...(addon?.subAddons.map(s => s.folderName) || [])];
-        const allDeleted: string[] = [];
-        for (const name of names) {
-          const svResult = await window.electronAPI.deleteSavedVars(addonPath, name);
-          allDeleted.push(...svResult.deleted);
+      try {
+        // Backup addon before deletion so it appears in Go Back
+        const addon = addons.find(a => a.folderName === folderName);
+        let backupPath = '';
+        if (addon && addon.version) {
+          backupPath = await window.electronAPI.backupAddonFolder(addonPath, folderName, addon.version);
         }
-        if (allDeleted.length > 0) {
-          addLog(`Removed SavedVariables: ${allDeleted.join(', ')} (backed up)`, 'info');
+        if (alsoDeleteSavedVars) {
+          // Delete SavedVars for parent + all sub-addon names
+          const names = [folderName, ...(addon?.subAddons.map(s => s.folderName) || [])];
+          const allDeleted: string[] = [];
+          for (const name of names) {
+            const svResult = await window.electronAPI.deleteSavedVars(addonPath, name);
+            allDeleted.push(...svResult.deleted);
+          }
+          if (allDeleted.length > 0) {
+            addLog(`Removed SavedVariables: ${allDeleted.join(', ')} (backed up)`, 'info');
+          }
         }
+        const updated = await window.electronAPI.deleteAddon(addonPath, folderName);
+        setAddons(updated);
+        setSelectedAddon(null);
+        const revertAction = backupPath ? {
+          label: '↩ Undo',
+          onClick: async () => {
+            try {
+              const ok = await window.electronAPI.restoreAddonBackup(addonPath, folderName, backupPath);
+              if (ok) {
+                addLog(`Restored "${folderName}" from backup`, 'success');
+                scanPath(addonPath);
+              } else {
+                addLog(`Restore failed: backup not found`, 'error');
+              }
+            } catch (e: unknown) { addLog(`Restore failed: ${errMsg(e)}`, 'error'); }
+          },
+        } : undefined;
+        setLogs((prev) => [...prev, { timestamp: new Date(), message: `Deleted "${folderName}" (moved to Removed/)`, level: 'success' as const, action: revertAction }]);
+      } catch (err: unknown) {
+        addLog(`Delete failed: ${errMsg(err)}`, 'error');
       }
-      const updated = await window.electronAPI.deleteAddon(addonPath, folderName);
-      setAddons(updated);
-      setSelectedAddon(null);
-      addLog(`Deleted "${folderName}" (moved to Removed/)`, 'success');
     },
-    [addonPath, addons, addLog]
+    [addonPath, addons, addLog, scanPath]
   );
 
   const handleDeleteAddonAndRefs = useCallback(
     async (folderName: string, alsoDeleteSavedVars: boolean = false) => {
       if (!addonPath) return;
       addLog(`Deleting "${folderName}" with exclusive refs...`, 'warn');
-      // Backup addon (and its exclusive libs) before deletion so they appear in Go Back
-      const addon = addons.find(a => a.folderName === folderName);
-      if (addon && addon.version) {
-        await window.electronAPI.backupAddonFolder(addonPath, folderName, addon.version);
-      }
-      // Also backup dependent libraries that may get deleted
-      if (addon) {
-        const depNames = new Set([
-          ...addon.dependsOn.map(d => d.name),
-          ...addon.optionalDependsOn.map(d => d.name),
-          ...addon.subAddons.flatMap(s => [...s.dependsOn.map(d => d.name), ...s.optionalDependsOn.map(d => d.name)]),
-        ]);
-        for (const depName of depNames) {
-          const depAddon = addons.find(a => a.folderName === depName || a.title === depName);
-          if (depAddon && depAddon.version) {
-            await window.electronAPI.backupAddonFolder(addonPath, depAddon.folderName, depAddon.version);
+      try {
+        // Backup addon (and its exclusive libs) before deletion so they appear in Go Back
+        const addon = addons.find(a => a.folderName === folderName);
+        const backupPaths: { folder: string; path: string }[] = [];
+        if (addon && addon.version) {
+          const bp = await window.electronAPI.backupAddonFolder(addonPath, folderName, addon.version);
+          if (bp) backupPaths.push({ folder: folderName, path: bp });
+        }
+        // Also backup dependent libraries that may get deleted
+        if (addon) {
+          const depNames = new Set([
+            ...addon.dependsOn.map(d => d.name),
+            ...addon.optionalDependsOn.map(d => d.name),
+            ...addon.subAddons.flatMap(s => [...s.dependsOn.map(d => d.name), ...s.optionalDependsOn.map(d => d.name)]),
+          ]);
+          for (const depName of depNames) {
+            const depAddon = addons.find(a => a.folderName === depName || a.title === depName);
+            if (depAddon && depAddon.version) {
+              const bp = await window.electronAPI.backupAddonFolder(addonPath, depAddon.folderName, depAddon.version);
+              if (bp) backupPaths.push({ folder: depAddon.folderName, path: bp });
+            }
           }
         }
-      }
-      if (alsoDeleteSavedVars) {
-        // Delete SavedVars for parent + all sub-addon names
-        const names = [folderName, ...(addon?.subAddons.map(s => s.folderName) || [])];
-        const allDeleted: string[] = [];
-        for (const name of names) {
-          const svResult = await window.electronAPI.deleteSavedVars(addonPath, name);
-          allDeleted.push(...svResult.deleted);
+        if (alsoDeleteSavedVars) {
+          // Delete SavedVars for parent + all sub-addon names
+          const names = [folderName, ...(addon?.subAddons.map(s => s.folderName) || [])];
+          const allDeleted: string[] = [];
+          for (const name of names) {
+            const svResult = await window.electronAPI.deleteSavedVars(addonPath, name);
+            allDeleted.push(...svResult.deleted);
+          }
+          if (allDeleted.length > 0) {
+            addLog(`Removed SavedVariables: ${allDeleted.join(', ')} (backed up)`, 'info');
+          }
         }
-        if (allDeleted.length > 0) {
-          addLog(`Removed SavedVariables: ${allDeleted.join(', ')} (backed up)`, 'info');
-        }
-      }
-      const result = await window.electronAPI.deleteAddonAndRefs(addonPath, folderName);
-      setAddons(result.addons);
-      setSelectedAddon(null);
-      if (result.removedLibs.length > 0) {
-        addLog(
-          `Deleted "${folderName}" + exclusive libs: ${result.removedLibs.join(', ')}`,
-          'success'
-        );
-      } else {
-        addLog(`Deleted "${folderName}" (no exclusive libs)`, 'success');
+        const result = await window.electronAPI.deleteAddonAndRefs(addonPath, folderName);
+        setAddons(result.addons);
+        setSelectedAddon(null);
+        const deletedNames = [folderName, ...result.removedLibs];
+        const msg = result.removedLibs.length > 0
+          ? `Deleted "${folderName}" + exclusive libs: ${result.removedLibs.join(', ')}`
+          : `Deleted "${folderName}" (no exclusive libs)`;
+        const revertAction = backupPaths.length > 0 ? {
+          label: '↩ Undo',
+          onClick: async () => {
+            try {
+              let restored = 0;
+              for (const { folder, path: bp } of backupPaths) {
+                if (deletedNames.includes(folder)) {
+                  const ok = await window.electronAPI.restoreAddonBackup(addonPath, folder, bp);
+                  if (ok) restored++;
+                }
+              }
+              if (restored > 0) {
+                addLog(`Restored ${restored} addon(s) from backup`, 'success');
+                scanPath(addonPath);
+              } else {
+                addLog('Restore failed: no backups found', 'error');
+              }
+            } catch (e: unknown) { addLog(`Restore failed: ${errMsg(e)}`, 'error'); }
+          },
+        } : undefined;
+        setLogs((prev) => [...prev, { timestamp: new Date(), message: msg, level: 'success' as const, action: revertAction }]);
+      } catch (err: unknown) {
+        addLog(`Delete failed: ${errMsg(err)}`, 'error');
       }
     },
-    [addonPath, addons, addLog]
+    [addonPath, addons, addLog, scanPath]
   );
 
   const handleCleanup = useCallback(async () => {
     if (!addonPath) return;
-    setLoading(true);
-    addLog(`Running cleanup...`);
+    if (skipCleanupConfirm) {
+      // Direct cleanup without preview
+      setLoading(true);
+      addLog(`Running cleanup...`);
+      try {
+        const backupPaths: { folder: string; path: string }[] = [];
+        for (const lib of libraries) {
+          if (unreferencedLibs.has(lib.folderName) && lib.version) {
+            const bp = await window.electronAPI.backupAddonFolder(addonPath, lib.folderName, lib.version);
+            if (bp) backupPaths.push({ folder: lib.folderName, path: bp });
+          }
+        }
+        const result = await window.electronAPI.cleanupUnused(addonPath);
+        setAddons(result.addons);
+        if (result.moved.length > 0) {
+          const revertAction = backupPaths.length > 0 ? {
+            label: '↩ Undo',
+            onClick: async () => {
+              try {
+                let restored = 0;
+                for (const { folder, path: bp } of backupPaths) {
+                  const ok = await window.electronAPI.restoreAddonBackup(addonPath, folder, bp);
+                  if (ok) restored++;
+                }
+                if (restored > 0) {
+                  addLog(`Restored ${restored} lib(s) from backup`, 'success');
+                  scanPath(addonPath);
+                } else {
+                  addLog('Restore failed: no backups found', 'error');
+                }
+              } catch (e: unknown) { addLog(`Restore failed: ${errMsg(e)}`, 'error'); }
+            },
+          } : undefined;
+          setLogs((prev) => [...prev, { timestamp: new Date(), message: `Cleanup: moved ${result.moved.length} unreferenced libs to Removed/: ${result.moved.join(', ')}`, level: 'success' as const, action: revertAction }]);
+        } else {
+          addLog('Cleanup: no unreferenced libraries to remove', 'info');
+        }
+      } catch (err: unknown) {
+        addLog(`Cleanup failed: ${errMsg(err)}`, 'error');
+      } finally {
+        setLoading(false);
+      }
+      return;
+    }
+    // Show preview dialog
     try {
-      // Backup unreferenced libraries before removing so they appear in Go Back
-      for (const lib of libraries) {
-        if (unreferencedLibs.has(lib.folderName) && lib.version) {
-          await window.electronAPI.backupAddonFolder(addonPath, lib.folderName, lib.version);
+      const items = await window.electronAPI.previewCleanupLibs(addonPath);
+      if (items.length === 0) {
+        addLog('Cleanup: no unreferenced libraries to remove', 'info');
+        return;
+      }
+      setCleanupDialog({ type: 'libs', items });
+    } catch (err: unknown) {
+      addLog(`Cleanup preview failed: ${errMsg(err)}`, 'error');
+    }
+  }, [addonPath, addLog, libraries, unreferencedLibs, skipCleanupConfirm, scanPath]);
+
+  const handleCleanupLibsConfirm = useCallback(async (selectedItems: string[]) => {
+    setCleanupDialog(null);
+    if (!addonPath || selectedItems.length === 0) return;
+    setLoading(true);
+    addLog(`Removing ${selectedItems.length} unreferenced libraries...`);
+    try {
+      const backupPaths: { folder: string; path: string }[] = [];
+      for (const folderName of selectedItems) {
+        const lib = libraries.find(l => l.folderName === folderName);
+        if (lib && lib.version) {
+          const bp = await window.electronAPI.backupAddonFolder(addonPath, folderName, lib.version);
+          if (bp) backupPaths.push({ folder: folderName, path: bp });
         }
       }
-      const result = await window.electronAPI.cleanupUnused(addonPath);
+      const result = await window.electronAPI.cleanupLibsSelected(addonPath, selectedItems);
       setAddons(result.addons);
       if (result.moved.length > 0) {
-        addLog(`Cleanup: moved ${result.moved.length} unreferenced libs to Removed/: ${result.moved.join(', ')}`, 'success');
-      } else {
-        addLog('Cleanup: no unreferenced libraries to remove', 'info');
+        const revertAction = backupPaths.length > 0 ? {
+          label: '↩ Undo',
+          onClick: async () => {
+            try {
+              let restored = 0;
+              for (const { folder, path: bp } of backupPaths) {
+                const ok = await window.electronAPI.restoreAddonBackup(addonPath, folder, bp);
+                if (ok) restored++;
+              }
+              if (restored > 0) {
+                addLog(`Restored ${restored} lib(s) from backup`, 'success');
+                scanPath(addonPath);
+              } else {
+                addLog('Restore failed: no backups found', 'error');
+              }
+            } catch (e: unknown) { addLog(`Restore failed: ${errMsg(e)}`, 'error'); }
+          },
+        } : undefined;
+        setLogs((prev) => [...prev, { timestamp: new Date(), message: `Cleanup: moved ${result.moved.length} libs to Removed/: ${result.moved.join(', ')}`, level: 'success' as const, action: revertAction }]);
       }
-    } catch (err: any) {
-      addLog(`Cleanup failed: ${err.message || err}`, 'error');
+    } catch (err: unknown) {
+      addLog(`Cleanup failed: ${errMsg(err)}`, 'error');
     } finally {
       setLoading(false);
     }
-  }, [addonPath, addLog, libraries, unreferencedLibs]);
+  }, [addonPath, addLog, libraries, scanPath]);
 
   const handleUpdateAll = useCallback(async () => {
     if (!addonPath) return;
@@ -730,8 +872,8 @@ function App() {
                 newVersions[catalogAddon.id] = catalogAddon.version;
                 return true;
               }
-            } catch (err: any) {
-              addLog(`Error updating "${addon.folderName}": ${err.message || err}`, 'error');
+            } catch (err: unknown) {
+              addLog(`Error updating "${addon.folderName}": ${errMsg(err)}`, 'error');
               return false;
             }
           })
@@ -742,8 +884,8 @@ function App() {
         }
         setUpdateRemaining(Math.max(0, updatable.length - i - batch.length));
       }
-    } catch (err: any) {
-      addLog(`Update All encountered an error: ${err.message || err}`, 'error');
+    } catch (err: unknown) {
+      addLog(`Update All encountered an error: ${errMsg(err)}`, 'error');
     } finally {
       // Persist installed catalog versions so update detection survives restarts
       if (Object.keys(newVersions).length > 0) {
@@ -764,69 +906,114 @@ function App() {
 
   const handleCleanupSettings = useCallback(async () => {
     if (!addonPath || addons.length === 0) return;
-    setLoading(true);
-    addLog('Cleaning up settings and SavedVariables...');
+    const existingNames = addons.flatMap((a) => [a.folderName, ...a.subAddons.map(s => s.folderName)]);
+    if (skipCleanupConfirm) {
+      // Direct cleanup without preview
+      setLoading(true);
+      addLog('Cleaning up settings and SavedVariables...');
+      try {
+        const result = await window.electronAPI.cleanupSettings(addonPath, existingNames);
+        if (result.error) {
+          addLog(`Cleanup settings error: ${result.error}`, 'error');
+        } else {
+          const totalRemoved = result.removedFromSettings.length + result.removedSavedVars.length;
+          if (totalRemoved === 0) {
+            addLog('Settings cleanup: nothing to clean', 'info');
+          } else {
+            if (result.removedFromSettings.length > 0) {
+              addLog(`Removed ${result.removedFromSettings.length} orphaned entries from AddOnSettings.txt: ${result.removedFromSettings.join(', ')}`, 'success');
+            }
+            if (result.removedSavedVars.length > 0) {
+              addLog(`Removed ${result.removedSavedVars.length} orphaned SavedVariables (backed up): ${result.removedSavedVars.join(', ')}`, 'success');
+            }
+            addCleanupUndoEntry(result.backupPath, result.svBackupDir, totalRemoved);
+          }
+          const newSettings = await window.electronAPI.getAddonSettings(addonPath);
+          setAddonSettings(newSettings);
+        }
+      } catch (err: unknown) {
+        addLog(`Settings cleanup failed: ${errMsg(err)}`, 'error');
+      } finally {
+        setLoading(false);
+      }
+      return;
+    }
+    // Show preview dialog
     try {
-      // Include sub-addon names so their settings aren't destroyed
-      const existingNames = addons.flatMap((a) => [a.folderName, ...a.subAddons.map(s => s.folderName)]);
-      const result = await window.electronAPI.cleanupSettings(addonPath, existingNames);
+      const preview = await window.electronAPI.previewCleanupSettings(addonPath, existingNames);
+      if (preview.orphanedSettings.length === 0 && preview.orphanedSavedVars.length === 0) {
+        addLog('Settings cleanup: nothing to clean', 'info');
+        return;
+      }
+      setCleanupDialog({ type: 'settings', items: preview.orphanedSettings, savedVarItems: preview.orphanedSavedVars });
+    } catch (err: unknown) {
+      addLog(`Cleanup preview failed: ${errMsg(err)}`, 'error');
+    }
+  }, [addonPath, addons, addLog, skipCleanupConfirm]);
+
+  const addCleanupUndoEntry = useCallback((backupPath: string, svBackupDir: string, totalRemoved: number) => {
+    setLogs((prev) => [
+      ...prev,
+      {
+        timestamp: new Date(),
+        message: `Cleanup complete — ${totalRemoved} item(s) removed.`,
+        level: 'info' as const,
+        action: {
+          label: '↩ Undo',
+          onClick: async () => {
+            try {
+              const undo = await window.electronAPI.undoCleanupSettings(addonPath, backupPath, svBackupDir);
+              if (undo.error) {
+                addLog(`Undo failed: ${undo.error}`, 'error');
+              } else {
+                const parts: string[] = [];
+                if (undo.restoredSettings) parts.push('AddOnSettings.txt restored');
+                if (undo.restoredSavedVars.length > 0) parts.push(`${undo.restoredSavedVars.length} SavedVariables restored`);
+                addLog(`Undo cleanup: ${parts.join('; ')}`, 'success');
+                const newSettings = await window.electronAPI.getAddonSettings(addonPath);
+                setAddonSettings(newSettings);
+              }
+            } catch (err: unknown) {
+              addLog(`Undo failed: ${errMsg(err)}`, 'error');
+            }
+          },
+        },
+      },
+    ]);
+  }, [addonPath, addLog]);
+
+  const handleCleanupSettingsConfirm = useCallback(async (selectedSettings: string[], selectedSvItems?: string[]) => {
+    setCleanupDialog(null);
+    if (!addonPath) return;
+    const existingNames = addons.flatMap((a) => [a.folderName, ...a.subAddons.map(s => s.folderName)]);
+    setLoading(true);
+    addLog('Cleaning up selected settings and SavedVariables...');
+    try {
+      const result = await window.electronAPI.cleanupSettingsSelected(addonPath, existingNames, selectedSettings, selectedSvItems || []);
       if (result.error) {
         addLog(`Cleanup settings error: ${result.error}`, 'error');
       } else {
         const totalRemoved = result.removedFromSettings.length + result.removedSavedVars.length;
         if (totalRemoved === 0) {
-          addLog('Settings cleanup: nothing to clean', 'info');
+          addLog('Settings cleanup: nothing removed', 'info');
         } else {
-          // Log individual removed items
           if (result.removedFromSettings.length > 0) {
             addLog(`Removed ${result.removedFromSettings.length} orphaned entries from AddOnSettings.txt: ${result.removedFromSettings.join(', ')}`, 'success');
           }
           if (result.removedSavedVars.length > 0) {
             addLog(`Removed ${result.removedSavedVars.length} orphaned SavedVariables (backed up): ${result.removedSavedVars.join(', ')}`, 'success');
           }
-          // Add undo entry
-          const backupPath = result.backupPath;
-          const svBackupDir = result.svBackupDir;
-          setLogs((prev) => [
-            ...prev,
-            {
-              timestamp: new Date(),
-              message: `Cleanup complete — ${totalRemoved} item(s) removed.`,
-              level: 'info' as const,
-              action: {
-                label: '↩ Undo',
-                onClick: async () => {
-                  try {
-                    const undo = await window.electronAPI.undoCleanupSettings(addonPath, backupPath, svBackupDir);
-                    if (undo.error) {
-                      addLog(`Undo failed: ${undo.error}`, 'error');
-                    } else {
-                      const parts: string[] = [];
-                      if (undo.restoredSettings) parts.push('AddOnSettings.txt restored');
-                      if (undo.restoredSavedVars.length > 0) parts.push(`${undo.restoredSavedVars.length} SavedVariables restored`);
-                      addLog(`Undo cleanup: ${parts.join('; ')}`, 'success');
-                      // Refresh settings
-                      const newSettings = await window.electronAPI.getAddonSettings(addonPath);
-                      setAddonSettings(newSettings);
-                    }
-                  } catch (err: any) {
-                    addLog(`Undo failed: ${err.message || err}`, 'error');
-                  }
-                },
-              },
-            },
-          ]);
+          addCleanupUndoEntry(result.backupPath, result.svBackupDir, totalRemoved);
         }
-        // Refresh settings
         const newSettings = await window.electronAPI.getAddonSettings(addonPath);
         setAddonSettings(newSettings);
       }
-    } catch (err: any) {
-      addLog(`Settings cleanup failed: ${err.message || err}`, 'error');
+    } catch (err: unknown) {
+      addLog(`Settings cleanup failed: ${errMsg(err)}`, 'error');
     } finally {
       setLoading(false);
     }
-  }, [addonPath, addons, addLog]);
+  }, [addonPath, addons, addLog, addCleanupUndoEntry]);
 
   // Handle install from online browser - refresh local scan
   const handleOnlineInstall = useCallback(
@@ -858,8 +1045,8 @@ function App() {
       setRestoreSvBackups(svBks);
       setShowRestoreDialog(true);
       addLog('Opened restore dialog');
-    } catch (err: any) {
-      addLog(`Failed to load restore data: ${err.message || err}`, 'error');
+    } catch (err: unknown) {
+      addLog(`Failed to load restore data: ${errMsg(err)}`, 'error');
     }
   }, [addonPath, addLog]);
 
@@ -896,8 +1083,8 @@ function App() {
         } else {
           addLog(`Failed to restore "${folderName}"`, 'error');
         }
-      } catch (err: any) {
-        addLog(`Restore failed: ${err.message || err}`, 'error');
+      } catch (err: unknown) {
+        addLog(`Restore failed: ${errMsg(err)}`, 'error');
       }
     },
     [addonPath, addLog, scanPath, catalogByDir]
@@ -918,8 +1105,8 @@ function App() {
         } else {
           addLog(`Failed to restore "${fileName}": ${result.error || 'unknown error'}`, 'error');
         }
-      } catch (err: any) {
-        addLog(`Restore failed: ${err.message || err}`, 'error');
+      } catch (err: unknown) {
+        addLog(`Restore failed: ${errMsg(err)}`, 'error');
       }
     },
     [addonPath, addLog]
@@ -927,23 +1114,76 @@ function App() {
 
   const handleCleanupDownloads = useCallback(async () => {
     if (!addonPath) return;
-    setLoading(true);
-    addLog('Moving .zip archives to Downloads folder...');
-    try {
-      const result = await window.electronAPI.cleanupDownloads(addonPath);
-      if (result.error) {
-        addLog(`Cleanup archives error: ${result.error}`, 'error');
-      } else if (result.moved.length > 0) {
-        addLog(`Moved ${result.moved.length} archive(s) to Downloads/: ${result.moved.join(', ')}`, 'success');
-      } else {
-        addLog('No .zip archives found in AddOns folder', 'info');
+    if (skipCleanupConfirm) {
+      // Direct cleanup without preview
+      setLoading(true);
+      addLog('Moving .zip archives to Downloads folder...');
+      try {
+        const result = await window.electronAPI.cleanupDownloads(addonPath);
+        if (result.error) {
+          addLog(`Cleanup archives error: ${result.error}`, 'error');
+        } else if (result.moved.length > 0) {
+          addLog(`Moved ${result.moved.length} archive(s) to Downloads/: ${result.moved.join(', ')}`, 'success');
+        } else {
+          addLog('No .zip archives found in AddOns folder', 'info');
+        }
+      } catch (err: unknown) {
+        addLog(`Cleanup archives failed: ${errMsg(err)}`, 'error');
+      } finally {
+        setLoading(false);
       }
-    } catch (err: any) {
-      addLog(`Cleanup archives failed: ${err.message || err}`, 'error');
+      return;
+    }
+    // Show preview dialog
+    try {
+      const items = await window.electronAPI.previewCleanupDownloads(addonPath);
+      if (items.length === 0) {
+        addLog('No .zip archives found in AddOns folder', 'info');
+        return;
+      }
+      setCleanupDialog({ type: 'downloads', items });
+    } catch (err: unknown) {
+      addLog(`Cleanup preview failed: ${errMsg(err)}`, 'error');
+    }
+  }, [addonPath, addLog, skipCleanupConfirm]);
+
+  const handleCleanupDownloadsConfirm = useCallback(async (selectedItems: string[]) => {
+    setCleanupDialog(null);
+    if (!addonPath || selectedItems.length === 0) return;
+    setLoading(true);
+    addLog(`Moving ${selectedItems.length} archive(s) to Downloads folder...`);
+    try {
+      const result = await window.electronAPI.cleanupDownloadsSelected(addonPath, selectedItems);
+      if (result.moved.length > 0) {
+        addLog(`Moved ${result.moved.length} archive(s) to Downloads/: ${result.moved.join(', ')}`, 'success');
+      }
+    } catch (err: unknown) {
+      addLog(`Cleanup archives failed: ${errMsg(err)}`, 'error');
     } finally {
       setLoading(false);
     }
   }, [addonPath, addLog]);
+
+  const handleCleanupBackups = useCallback(async () => {
+    if (!addonPath) return;
+    try {
+      const list = await window.electronAPI.listAddonBackups(addonPath);
+      setBackupCleanupBackups(list);
+    } catch (err: unknown) {
+      addLog(`Failed to list backups: ${errMsg(err)}`, 'error');
+    }
+  }, [addonPath, addLog]);
+
+  const handleCleanupBackupsConfirm = useCallback(async (backupPaths: string[]) => {
+    setBackupCleanupBackups(null);
+    if (backupPaths.length === 0) return;
+    try {
+      const deleted = await window.electronAPI.deleteAddonBackups(backupPaths);
+      addLog(`Deleted ${deleted} old backup(s)`, 'success');
+    } catch (err: unknown) {
+      addLog(`Backup cleanup failed: ${errMsg(err)}`, 'error');
+    }
+  }, [addLog]);
 
   // Install/reinstall an addon from the catalog (used by tree items)
   const handleInstallAddon = useCallback(
@@ -954,14 +1194,15 @@ function App() {
       try {
         // Backup existing addon if it's an update
         const existingAddon = addons.find((a) => catalogAddon.directories.includes(a.folderName));
+        let backupPath = '';
+        const backupFolder = existingAddon?.folderName || '';
         if (existingAddon && existingAddon.version) {
-          await window.electronAPI.backupAddonFolder(addonPath, existingAddon.folderName, existingAddon.version);
+          backupPath = await window.electronAPI.backupAddonFolder(addonPath, existingAddon.folderName, existingAddon.version);
         }
         const result = await window.electronAPI.installAddon(catalogAddon.id, addonPath);
         if (result.error) {
           addLog(`Failed to install "${catalogAddon.name}": ${result.error}`, 'error');
         } else {
-          addLog(`Installed "${catalogAddon.name}" (${result.installed.join(', ')})`, 'success');
           if (result.missingDeps.length > 0) {
             addLog(`Missing dependencies: ${result.missingDeps.join(', ')}`, 'warn');
           }
@@ -969,46 +1210,70 @@ function App() {
           setInstalledCatalogVersions(prev => ({ ...prev, [catalogAddon.id]: catalogAddon.version }));
           window.electronAPI.saveInstalledVersions({ [catalogAddon.id]: catalogAddon.version });
           scanPath(addonPath);
+          // Log with Revert button if this was an update (backup exists)
+          const revertAction = backupPath && backupFolder ? {
+            label: '↩ Undo',
+            onClick: async () => {
+              try {
+                const ok = await window.electronAPI.restoreAddonBackup(addonPath, backupFolder, backupPath);
+                if (ok) {
+                  addLog(`Restored "${backupFolder}" to previous version`, 'success');
+                  scanPath(addonPath);
+                } else {
+                  addLog('Restore failed: backup not found', 'error');
+                }
+              } catch (e: unknown) { addLog(`Restore failed: ${errMsg(e)}`, 'error'); }
+            },
+          } : undefined;
+          setLogs((prev) => [...prev, { timestamp: new Date(), message: `Installed "${catalogAddon.name}" (${result.installed.join(', ')})`, level: 'success' as const, action: revertAction }]);
         }
-      } catch (err: any) {
-        addLog(`Error installing "${catalogAddon.name}": ${err.message || err}`, 'error');
+      } catch (err: unknown) {
+        addLog(`Error installing "${catalogAddon.name}": ${errMsg(err)}`, 'error');
       } finally {
         setInstallingAddon(null);
       }
     },
-    [addonPath, addLog, scanPath]
+    [addonPath, addons, addLog, scanPath]
   );
 
   // Simple delete (no savedvars) for inline delete button
   const handleSimpleDelete = useCallback(
     (folderName: string) => {
-      handleDeleteAddon(folderName);
+      const addon = addons.find(a => a.folderName === folderName);
+      const title = addon?.title || folderName;
+      setDeleteConfirm({ folderName, title, action: () => handleDeleteAddon(folderName) });
     },
-    [handleDeleteAddon]
+    [addons, handleDeleteAddon]
   );
 
   // Delete + SavedVariables
   const handleDeleteWithSV = useCallback(
     (folderName: string) => {
-      handleDeleteAddon(folderName, true);
+      const addon = addons.find(a => a.folderName === folderName);
+      const title = addon?.title || folderName;
+      setDeleteConfirm({ folderName, title: `${title} + SavedVariables`, action: () => handleDeleteAddon(folderName, true) });
     },
-    [handleDeleteAddon]
+    [addons, handleDeleteAddon]
   );
 
   // Delete + exclusive refs
   const handleDeleteAndRefsSimple = useCallback(
     (folderName: string) => {
-      handleDeleteAddonAndRefs(folderName);
+      const addon = addons.find(a => a.folderName === folderName);
+      const title = addon?.title || folderName;
+      setDeleteConfirm({ folderName, title: `${title} + exclusive refs`, action: () => handleDeleteAddonAndRefs(folderName) });
     },
-    [handleDeleteAddonAndRefs]
+    [addons, handleDeleteAddonAndRefs]
   );
 
   // Delete + refs + SavedVariables
   const handleDeleteAndRefsWithSV = useCallback(
     (folderName: string) => {
-      handleDeleteAddonAndRefs(folderName, true);
+      const addon = addons.find(a => a.folderName === folderName);
+      const title = addon?.title || folderName;
+      setDeleteConfirm({ folderName, title: `${title} + refs + SavedVariables`, action: () => handleDeleteAddonAndRefs(folderName, true) });
     },
-    [handleDeleteAddonAndRefs]
+    [addons, handleDeleteAddonAndRefs]
   );
 
   // Resize log panel by dragging — persist on finish
@@ -1183,25 +1448,25 @@ function App() {
         items.push({
           label: `Delete "${addon.title}"`,
           danger: true,
-          onClick: () => handleDeleteAddon(addon.folderName),
+          onClick: () => setDeleteConfirm({ folderName: addon.folderName, title: addon.title, action: () => handleDeleteAddon(addon.folderName) }),
         });
         if (hasSV) {
           items.push({
             label: `Delete "${addon.title}" + SavedVariables`,
             danger: true,
-            onClick: () => handleDeleteAddon(addon.folderName, true),
+            onClick: () => setDeleteConfirm({ folderName: addon.folderName, title: `${addon.title} + SavedVariables`, action: () => handleDeleteAddon(addon.folderName, true) }),
           });
         }
         items.push({
           label: `Delete "${addon.title}" and exclusive refs`,
           danger: true,
-          onClick: () => handleDeleteAddonAndRefs(addon.folderName),
+          onClick: () => setDeleteConfirm({ folderName: addon.folderName, title: `${addon.title} + exclusive refs`, action: () => handleDeleteAddonAndRefs(addon.folderName) }),
         });
         if (hasSV) {
           items.push({
             label: `Delete "${addon.title}" + refs + SavedVariables`,
             danger: true,
-            onClick: () => handleDeleteAddonAndRefs(addon.folderName, true),
+            onClick: () => setDeleteConfirm({ folderName: addon.folderName, title: `${addon.title} + refs + SavedVariables`, action: () => handleDeleteAddonAndRefs(addon.folderName, true) }),
           });
         }
         return items;
@@ -1228,6 +1493,7 @@ function App() {
         onCleanup={handleCleanup}
         onCleanupSettings={handleCleanupSettings}
         onCleanupDownloads={handleCleanupDownloads}
+        onCleanupBackups={handleCleanupBackups}
         onUpdateAll={handleUpdateAll}
         onGoBack={handleGoBack}
         onImportExport={() => setShowImportExport(true)}
@@ -1300,7 +1566,7 @@ function App() {
             );
           })()}
         </TreePanel>
-        <div className="panel-resize-handle" onMouseDown={(e) => handlePanelResizeStart(0, e)} />
+        <div className="panel-resize-handle" onMouseDown={(e) => handlePanelResizeStart(0, e)} title="Drag to resize" />
         <TreePanel title="Libraries" count={filteredLibraries.length} scrollRef={libsScrollRef} flex={panelWidths[1]} onKeyDown={handleLibsKeyDown} searchQuery={libSearchQuery} onSearchChange={setLibSearchQuery} characters={characterNames} characterFilter={libCharFilter} onCharacterFilterChange={setLibCharFilter} hasPendingChanges={pendingCharSettings.size > 0} onSave={handleSaveCharSettings}>
           {filteredLibraries.length === 0 && !loading ? (
             <div className="empty-state">
@@ -1349,7 +1615,7 @@ function App() {
             );
           })()}
         </TreePanel>
-        <div className="panel-resize-handle" onMouseDown={(e) => handlePanelResizeStart(1, e)} />
+        <div className="panel-resize-handle" onMouseDown={(e) => handlePanelResizeStart(1, e)} title="Drag to resize" />
         <OnlineBrowser
           flex={panelWidths[2]}
           installedDirNames={installedDirNames}
@@ -1369,7 +1635,7 @@ function App() {
           checkUpdateAvailable={isUpdateAvailable}
         />
       </div>
-      <div className="log-resize-handle" onMouseDown={handleLogResizeStart} />
+      <div className="log-resize-handle" onMouseDown={handleLogResizeStart} title="Drag to resize" />
       <LogPanel logs={logs} height={logHeight} knownNames={knownAddonNames} onNavigate={handleNavigate} onClear={handleClearLogs} />
       {contextMenu && (
         <ContextMenu
@@ -1421,13 +1687,54 @@ function App() {
         <SettingsDialog
           fontSize={fontSize}
           fontFamily={fontFamily}
+          skipCleanupConfirm={skipCleanupConfirm}
           onApply={(s) => {
             setFontSize(s.fontSize);
             setFontFamily(s.fontFamily);
-            window.electronAPI.saveUiSettings({ fontSize: s.fontSize, fontFamily: s.fontFamily });
+            setSkipCleanupConfirm(s.skipCleanupConfirm);
+            window.electronAPI.saveUiSettings({ fontSize: s.fontSize, fontFamily: s.fontFamily, skipCleanupConfirm: s.skipCleanupConfirm });
           }}
           onClose={() => setShowSettings(false)}
         />
+      )}
+      {cleanupDialog && (
+        <CleanupDialog
+          type={cleanupDialog.type}
+          items={cleanupDialog.items}
+          savedVarItems={cleanupDialog.savedVarItems}
+          onConfirm={(items, svItems) => {
+            if (cleanupDialog.type === 'libs') handleCleanupLibsConfirm(items);
+            else if (cleanupDialog.type === 'settings') handleCleanupSettingsConfirm(items, svItems);
+            else if (cleanupDialog.type === 'downloads') handleCleanupDownloadsConfirm(items);
+          }}
+          onCancel={() => setCleanupDialog(null)}
+        />
+      )}
+      {backupCleanupBackups && (
+        <BackupCleanupDialog
+          backups={backupCleanupBackups}
+          onConfirm={handleCleanupBackupsConfirm}
+          onCancel={() => setBackupCleanupBackups(null)}
+        />
+      )}
+      {deleteConfirm && (
+        <div className="unsaved-overlay">
+          <div className="restore-dialog" style={{ width: 'min(400px, 90vw)' }} onClick={(e) => e.stopPropagation()}>
+            <div className="restore-header">
+              <div className="restore-title">⚠️ Confirm Delete</div>
+            </div>
+            <div className="restore-content" style={{ padding: '16px 20px' }}>
+              <p>Delete "<strong>{deleteConfirm.title}</strong>"?</p>
+              <p style={{ fontSize: '12px', opacity: 0.7 }}>The addon will be moved to the Removed/ folder.</p>
+            </div>
+            <div className="settings-actions" style={{ padding: '12px 16px' }}>
+              <button className="restore-btn" onClick={() => setDeleteConfirm(null)}>Cancel</button>
+              <button className="restore-btn ie-action-btn" style={{ background: 'var(--danger, #e53935)' }} onClick={() => { deleteConfirm.action(); setDeleteConfirm(null); }}>
+                Delete
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

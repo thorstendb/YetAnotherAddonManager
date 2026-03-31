@@ -28,7 +28,7 @@ const TreePanel: React.FC<TreePanelProps> = ({ title, count, children, scrollRef
       </div>
       {onSearchChange != null && (
         <div className="tree-search-bar">
-          <span className="tree-search-icon">🔍</span>
+          <span className="tree-search-icon" title="Search">🔍</span>
           <input
             type="text"
             className="tree-search-input"
@@ -64,7 +64,7 @@ const TreePanel: React.FC<TreePanelProps> = ({ title, count, children, scrollRef
           )}
         </div>
       )}
-      <div className="tree-scroll" ref={scrollRef as any} tabIndex={0} onKeyDown={onKeyDown}>{children}</div>
+      <div className="tree-scroll" ref={scrollRef ?? null} tabIndex={0} onKeyDown={onKeyDown}>{children}</div>
     </div>
   );
 };

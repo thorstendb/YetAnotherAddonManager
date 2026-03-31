@@ -2,31 +2,40 @@ import { describe, it, expect } from 'vitest';
 import { parseVersionParts, compareVersionStrings } from '../../electron/shared/types';
 import testData from '../../electron/shared/version-test-data.json';
 
+interface ParseTest {
+  pattern: string; input: string; addon: string;
+  expectedParts: number[]; expectedSubParts: number[];
+  expectedPreRelease?: string; expectedPreReleaseNum?: number;
+}
+interface CompareTest {
+  description: string; a: string; b: string; expected: string;
+  catalogDate?: number;
+}
+
 describe('parseVersionParts – real-world addon versions', () => {
-  for (const t of testData.parseTests) {
+  for (const t of testData.parseTests as ParseTest[]) {
     it(`[${t.pattern}] "${t.input}" (${t.addon})`, () => {
       const result = parseVersionParts(t.input);
 
       expect(result.parts).toEqual(t.expectedParts);
       expect(result.subParts).toEqual(t.expectedSubParts);
 
-      if ('expectedPreRelease' in t) {
-        expect(result.preRelease).toBe((t as any).expectedPreRelease);
+      if (t.expectedPreRelease !== undefined) {
+        expect(result.preRelease).toBe(t.expectedPreRelease);
       }
-      if ('expectedPreReleaseNum' in t) {
-        expect(result.preReleaseNum).toBe((t as any).expectedPreReleaseNum);
+      if (t.expectedPreReleaseNum !== undefined) {
+        expect(result.preReleaseNum).toBe(t.expectedPreReleaseNum);
       }
     });
   }
 });
 
 describe('compareVersionStrings – real-world addon versions', () => {
-  for (const t of testData.compareTests) {
-    const catalogDate = (t as any).catalogDate as number | undefined;
-    const label = catalogDate ? `${t.description} [+catalogDate]` : t.description;
+  for (const t of testData.compareTests as CompareTest[]) {
+    const label = t.catalogDate ? `${t.description} [+catalogDate]` : t.description;
 
     it(label, () => {
-      const result = compareVersionStrings(t.a, t.b, catalogDate);
+      const result = compareVersionStrings(t.a, t.b, t.catalogDate);
 
       if (t.expected === 'a<b') {
         expect(result).toBeLessThan(0);

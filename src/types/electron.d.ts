@@ -67,9 +67,9 @@ declare global {
       cleanupDownloads: (
         addonsPath: string
       ) => Promise<{ moved: string[]; error?: string }>;
-      saveUiSettings: (settings: { logHeight?: number; panelWidths?: number[]; fontSize?: number; fontFamily?: string }) => Promise<AppConfig>;
+      saveUiSettings: (settings: { logHeight?: number; panelWidths?: number[]; fontSize?: number; fontFamily?: string; skipCleanupConfirm?: boolean }) => Promise<AppConfig>;
       saveInstalledVersions: (versions: Record<string, string>) => Promise<void>;
-      onInstallProgress: (callback: (data: { addonId: string; phase: string; percent?: number }) => void) => () => void;
+      onInstallProgress: (callback: (data: { addonId: string; phase: string; percent?: number; current?: number; total?: number }) => void) => () => void;
       onExportProgress: (callback: (data: { phase: string; percent: number }) => void) => () => void;
       acceptWelcome: () => Promise<AppConfig>;
       quitApp: () => Promise<void>;
@@ -80,9 +80,10 @@ declare global {
       respondUnsavedDialog: (choice: 'save' | 'discard' | 'cancel') => void;
       saveSnapshot: (addonsPath: string, addons: SnapshotAddon[]) => Promise<AddonSnapshot | null>;
       listSnapshots: (addonsPath: string) => Promise<AddonSnapshot[]>;
-      listAddonBackups: (addonsPath: string) => Promise<{ folderName: string; version: string; backupPath: string }[]>;
+      listAddonBackups: (addonsPath: string) => Promise<{ folderName: string; version: string; backupPath: string; sizeBytes: number }[]>;
       restoreAddonBackup: (addonsPath: string, folderName: string, backupPath: string) => Promise<boolean>;
       backupAddonFolder: (addonsPath: string, folderName: string, version: string) => Promise<string>;
+      deleteAddonBackups: (backupPaths: string[]) => Promise<number>;
       listSvBackups: (addonsPath: string) => Promise<SvBackupEntry[]>;
       restoreSvFile: (addonsPath: string, backupFilePath: string) => Promise<{ restored: boolean; fileName: string; error?: string }>;
       openInExplorer: (fullPath: string) => Promise<void>;
@@ -102,6 +103,17 @@ declare global {
         addonIds: string[]
       ) => Promise<{ addonId: string; installed: string[]; error?: string }[]>;
       getSystemFonts: () => Promise<string[]>;
+      previewCleanupLibs: (addonsPath: string) => Promise<string[]>;
+      cleanupLibsSelected: (addonsPath: string, folderNames: string[]) => Promise<{ moved: string[]; addons: AddonInfo[] }>;
+      previewCleanupSettings: (addonsPath: string, existingAddonNames: string[]) => Promise<{ orphanedSettings: string[]; orphanedSavedVars: string[] }>;
+      cleanupSettingsSelected: (
+        addonsPath: string,
+        existingAddonNames: string[],
+        settingsToRemove: string[],
+        savedVarsToRemove: string[]
+      ) => Promise<{ removedFromSettings: string[]; removedSavedVars: string[]; backupPath: string; svBackupDir: string; error?: string }>;
+      previewCleanupDownloads: (addonsPath: string) => Promise<string[]>;
+      cleanupDownloadsSelected: (addonsPath: string, fileNames: string[]) => Promise<{ moved: string[] }>;
     };
   }
 }

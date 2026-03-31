@@ -191,57 +191,81 @@ export async function installAddon(
       .map((d) => d.name)
   );
 
-  try {
-    // Resolve the real CDN download URL from the ESOUI download page
-    onProgress?.('resolving');
-    const downloadUrl = await resolveDownloadUrl(addonId);
-    onProgress?.('downloading', 0);
-    await downloadFile(downloadUrl, zipPath, 5, (received, total) => {
-      onProgress?.('downloading', Math.round((received / total) * 100));
-    });
+  // Resolve the real CDN download URL from the ESOUI download page
+  onProgress?.('resolving');
+  const downloadUrl = await resolveDownloadUrl(addonId);
+  onProgress?.('downloading', 0);
+  await downloadFile(downloadUrl, zipPath, 5, (received, total) => {
+    onProgress?.('downloading', Math.round((received / total) * 100));
+  });
 
-    // Extract ZIP using adm-zip with per-entry progress
-    onProgress?.('extracting', 0);
-    const zip = new AdmZip(zipPath);
-    const entries = zip.getEntries();
-    const totalEntries = entries.length;
-    for (let i = 0; i < totalEntries; i++) {
-      const entry = entries[i];
-      if (!entry.isDirectory) {
-        zip.extractEntryTo(entry, addonsPath, true, true);
-      }
-      onProgress?.('extracting', Math.round(((i + 1) / totalEntries) * 100));
+  // Extract ZIP using extractAllTo to avoid path sanitization issues
+  // with folder names containing hyphens, dots, or numbers (e.g. LibAddonMenu-2.0)
+  onProgress?.('extracting', 0);
+  const zip = new AdmZip(zipPath);
+  zip.extractAllTo(addonsPath, true);
+  onProgress?.('extracting', 100);
+
+  // Find newly created directories
+  const afterDirs = fs.readdirSync(addonsPath, { withFileTypes: true })
+    .filter((d) => d.isDirectory())
+    .map((d) => d.name);
+  const newDirs = afterDirs.filter((d) => !existingDirs.has(d));
+
+  // Scan newly installed addons for dependencies
+  const allAddons = scanAddonsFolder(addonsPath);
+  const installedAddons = allAddons.filter((a) => newDirs.includes(a.folderName));
+
+  // Collect all required dependencies
+  const requiredDeps = new Set<string>();
+  for (const addon of installedAddons) {
+    for (const dep of addon.dependsOn) {
+      requiredDeps.add(dep.name);
     }
-
-    // Find newly created directories
-    const afterDirs = fs.readdirSync(addonsPath, { withFileTypes: true })
-      .filter((d) => d.isDirectory())
-      .map((d) => d.name);
-    const newDirs = afterDirs.filter((d) => !existingDirs.has(d));
-
-    // Scan newly installed addons for dependencies
-    const allAddons = scanAddonsFolder(addonsPath);
-    const installedAddons = allAddons.filter((a) => newDirs.includes(a.folderName));
-
-    // Collect all required dependencies
-    const requiredDeps = new Set<string>();
-    for (const addon of installedAddons) {
-      for (const dep of addon.dependsOn) {
-        requiredDeps.add(dep.name);
-      }
-    }
-
-    // Check which deps are missing
-    const installedNames = new Set(allAddons.map((a) => a.folderName));
-    const installedTitles = new Set(allAddons.map((a) => a.title));
-    const missingDeps = Array.from(requiredDeps).filter(
-      (depName) => !depName.startsWith('ZO_') && !installedNames.has(depName) && !installedTitles.has(depName)
-    );
-
-    return { installed: newDirs, missingDeps };
-  } finally {
-    // Keep the zip in Downloads/ — don't delete it
   }
+
+  // Check which deps are missing
+  const installedNames = new Set(allAddons.map((a) => a.folderName));
+  const installedTitles = new Set(allAddons.map((a) => a.title));
+  const missingDeps = Array.from(requiredDeps).filter(
+    (depName) => !depName.startsWith('ZO_') && !installedNames.has(depName) && !installedTitles.has(depName)
+  );
+
+  return { installed: newDirs, missingDeps };
+}
+
+/**
+ * Preview .zip files in the top-level AddOns folder that would be moved.
+ */
+export function previewCleanupDownloads(addonsPath: string): string[] {
+  const entries = fs.readdirSync(addonsPath, { withFileTypes: true });
+  return entries
+    .filter((e) => e.isFile() && e.name.toLowerCase().endsWith('.zip'))
+    .map((e) => e.name)
+    .sort();
+}
+
+/**
+ * Move selected .zip files from the top-level AddOns folder into the Downloads subfolder.
+ */
+export function cleanupDownloadsSelected(addonsPath: string, fileNames: string[]): { moved: string[] } {
+  const downloadsDir = getDownloadsDir(addonsPath);
+  const moved: string[] = [];
+  for (const name of fileNames) {
+    const src = path.join(addonsPath, name);
+    if (!fs.existsSync(src)) continue;
+    const dest = path.join(downloadsDir, name);
+    if (fs.existsSync(dest)) {
+      const ts = new Date().toISOString().replace(/[:.]/g, '-').replace('T', '_').slice(0, 19);
+      const ext = path.extname(name);
+      const base = path.basename(name, ext);
+      fs.renameSync(src, path.join(downloadsDir, `${base}_${ts}${ext}`));
+    } else {
+      fs.renameSync(src, dest);
+    }
+    moved.push(name);
+  }
+  return { moved };
 }
 
 /**

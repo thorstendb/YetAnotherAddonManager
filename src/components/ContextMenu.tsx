@@ -45,10 +45,12 @@ const ContextMenu: React.FC<ContextMenuProps> = ({ x, y, items, onClose }) => {
   };
 
   return (
-    <div className="context-menu" style={style} ref={menuRef}>
+    <div className="context-menu" style={style} ref={menuRef} role="menu">
       {items.map((item, i) => (
         <div
           key={i}
+          role="menuitem"
+          aria-disabled={item.disabled || false}
           className={`context-menu-item ${item.danger ? 'danger' : ''} ${item.disabled ? 'disabled' : ''}`}
           onClick={() => {
             if (!item.disabled) {
