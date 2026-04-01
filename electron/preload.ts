@@ -141,7 +141,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     addonsPath: string,
     addonList: { folderName: string; catalogId?: string; version: string; isLibrary: boolean }[],
     bundleFolders?: string[],
-    exportOptions?: { includeAddonSettings?: boolean; includeSavedVars?: boolean; includeUserSettings?: boolean }
+    exportOptions?: { includeAddonSettings?: boolean; includeSavedVars?: boolean; includeUserSettings?: boolean; excludeRuntimeFiles?: Record<string, string[]> }
   ): Promise<{ filePath?: string; size?: number; canceled?: boolean; error?: string }> =>
     ipcRenderer.invoke(IPC_CHANNELS.EXPORT_PROFILE_ZIP, addonsPath, addonList, bundleFolders, exportOptions),
   importProfile: (
@@ -156,7 +156,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   importProfileFromZip: (
     addonsPath: string,
     zipPath: string,
-    options?: { importAddonSettings?: boolean; importUserSettings?: boolean; savedVarFilter?: Record<string, boolean> }
+    options?: { importAddonSettings?: boolean; importUserSettings?: boolean; savedVarFilter?: Record<string, boolean>; addonFilter?: Record<string, boolean> }
   ): Promise<{ addonsToInstall: { folderName: string; catalogId?: string; isLibrary: boolean }[]; restoredSettings: string[]; restoredBundles: string[]; errors: string[] }> =>
     ipcRenderer.invoke(IPC_CHANNELS.IMPORT_PROFILE_ZIP, addonsPath, zipPath, options),
   batchInstallAddons: (

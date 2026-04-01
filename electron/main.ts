@@ -9,7 +9,7 @@ import { loadConfig, saveConfig } from './configStore';
 import { scanAddonsFolder, cleanupUnusedLibraries, deleteAddon, deleteAddonAndExclusiveRefs, previewUnusedLibraries, cleanupSelectedLibraries, reconcileYaamMetadata, ReconcileMatch } from './addonScanner';
 import { fetchAddonCatalog, fetchAddonDetails, fetchCategories, installAddon, cleanupDownloadsFolder, previewCleanupDownloads, cleanupDownloadsSelected } from './addonCatalogApi';
 import { parseAddonSettings, setAddonSetting, batchSetAddonSettings, getSavedVarsInfo, deleteSavedVars, cleanupSettings, undoCleanupSettings, listSavedVarsBackups, restoreSavedVarsFile, exportProfile, importProfile, exportProfileAsZip, previewProfileZip, importProfileFromZip, ExportData, previewCleanupSettings, cleanupSettingsSelected } from './settingsManager';
-import { saveSnapshotIfChanged, listSnapshots, listAddonBackups, restoreAddonFromBackup, backupAddonFolder, deleteAddonBackups, getDirSize, SnapshotAddon } from './snapshotManager';
+import { saveSnapshotIfChanged, listSnapshots, listAddonBackups, restoreAddonFromBackup, backupAddonFolder, deleteAddonBackups, SnapshotAddon } from './snapshotManager';
 import { migrateFromFolderFiles, getAllEntries, getYaamDir } from './yaamDatabase';
 
 /** Extract error message from unknown catch value */
@@ -485,7 +485,7 @@ ipcMain.handle(IPC_CHANNELS.EXPORT_PROFILE_ZIP, async (
   addonsPath: string,
   addonList: { folderName: string; catalogId?: string; version: string; isLibrary: boolean }[],
   bundleFolders?: string[],
-  exportOptions?: { includeAddonSettings?: boolean; includeSavedVars?: boolean; includeUserSettings?: boolean }
+  exportOptions?: { includeAddonSettings?: boolean; includeSavedVars?: boolean; includeUserSettings?: boolean; excludeRuntimeFiles?: Record<string, string[]> }
 ) => {
   try {
     const buf = exportProfileAsZip(addonsPath, addonList, bundleFolders, exportOptions, (phase, percent) => {
@@ -521,7 +521,7 @@ ipcMain.handle(IPC_CHANNELS.IMPORT_PROFILE_ZIP, async (
   _event,
   addonsPath: string,
   zipPath: string,
-  options?: { importAddonSettings?: boolean; importUserSettings?: boolean; savedVarFilter?: Record<string, boolean> }
+  options?: { importAddonSettings?: boolean; importUserSettings?: boolean; savedVarFilter?: Record<string, boolean>; addonFilter?: Record<string, boolean> }
 ) => {
   try {
     return importProfileFromZip(addonsPath, zipPath, options);
