@@ -195,6 +195,57 @@ function App() {
       // Clear recently-updated tracking since we have fresh data
       setRecentlyUpdated(new Set());
 
+      // Reconcile central YAAM addon database with catalog matches
+      if (onlineList.length > 0) {
+        // Build quick lookup maps from the fresh catalog
+        const catById = new Map<string, CatalogAddon>();
+        const catByUrl = new Map<string, CatalogAddon>();
+        const catByDir = new Map<string, CatalogAddon>();
+        const dirCount = new Map<string, number>();
+        for (const ca of onlineList) {
+          catById.set(ca.id, ca);
+          if (ca.infoUrl) catByUrl.set(ca.infoUrl.toLowerCase(), ca);
+          for (const d of ca.directories) {
+            catByDir.set(d, ca);
+            dirCount.set(d, (dirCount.get(d) || 0) + 1);
+          }
+        }
+
+        const matches: { folderName: string; esouid: string; name: string; author: string; version: string; url: string; localVersion: string; confident: boolean }[] = [];
+        for (const addon of results) {
+          // Priority: DB entry > catalogId > URL > directory
+          const byMeta = addon.yaamMeta?.esouid ? catById.get(addon.yaamMeta.esouid) : undefined;
+          const byId = addon.catalogId ? catById.get(addon.catalogId) : undefined;
+          const byUrl = addon.downloadUrl ? catByUrl.get(addon.downloadUrl.toLowerCase()) : undefined;
+          const byDir = catByDir.get(addon.folderName);
+
+          const best = byMeta ?? byId ?? byUrl ?? byDir;
+          if (!best) continue;
+
+          // Confident = matched by DB entry, catalogId, URL, or unambiguous directory
+          const confident = !!(byMeta || byId || byUrl || (byDir && (dirCount.get(addon.folderName) || 0) <= 1));
+          matches.push({
+            folderName: addon.folderName,
+            esouid: best.id,
+            name: best.name,
+            author: best.author,
+            version: best.version,
+            url: best.infoUrl,
+            localVersion: addon.version,
+            confident,
+          });
+        }
+
+        if (matches.length > 0) {
+          window.electronAPI.reconcileYaamMeta(pathToScan, matches).then(res => {
+            if (res.created > 0 || res.updated > 0) {
+              addLog(`Database reconciled: ${res.created} created, ${res.updated} updated`, 'info');
+              for (const d of res.details) addLog(`  ${d}`, 'info');
+            }
+          }).catch(() => {});
+        }
+      }
+
       // Save a snapshot of the current addon state (only if changed)
       const snapshotAddons = results.map((a: AddonInfo) => ({ folderName: a.folderName, version: a.version }));
       window.electronAPI.saveSnapshot(pathToScan, snapshotAddons).catch(() => {});
@@ -325,11 +376,13 @@ function App() {
   }, [catalogAddons]);
 
   /** Look up the catalog entry for an installed addon.
-   *  Priority:  1. UID  2. URL  3. Title  4. Directory name
+   *  Priority:  0. YAAM database entry  1. UID  2. URL  3. Title  4. Directory name
    *  Returns { catalogAddon, ambiguous } where ambiguous is true when the
    *  match method is uncertain or different methods point to different entries. */
   const getCatalogMatch = useCallback(
     (addon: AddonInfo): { catalogAddon: CatalogAddon; ambiguous: boolean } | undefined => {
+      // 0. YAAM database entry (written by YAAM on install — most reliable)
+      const byMeta = addon.yaamMeta?.esouid ? catalogById.get(addon.yaamMeta.esouid) : undefined;
       // 1. UID from manifest URL (always unique in the catalog)
       const byId = addon.catalogId ? catalogById.get(addon.catalogId) : undefined;
       // 2. Full URL match (normalized comparison)
@@ -342,22 +395,23 @@ function App() {
       const byDir = catalogByDir.get(addon.folderName);
 
       // Pick the best match (first non-undefined in priority order)
-      const best = byId ?? byUrl ?? byName ?? byDir;
+      const best = byMeta ?? byId ?? byUrl ?? byName ?? byDir;
       if (!best) return undefined;
 
       // Cross-check: do the other methods agree or contradict?
-      const candidates = [byId, byUrl, byName, byDir].filter(Boolean) as CatalogAddon[];
+      const candidates = [byMeta, byId, byUrl, byName, byDir].filter(Boolean) as CatalogAddon[];
       const allAgree = candidates.every(c => c.id === best.id);
 
       // Ambiguous when:
       //  - different methods point to different catalog entries, OR
       //  - matched only by name that has conflicts (multiple entries share it), OR
       //  - matched only by dir that has conflicts
+      const matchedByMeta = !!byMeta;
       const matchedById = !!byId;
       const matchedByUrl = !!byUrl;
       const ambiguous = !allAgree
-        || (!matchedById && !matchedByUrl && byName && catalogNameConflicts.has(best.name))
-        || (!matchedById && !matchedByUrl && !byName && byDir && catalogDirConflicts.has(addon.folderName));
+        || (!matchedByMeta && !matchedById && !matchedByUrl && byName && catalogNameConflicts.has(best.name))
+        || (!matchedByMeta && !matchedById && !matchedByUrl && !byName && byDir && catalogDirConflicts.has(addon.folderName));
 
       return { catalogAddon: best, ambiguous: !!ambiguous };
     },
@@ -393,6 +447,40 @@ function App() {
     }
     return set;
   }, [addons, getCatalogAddon]);
+
+  /** Detect replacement candidates: a different catalog addon now targets the
+   *  same folder (e.g. "BindAll" was installed from ID 123 but ID 456 also
+   *  lists "BindAll" in its directories). Returns Map<folderName, CatalogAddon>. */
+  const replacementCandidates = useMemo(() => {
+    const map = new Map<string, CatalogAddon>();
+    if (catalogAddons.length === 0) return map;
+    // Build dir → all catalog entries mapping
+    const dirToAll = new Map<string, CatalogAddon[]>();
+    for (const ca of catalogAddons) {
+      for (const d of ca.directories) {
+        const list = dirToAll.get(d) || [];
+        list.push(ca);
+        dirToAll.set(d, list);
+      }
+    }
+    for (const addon of addons) {
+      const currentMatch = getCatalogAddon(addon);
+      const currentId = currentMatch?.id || addon.yaamMeta?.esouid;
+      if (!currentId) continue;
+      const candidates = dirToAll.get(addon.folderName);
+      if (!candidates || candidates.length <= 1) continue;
+      // Find a different catalog entry targeting the same folder
+      // Prefer the one with higher downloads (more likely the maintained fork)
+      for (const ca of candidates) {
+        if (ca.id === currentId) continue;
+        const existing = map.get(addon.folderName);
+        if (!existing || ca.totalDownloads > existing.totalDownloads) {
+          map.set(addon.folderName, ca);
+        }
+      }
+    }
+    return map;
+  }, [addons, catalogAddons, getCatalogAddon]);
 
   // Set of all known addon names (folder names + titles) for dependency checking
   const knownAddonNames = useMemo(() => new Set(addonMap.keys()), [addonMap]);
@@ -624,6 +712,10 @@ function App() {
       if (installedCatalogVersions[catalogAddon.id] === catalogAddon.version) return false;
       // Skip recently-updated addons (local version hasn't been rescanned yet)
       if (recentlyUpdated.has(catalogAddon.id)) return false;
+      // YAAM database records the exact catalog version at install time —
+      // if it matches the current catalog version, no update is needed
+      // regardless of what the local ## Version header says.
+      if (addon.yaamMeta?.catalogVersion === catalogAddon.version) return false;
       const localVer = getEffectiveVersion(addon, catalogAddon);
       return compareVersionStrings(localVer, catalogAddon.version, catalogAddon.date) < 0;
     },
@@ -641,8 +733,10 @@ function App() {
         if (isUpdateAvailable(addon, catalogAddon)) count++;
       }
     }
+    // Replacement candidates are shown in the Update All dialog but
+    // NOT counted as pending updates — the user must explicitly opt in.
     return count;
-  }, [addons, getCatalogAddon, isUpdateAvailable]);
+  }, [addons, getCatalogAddon, isUpdateAvailable, replacementCandidates]);
 
   // Set of folder names that have an update available (used for sorting to top)
   const updatableFolders = useMemo(() => {
@@ -660,8 +754,10 @@ function App() {
         }
       }
     }
+    // Replacement candidates are NOT marked as updatable in the tree —
+    // they only appear in the Update All dialog for explicit opt-in.
     return set;
-  }, [addons, getCatalogAddon, isUpdateAvailable]);
+  }, [addons, getCatalogAddon, isUpdateAvailable, replacementCandidates]);
 
   // --- Navigation ---
 
@@ -956,6 +1052,23 @@ function App() {
       }
     }
 
+    // Add replacement candidates (different catalog addon targets the same folder)
+    for (const [folderName, replacement] of replacementCandidates) {
+      if (seen.has(replacement.id)) continue;
+      seen.add(replacement.id);
+      const addon = addons.find(a => a.folderName === folderName);
+      if (!addon) continue;
+      updatable.push({
+        folderName,
+        title: addon.title,
+        localVersion: addon.version || '?',
+        catalogVersion: replacement.version,
+        catalogId: replacement.id,
+        replacement: true,
+        replacementName: replacement.name,
+      });
+    }
+
     if (updatable.length === 0) {
       addLog('Update All: nothing to update — all addons are up-to-date', 'info');
       return;
@@ -963,7 +1076,7 @@ function App() {
 
     // Show selection dialog
     setUpdateAllList(updatable);
-  }, [addons, addonPath, getCatalogMatch, addLog, updatingAll, isUpdateAvailable, getEffectiveVersion]);
+  }, [addons, addonPath, getCatalogMatch, addLog, updatingAll, isUpdateAvailable, getEffectiveVersion, replacementCandidates]);
 
   const handleUpdateAllConfirm = useCallback(async (selectedCatalogIds: string[]) => {
     setUpdateAllList(null);
@@ -1832,7 +1945,7 @@ function App() {
       {showImportExport && (
         <ImportExportDialog
           addonPath={addonPath}
-          addons={addons.map((a) => ({ folderName: a.folderName, version: a.version, isLibrary: a.isLibrary, dependsOn: a.dependsOn.map((d) => d.name) }))}
+          addons={addons.map((a) => ({ folderName: a.folderName, version: a.version, isLibrary: a.isLibrary, dependsOn: a.dependsOn.map((d) => d.name), runtimeFiles: a.runtimeFiles }))}
           catalogByDir={catalogLookup}
           onLog={addLog}
           onScanPath={scanPath}

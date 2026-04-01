@@ -94,11 +94,26 @@ declare global {
       exportProfile: (
         addonsPath: string,
         addonList: { folderName: string; catalogId?: string; version: string; isLibrary: boolean }[],
-        bundleFolders?: string[]
+        bundleFolders?: string[],
+        runtimeFilesMap?: Record<string, string[]>
       ) => Promise<ExportData | { error: string }>;
+      exportProfileAsZip: (
+        addonsPath: string,
+        addonList: { folderName: string; catalogId?: string; version: string; isLibrary: boolean }[],
+        bundleFolders?: string[],
+        exportOptions?: { includeAddonSettings?: boolean; includeSavedVars?: boolean; includeUserSettings?: boolean; excludeRuntimeFiles?: Record<string, string[]> }
+      ) => Promise<{ filePath?: string; size?: number; canceled?: boolean; error?: string }>;
       importProfile: (
         addonsPath: string,
         data: ExportData
+      ) => Promise<{ addonsToInstall: { folderName: string; catalogId?: string; isLibrary: boolean }[]; restoredSettings: string[]; restoredBundles: string[]; errors: string[] }>;
+      previewProfileZip: (
+        zipPath: string
+      ) => Promise<{ totalAddons: number; totalLibraries: number; bundledCount: number; hasSettings: boolean; hasUserSettings: boolean; savedVarsCount: number; savedVarFiles: string[]; exportedAt: string; addonList: { folderName: string; isLibrary: boolean }[]; error?: string }>;
+      importProfileFromZip: (
+        addonsPath: string,
+        zipPath: string,
+        options?: { importAddonSettings?: boolean; importUserSettings?: boolean; savedVarFilter?: Record<string, boolean>; addonFilter?: Record<string, boolean> }
       ) => Promise<{ addonsToInstall: { folderName: string; catalogId?: string; isLibrary: boolean }[]; restoredSettings: string[]; restoredBundles: string[]; errors: string[] }>;
       batchInstallAddons: (
         addonsPath: string,
@@ -116,6 +131,12 @@ declare global {
       ) => Promise<{ removedFromSettings: string[]; removedSavedVars: string[]; backupPath: string; svBackupDir: string; error?: string }>;
       previewCleanupDownloads: (addonsPath: string) => Promise<string[]>;
       cleanupDownloadsSelected: (addonsPath: string, fileNames: string[]) => Promise<{ moved: string[] }>;
+      writeClipboard: (text: string) => void;
+      reconcileYaamMeta: (
+        addonsPath: string,
+        matches: { folderName: string; esouid: string; name: string; author: string; version: string; url: string; localVersion: string; confident: boolean }[]
+      ) => Promise<{ created: number; updated: number; details: string[] }>;
+      getYaamDb: (addonsPath: string) => Promise<Record<string, { esouid: string; url: string; catalogName: string; catalogAuthor: string; catalogVersion: string; localVersion: string; installedAt: string; updatedAt: string }>>;
     };
   }
 }

@@ -96,7 +96,7 @@ const LogPanel: React.FC<LogPanelProps> = ({ logs, height, knownNames, onNavigat
             title="Copy selected text"
             onClick={() => {
               const text = window.getSelection()?.toString();
-              if (text) navigator.clipboard.writeText(text);
+              if (text) window.electronAPI.writeClipboard(text);
             }}
           >
             Copy Selected
@@ -108,7 +108,7 @@ const LogPanel: React.FC<LogPanelProps> = ({ logs, height, knownNames, onNavigat
               const text = logs
                 .map((e) => `[${e.timestamp.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}] ${e.message}`)
                 .join('\n');
-              navigator.clipboard.writeText(text);
+              window.electronAPI.writeClipboard(text);
             }}
           >
             Copy All

@@ -21,7 +21,7 @@ export interface AddonSnapshot {
  * Get the snapshots directory (Backup/Snapshots/ next to AddOns/).
  */
 function getSnapshotsDir(addonsPath: string): string {
-  const dir = path.join(path.dirname(addonsPath), 'Backup', 'Snapshots');
+  const dir = path.join(path.dirname(addonsPath), 'YAAM', 'Backup', 'Snapshots');
   fs.mkdirSync(dir, { recursive: true });
   return dir;
 }
@@ -30,7 +30,7 @@ function getSnapshotsDir(addonsPath: string): string {
  * Get the addon backup directory (Backup/AddOns/ next to AddOns/).
  */
 function getAddonBackupDir(addonsPath: string): string {
-  const dir = path.join(path.dirname(addonsPath), 'Backup', 'AddOns');
+  const dir = path.join(path.dirname(addonsPath), 'YAAM', 'Backup', 'AddOns');
   fs.mkdirSync(dir, { recursive: true });
   return dir;
 }

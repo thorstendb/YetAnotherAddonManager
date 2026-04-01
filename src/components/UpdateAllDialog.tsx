@@ -10,6 +10,10 @@ export interface UpdatableAddon {
   catalogId: string;
   /** True when match is not via catalogId — user should verify */
   ambiguous?: boolean;
+  /** True when a different catalog addon now targets the same folder (replacement/fork) */
+  replacement?: boolean;
+  /** Name of the replacement addon (for display) */
+  replacementName?: string;
 }
 
 interface UpdateAllDialogProps {
@@ -21,10 +25,11 @@ interface UpdateAllDialogProps {
 const UpdateAllDialog: React.FC<UpdateAllDialogProps> = ({ addons, onConfirm, onCancel }) => {
   const closeRef = useRef<HTMLButtonElement>(null);
 
-  const sure = addons.filter(a => !a.ambiguous);
-  const ambiguous = addons.filter(a => a.ambiguous);
+  const sure = addons.filter(a => !a.ambiguous && !a.replacement);
+  const ambiguous = addons.filter(a => a.ambiguous && !a.replacement);
+  const replacements = addons.filter(a => a.replacement);
 
-  // Default: all sure addons selected, all ambiguous deselected
+  // Default: all sure addons selected, replacements deselected, ambiguous deselected
   const [selected, setSelected] = useState<Set<string>>(
     () => new Set(sure.map(a => a.catalogId))
   );
@@ -53,7 +58,10 @@ const UpdateAllDialog: React.FC<UpdateAllDialogProps> = ({ addons, onConfirm, on
     <label key={addon.catalogId} className="cleanup-item" onClick={() => toggle(addon.catalogId)}>
       <input type="checkbox" checked={selected.has(addon.catalogId)} readOnly />
       <span>
-        {addon.title || addon.folderName}
+        {addon.replacement
+          ? <>{addon.folderName} <span style={{ opacity: 0.7 }}>→</span> <strong>{addon.replacementName}</strong></>
+          : (addon.title || addon.folderName)
+        }
         <span style={{ opacity: 0.7, marginLeft: '8px' }}>
           {addon.localVersion || '?'} → {addon.catalogVersion}
         </span>
@@ -85,6 +93,20 @@ const UpdateAllDialog: React.FC<UpdateAllDialogProps> = ({ addons, onConfirm, on
               </div>
               <div className="cleanup-items" style={{ maxHeight: 'none' }}>
                 {sure.map(renderRow)}
+                {replacements.length > 0 && (
+                  <>
+                    <div style={{
+                      borderTop: '1px solid var(--border-color, #555)',
+                      margin: '8px 0 4px',
+                      paddingTop: '6px',
+                      fontSize: '0.82em',
+                      opacity: 0.7,
+                    }}>
+                      🔄 Replacement available — a different addon now uses the same folder ({replacements.length})
+                    </div>
+                    {replacements.map(renderRow)}
+                  </>
+                )}
                 {ambiguous.length > 0 && (
                   <>
                     <div style={{

@@ -169,28 +169,28 @@ describe('compareVersionStrings', () => {
   // The HarvestMap-style problem: "49" vs "3.16.5"
 
   it('short→semver: single int "49" vs semver "3.16.5" (HarvestMap)', () => {
-    expect(compareVersionStrings('49', '3.16.5', 1762720907)).toBeLessThan(0);
+    expect(compareVersionStrings('49', '3.16.5', 1762720907)).toBe(0);
   });
 
   it('short→semver: large int "31605" vs semver "3.16.5"', () => {
-    expect(compareVersionStrings('31605', '3.16.5', 1762720907)).toBeLessThan(0);
+    expect(compareVersionStrings('31605', '3.16.5', 1762720907)).toBe(0);
   });
 
   it('short→semver: two-part "316.5" vs semver "3.16.5"', () => {
-    expect(compareVersionStrings('316.5', '3.16.5', 1762720907)).toBeLessThan(0);
+    expect(compareVersionStrings('316.5', '3.16.5', 1762720907)).toBe(0);
   });
 
   it('short→semver: two-part "1.2" vs semver "3.16.5"', () => {
-    expect(compareVersionStrings('1.2', '3.16.5', 1762720907)).toBeLessThan(0);
+    expect(compareVersionStrings('1.2', '3.16.5', 1762720907)).toBe(0);
   });
 
   it('semver→short: "3.16.5" vs "49" (reverse direction)', () => {
     // Catalog now publishes a single-int build number
-    expect(compareVersionStrings('3.16.5', '49', 1762720907)).toBeLessThan(0);
+    expect(compareVersionStrings('3.16.5', '49', 1762720907)).toBe(0);
   });
 
   it('semver→short: "1.2.3" vs "100" (reverse direction)', () => {
-    expect(compareVersionStrings('1.2.3', '100', 1762720907)).toBeLessThan(0);
+    expect(compareVersionStrings('1.2.3', '100', 1762720907)).toBe(0);
   });
 
   // ── No false positives: same-scheme with catalogDate present ──
@@ -276,7 +276,8 @@ describe('compareVersionStrings', () => {
   it('transition: short "49" → semver+pre "1.2.3-beta1"', () => {
     // "49" → [49] (short), "1.2.3-beta1" → [1,2,3]+pre (semver)
     // No pre-release prefix match since [49] != [1,2,3] prefix → scheme change
-    expect(compareVersionStrings('49', '1.2.3-beta1', 1774828800)).toBeLessThan(0);
+    // Scheme mismatch returns 0 (unknown); .yaam.json handles real updates
+    expect(compareVersionStrings('49', '1.2.3-beta1', 1774828800)).toBe(0);
   });
 
   // date→short

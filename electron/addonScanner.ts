@@ -2,7 +2,8 @@
 // SPDX-License-Identifier: MIT
 import * as fs from 'fs';
 import * as path from 'path';
-import { AddonInfo, DependencyRef, ColorSegment } from './shared/types';
+import { AddonInfo, DependencyRef, ColorSegment, YaamAddonEntry } from './shared/types';
+import { loadDatabase, saveDatabase, YaamDatabase } from './yaamDatabase';
 
 /**
  * Parse color codes from a string.
@@ -202,6 +203,8 @@ function parseManifest(
     allSavedVariableNames.push(...sub.savedVariables);
   }
 
+  // yaamMeta is injected after scan from the central database, not read per-folder
+
   return {
     folderName,
     title,
@@ -230,6 +233,7 @@ function parseManifest(
     manifestType: manifestExt,
     pcDependsOn: pcDeps,
     allSavedVariableNames,
+    yaamMeta: undefined, // injected from DB after scan
   };
 }
 
@@ -334,7 +338,54 @@ export function scanAddonsFolder(addonsPath: string): AddonInfo[] {
     }
   }
 
+  // Inject yaamMeta from the central database + detect runtime-created files
+  const db = loadDatabase(addonsPath);
+  for (const addon of addons) {
+    const entry = db.addons[addon.folderName];
+    if (entry?.esouid) {
+      addon.yaamMeta = entry;
+    }
+    // Detect runtime-created files if we have an install manifest
+    if (entry?.installedFiles) {
+      const runtimeFiles = detectRuntimeFiles(addonsPath, addon.folderName, entry.installedFiles);
+      if (runtimeFiles.length > 0) {
+        addon.runtimeFiles = runtimeFiles;
+      }
+    }
+  }
+
   return addons;
+}
+
+/**
+ * Walk an addon folder recursively and return all file paths relative to the addon root.
+ */
+function walkAddonFolder(folderPath: string, prefix = ''): string[] {
+  const results: string[] = [];
+  try {
+    const entries = fs.readdirSync(folderPath, { withFileTypes: true });
+    for (const entry of entries) {
+      const relPath = prefix ? `${prefix}/${entry.name}` : entry.name;
+      if (entry.isDirectory()) {
+        results.push(...walkAddonFolder(path.join(folderPath, entry.name), relPath));
+      } else {
+        results.push(relPath);
+      }
+    }
+  } catch { /* skip unreadable */ }
+  return results;
+}
+
+/**
+ * Detect files in an addon folder that were NOT part of the original ZIP install.
+ * These are runtime-created files (caches, data, configs) that addons store in their own folder.
+ */
+function detectRuntimeFiles(addonsPath: string, folderName: string, installedFiles: string[]): string[] {
+  const folderPath = path.join(addonsPath, folderName);
+  if (!fs.existsSync(folderPath)) return [];
+  const installedSet = new Set(installedFiles.map(f => f.replace(/\\/g, '/')));
+  const actualFiles = walkAddonFolder(folderPath);
+  return actualFiles.filter(f => !installedSet.has(f));
 }
 
 /**
@@ -358,6 +409,100 @@ export function scanSpecificAddons(addonsPath: string, folderNames: string[]): A
     }
   }
   return addons;
+}
+
+/** Reconcile result returned to the renderer */
+export interface ReconcileResult {
+  created: number;
+  updated: number;
+  details: string[];
+}
+
+/** Match entry sent from the renderer for reconciliation */
+export interface ReconcileMatch {
+  folderName: string;
+  esouid: string;
+  name: string;
+  author: string;
+  version: string;
+  url: string;
+  /** Local addon version from ## Version header */
+  localVersion: string;
+  /** true when the match is by DB entry or catalogId (high confidence) */
+  confident: boolean;
+}
+
+/**
+ * Reconcile the central YAAM addon database with catalog matches.
+ * - Creates entries for addons matched confidently but not yet in DB
+ * - Updates entries when catalog data has changed (name, author, version, url)
+ * - Updates localVersion from each addon's manifest
+ * - Skips low-confidence matches (name-only or dir-only with ambiguity)
+ */
+export function reconcileYaamMetadata(
+  addonsPath: string,
+  matches: ReconcileMatch[]
+): ReconcileResult {
+  const result: ReconcileResult = { created: 0, updated: 0, details: [] };
+  const now = new Date().toISOString();
+  const db = loadDatabase(addonsPath);
+  let changed = false;
+
+  for (const m of matches) {
+    const existing = db.addons[m.folderName];
+
+    if (!existing) {
+      // No DB entry yet — create if confident match
+      if (!m.confident) continue;
+      db.addons[m.folderName] = {
+        esouid: m.esouid,
+        url: m.url,
+        catalogName: m.name,
+        catalogAuthor: m.author,
+        catalogVersion: m.version,
+        localVersion: m.localVersion,
+        installedAt: now,
+        updatedAt: now,
+      };
+      changed = true;
+      result.created++;
+      result.details.push(`Created DB entry for ${m.folderName} → ${m.name} (#${m.esouid})`);
+    } else {
+      // Existing entry — check if it needs updating
+      const needsUpdate =
+        existing.esouid !== m.esouid ||
+        existing.catalogName !== m.name ||
+        existing.catalogAuthor !== m.author ||
+        existing.catalogVersion !== m.version ||
+        existing.url !== m.url ||
+        existing.localVersion !== m.localVersion;
+
+      if (!needsUpdate) continue;
+
+      const changes: string[] = [];
+      if (existing.esouid !== m.esouid) changes.push(`id: ${existing.esouid}→${m.esouid}`);
+      if (existing.catalogName !== m.name) changes.push(`name: ${existing.catalogName}→${m.name}`);
+      if (existing.catalogVersion !== m.version) changes.push(`catVer: ${existing.catalogVersion}→${m.version}`);
+      if (existing.localVersion !== m.localVersion) changes.push(`localVer: ${existing.localVersion}→${m.localVersion}`);
+
+      db.addons[m.folderName] = {
+        esouid: m.esouid,
+        url: m.url,
+        catalogName: m.name,
+        catalogAuthor: m.author,
+        catalogVersion: m.version,
+        localVersion: m.localVersion,
+        installedAt: existing.installedAt,
+        updatedAt: now,
+      };
+      changed = true;
+      result.updated++;
+      result.details.push(`Updated ${m.folderName}: ${changes.join(', ')}`);
+    }
+  }
+
+  if (changed) saveDatabase(db, addonsPath);
+  return result;
 }
 
 /**

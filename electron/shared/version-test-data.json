@@ -315,48 +315,48 @@
       "a": "49",
       "b": "3.16.5",
       "catalogDate": 1762720907,
-      "expected": "a<b",
-      "_note": "AddOnVersion integer vs proper semver; catalog is authoritative"
+      "expected": "a==b",
+      "_note": "Scheme mismatch: return 0 (unknown). .yaam.json version check handles real updates"
     },
     {
       "description": "scheme change: large int→semver (31605→3.16.5)",
       "a": "31605",
       "b": "3.16.5",
       "catalogDate": 1762720907,
-      "expected": "a<b",
-      "_note": "collapsed AddOnVersion integer mistakenly larger than semver major"
+      "expected": "a==b",
+      "_note": "Scheme mismatch: return 0 (unknown). .yaam.json version check handles real updates"
     },
     {
       "description": "scheme change: two-part→semver (316.5→3.16.5)",
       "a": "316.5",
       "b": "3.16.5",
       "catalogDate": 1762720907,
-      "expected": "a<b",
-      "_note": "two-part version where first part dwarfs the semver major"
+      "expected": "a==b",
+      "_note": "Scheme mismatch: return 0 (unknown). .yaam.json version check handles real updates"
     },
     {
       "description": "scheme change: two-part→semver (1.2→3.16.5)",
       "a": "1.2",
       "b": "3.16.5",
       "catalogDate": 1762720907,
-      "expected": "a<b",
-      "_note": "small two-part version upgraded to proper semver"
+      "expected": "a==b",
+      "_note": "Scheme mismatch: return 0 (unknown). .yaam.json version check handles real updates"
     },
     {
       "description": "scheme change: semver→short (3.16.5→49, reverse)",
       "a": "3.16.5",
       "b": "49",
       "catalogDate": 1762720907,
-      "expected": "a<b",
-      "_note": "catalog switched from semver to build number; catalog wins"
+      "expected": "a==b",
+      "_note": "Scheme mismatch: return 0 (unknown). .yaam.json version check handles real updates"
     },
     {
       "description": "scheme change: semver→single int (1.2.3→100)",
       "a": "1.2.3",
       "b": "100",
       "catalogDate": 1762720907,
-      "expected": "a<b",
-      "_note": "catalog switched to single revision number"
+      "expected": "a==b",
+      "_note": "Scheme mismatch: return 0 (unknown). .yaam.json version check handles real updates"
     },
     {
       "description": "scheme change: date→short with catalogDate",

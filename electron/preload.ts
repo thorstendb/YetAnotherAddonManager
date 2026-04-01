@@ -1,6 +1,6 @@
 // Copyright (c) 2026 thorstendb
 // SPDX-License-Identifier: MIT
-import { contextBridge, ipcRenderer, IpcRendererEvent } from 'electron';
+import { contextBridge, ipcRenderer, IpcRendererEvent, clipboard } from 'electron';
 import { AddonInfo, AddonSettingsData, AppConfig, CatalogAddon, SavedVarsInfo, IPC_CHANNELS } from './shared/types';
 import { SnapshotAddon, AddonSnapshot } from './snapshotManager';
 import { SvBackupEntry, ExportData } from './settingsManager';
@@ -133,14 +133,32 @@ contextBridge.exposeInMainWorld('electronAPI', {
   exportProfile: (
     addonsPath: string,
     addonList: { folderName: string; catalogId?: string; version: string; isLibrary: boolean }[],
-    bundleFolders?: string[]
+    bundleFolders?: string[],
+    runtimeFilesMap?: Record<string, string[]>
   ): Promise<ExportData | { error: string }> =>
-    ipcRenderer.invoke(IPC_CHANNELS.EXPORT_PROFILE, addonsPath, addonList, bundleFolders),
+    ipcRenderer.invoke(IPC_CHANNELS.EXPORT_PROFILE, addonsPath, addonList, bundleFolders, runtimeFilesMap),
+  exportProfileAsZip: (
+    addonsPath: string,
+    addonList: { folderName: string; catalogId?: string; version: string; isLibrary: boolean }[],
+    bundleFolders?: string[],
+    exportOptions?: { includeAddonSettings?: boolean; includeSavedVars?: boolean; includeUserSettings?: boolean }
+  ): Promise<{ filePath?: string; size?: number; canceled?: boolean; error?: string }> =>
+    ipcRenderer.invoke(IPC_CHANNELS.EXPORT_PROFILE_ZIP, addonsPath, addonList, bundleFolders, exportOptions),
   importProfile: (
     addonsPath: string,
     data: ExportData
   ): Promise<{ addonsToInstall: { folderName: string; catalogId?: string; isLibrary: boolean }[]; restoredSettings: string[]; restoredBundles: string[]; errors: string[] }> =>
     ipcRenderer.invoke(IPC_CHANNELS.IMPORT_PROFILE, addonsPath, data),
+  previewProfileZip: (
+    zipPath: string
+  ): Promise<{ totalAddons: number; totalLibraries: number; bundledCount: number; hasSettings: boolean; hasUserSettings: boolean; savedVarsCount: number; savedVarFiles: string[]; exportedAt: string; error?: string }> =>
+    ipcRenderer.invoke(IPC_CHANNELS.PREVIEW_PROFILE_ZIP, zipPath),
+  importProfileFromZip: (
+    addonsPath: string,
+    zipPath: string,
+    options?: { importAddonSettings?: boolean; importUserSettings?: boolean; savedVarFilter?: Record<string, boolean> }
+  ): Promise<{ addonsToInstall: { folderName: string; catalogId?: string; isLibrary: boolean }[]; restoredSettings: string[]; restoredBundles: string[]; errors: string[] }> =>
+    ipcRenderer.invoke(IPC_CHANNELS.IMPORT_PROFILE_ZIP, addonsPath, zipPath, options),
   batchInstallAddons: (
     addonsPath: string,
     addonIds: string[]
@@ -165,4 +183,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.invoke(IPC_CHANNELS.PREVIEW_CLEANUP_DOWNLOADS, addonsPath),
   cleanupDownloadsSelected: (addonsPath: string, fileNames: string[]): Promise<{ moved: string[] }> =>
     ipcRenderer.invoke(IPC_CHANNELS.CLEANUP_DOWNLOADS_SELECTED, addonsPath, fileNames),
+  writeClipboard: (text: string): void => clipboard.writeText(text),
+  reconcileYaamMeta: (
+    addonsPath: string,
+    matches: { folderName: string; esouid: string; name: string; author: string; version: string; url: string; localVersion: string; confident: boolean }[]
+  ): Promise<{ created: number; updated: number; details: string[] }> =>
+    ipcRenderer.invoke(IPC_CHANNELS.RECONCILE_YAAM_META, addonsPath, matches),
+  getYaamDb: (addonsPath: string): Promise<Record<string, { esouid: string; url: string; catalogName: string; catalogAuthor: string; catalogVersion: string; localVersion: string; installedAt: string; updatedAt: string }>> =>
+    ipcRenderer.invoke(IPC_CHANNELS.GET_YAAM_DB, addonsPath),
 });

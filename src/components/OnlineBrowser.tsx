@@ -864,7 +864,21 @@ const OnlineBrowser: React.FC<OnlineBrowserProps> = ({
             <div ref={infoPopupRef} className="addon-info-popup" onClick={(e) => e.stopPropagation()}>
               <div className="catalog-json-header">
                 <span>ℹ️ {infoAddon.name}</span>
-                <button className="restore-close-btn" onClick={() => setInfoAddonId(null)} title="Close">✕</button>
+                <div style={{ display: 'flex', gap: '4px', alignItems: 'center' }}>
+                  <button
+                    style={{ fontSize: '11px', padding: '1px 6px', background: 'none', border: 'none', cursor: 'pointer', borderRadius: '3px', opacity: 0.6, color: '#ccc' }}
+                    onClick={() => {
+                      const jsonData = { catalog: infoAddon, ...(details ? { details } : {}) };
+                      const el = document.getElementById('online-info-json');
+                      if (el) { el.style.display = el.style.display === 'none' ? 'block' : 'none'; }
+                      else { navigator.clipboard?.writeText(JSON.stringify(jsonData, null, 2)); }
+                    }}
+                    title="Toggle raw ESOUI JSON data"
+                  >
+                    📋 JSON
+                  </button>
+                  <button className="restore-close-btn" onClick={() => setInfoAddonId(null)} title="Close">✕</button>
+                </div>
               </div>
               {(() => {
                 const installed = infoAddon.directories.some(dir => installedDirNames.has(dir));
@@ -946,6 +960,7 @@ const OnlineBrowser: React.FC<OnlineBrowserProps> = ({
                     )}
                   </tbody>
                 </table>
+                <pre id="online-info-json" className="catalog-json-content" style={{ display: 'none' }}>{JSON.stringify({ catalog: infoAddon, ...(details ? { details } : {}) }, null, 2)}</pre>
               </div>
             </div>
           </div>

@@ -23,7 +23,7 @@ function getSavedVarsDir(addonsPath: string): string {
 }
 
 function getBackupDir(addonsPath: string, subDir: string): string {
-  const dir = path.join(getLiveDir(addonsPath), 'Backup', subDir);
+  const dir = path.join(getLiveDir(addonsPath), 'YAAM', 'Backup', subDir);
   fs.mkdirSync(dir, { recursive: true });
   return dir;
 }
@@ -724,7 +724,7 @@ export interface SvBackupEntry {
  * List all SavedVariables backup files across all backup subdirectories.
  */
 export function listSavedVarsBackups(addonsPath: string): SvBackupEntry[] {
-  const backupRoot = path.join(getLiveDir(addonsPath), 'Backup', 'SavedVariables');
+  const backupRoot = getBackupDir(addonsPath, 'SavedVariables');
   if (!fs.existsSync(backupRoot)) return [];
 
   const entries: SvBackupEntry[] = [];
@@ -804,8 +804,7 @@ export interface ExportData {
   addonSettings: string | null;
   /** Game settings: UserSettings.txt content */
   userSettings: string | null;
-  /** Machine-specific settings: MachineSettings.txt content */
-  machineSettings?: string | null;
+
   /** SavedVariables: filename → base64-encoded content */
   savedVariables: Record<string, string>;
   /** Non-catalog addon folders bundled as base64-encoded zip per folder */
@@ -821,7 +820,8 @@ export function exportProfile(
   addonsPath: string,
   addonList: { folderName: string; catalogId?: string; version: string; isLibrary: boolean }[],
   bundleFolders?: string[],
-  onProgress?: (phase: string, percent: number) => void
+  onProgress?: (phase: string, percent: number) => void,
+  runtimeFilesMap?: Record<string, string[]>
 ): ExportData {
   const liveDir = getLiveDir(addonsPath);
 
@@ -829,20 +829,39 @@ export function exportProfile(
 
   // AddOnSettings.txt
   const settingsPath = getSettingsPath(addonsPath);
-  const addonSettings = fs.existsSync(settingsPath)
+  let addonSettings = fs.existsSync(settingsPath)
     ? fs.readFileSync(settingsPath, 'utf-8')
     : null;
+
+  // Clean up orphaned entries: remove lines referencing addons not in the export list.
+  // This keeps the exported AddOnSettings.txt consistent with the addons being exported.
+  if (addonSettings) {
+    const exportedNames = new Set(addonList.map((a) => a.folderName));
+    const lines = addonSettings.split(/\r?\n/);
+    const filtered: string[] = [];
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (trimmed.startsWith('#') || trimmed === '') {
+        filtered.push(line);
+        continue;
+      }
+      const m = trimmed.match(/^(\S+)\s+\d+$/);
+      if (m) {
+        const name = m[1];
+        if (exportedNames.has(name) || name.startsWith('ZO_')) {
+          filtered.push(line);
+        }
+      } else {
+        filtered.push(line);
+      }
+    }
+    addonSettings = filtered.join('\r\n');
+  }
 
   // UserSettings.txt (game graphics/audio/keybinds etc.)
   const userSettingsPath = path.join(liveDir, 'UserSettings.txt');
   const userSettings = fs.existsSync(userSettingsPath)
     ? fs.readFileSync(userSettingsPath, 'utf-8')
-    : null;
-
-  // MachineSettings.txt (GPU, resolution, etc.)
-  const machineSettingsPath = path.join(liveDir, 'MachineSettings.txt');
-  const machineSettings = fs.existsSync(machineSettingsPath)
-    ? fs.readFileSync(machineSettingsPath, 'utf-8')
     : null;
 
   onProgress?.('Reading SavedVariables…', 20);
@@ -884,15 +903,39 @@ export function exportProfile(
 
   onProgress?.('Finalizing…', 95);
 
+  // Bundle runtime-created files (addon data, caches) as base64 per-folder
+  const runtimeData: Record<string, Record<string, string>> = {};
+  if (runtimeFilesMap) {
+    for (const [folder, files] of Object.entries(runtimeFilesMap)) {
+      const folderPath = path.join(addonsPath, folder);
+      const resolvedPath = path.resolve(addonsPath, folder);
+      if (!resolvedPath.startsWith(addonsPath + path.sep) || folder.includes('..')) continue;
+      const folderData: Record<string, string> = {};
+      for (const file of files) {
+        const filePath = path.join(folderPath, file);
+        const resolvedFile = path.resolve(folderPath, file);
+        if (!resolvedFile.startsWith(folderPath + path.sep) || file.includes('..')) continue;
+        try {
+          if (fs.existsSync(filePath) && fs.statSync(filePath).isFile()) {
+            folderData[file] = fs.readFileSync(filePath).toString('base64');
+          }
+        } catch { /* skip unreadable */ }
+      }
+      if (Object.keys(folderData).length > 0) {
+        runtimeData[folder] = folderData;
+      }
+    }
+  }
+
   return {
     formatVersion: 1,
     exportedAt: new Date().toISOString(),
     addons: addonList,
     addonSettings,
     userSettings,
-    machineSettings,
     savedVariables,
     ...(Object.keys(bundledAddons).length > 0 ? { bundledAddons } : {}),
+    ...(Object.keys(runtimeData).length > 0 ? { runtimeData } : {}),
   };
 }
 
@@ -914,10 +957,33 @@ export function importProfile(
   if (data.addonSettings) {
     try {
       const settingsPath = getSettingsPath(addonsPath);
+      // Preserve the current game API version and acknowledged version
+      // so the game's "Allow out of date addons" dialog works correctly.
+      let currentVersion = 0;
+      let currentAckVersion = 0;
       if (fs.existsSync(settingsPath)) {
         backupFile(settingsPath, getBackupDir(addonsPath, 'AddOnSettings'));
+        const existing = fs.readFileSync(settingsPath, 'utf-8');
+        const vMatch = existing.match(/^#Version\s+(\d+)$/m);
+        const aMatch = existing.match(/^#AcknowledgedOutOfDateAddonsVersion\s+(\d+)$/m);
+        if (vMatch) currentVersion = parseInt(vMatch[1], 10);
+        if (aMatch) currentAckVersion = parseInt(aMatch[1], 10);
       }
-      fs.writeFileSync(settingsPath, data.addonSettings, 'utf-8');
+
+      let settingsContent = data.addonSettings;
+
+      // Always preserve the target machine's API version and acknowledged version.
+      // These values are determined by the installed game, not by the addon profile.
+      if (currentVersion > 0) {
+        settingsContent = settingsContent
+          .replace(/^#Version\s+\d+$/m, `#Version ${currentVersion}`)
+          .replace(/^#AcknowledgedOutOfDateAddonsVersion\s+\d+$/m, `#AcknowledgedOutOfDateAddonsVersion ${Math.max(currentVersion, currentAckVersion)}`);
+      }
+
+      // Ensure the master addon toggle is enabled
+      settingsContent = settingsContent.replace(/^#AddOnsEnabled\s+0$/m, '#AddOnsEnabled 1');
+
+      fs.writeFileSync(settingsPath, settingsContent, 'utf-8');
       restoredSettings.push('AddOnSettings.txt');
     } catch (err: unknown) {
       errors.push(`AddOnSettings.txt: ${err instanceof Error ? err.message : String(err)}`);
@@ -935,20 +1001,6 @@ export function importProfile(
       restoredSettings.push('UserSettings.txt');
     } catch (err: unknown) {
       errors.push(`UserSettings.txt: ${err instanceof Error ? err.message : String(err)}`);
-    }
-  }
-
-  // Restore MachineSettings.txt
-  if (data.machineSettings) {
-    try {
-      const machineSettingsPath = path.join(liveDir, 'MachineSettings.txt');
-      if (fs.existsSync(machineSettingsPath)) {
-        backupFile(machineSettingsPath, getBackupDir(addonsPath, 'MachineSettings'));
-      }
-      fs.writeFileSync(machineSettingsPath, data.machineSettings, 'utf-8');
-      restoredSettings.push('MachineSettings.txt');
-    } catch (err: unknown) {
-      errors.push(`MachineSettings.txt: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
 
@@ -1010,6 +1062,27 @@ export function importProfile(
     }
   }
 
+  // Restore runtime-created files (addon data, caches) from base64
+  if (data.runtimeData) {
+    for (const [folderName, files] of Object.entries(data.runtimeData as Record<string, Record<string, string>>)) {
+      const folderPath = path.join(addonsPath, folderName);
+      const resolvedFolder = path.resolve(addonsPath, folderName);
+      if (!resolvedFolder.startsWith(addonsPath + path.sep) || folderName.includes('..')) continue;
+      for (const [relFile, base64Content] of Object.entries(files)) {
+        const destPath = path.join(folderPath, relFile);
+        const resolvedDest = path.resolve(folderPath, relFile);
+        if (!resolvedDest.startsWith(folderPath + path.sep) || relFile.includes('..')) continue;
+        try {
+          fs.mkdirSync(path.dirname(destPath), { recursive: true });
+          fs.writeFileSync(destPath, Buffer.from(base64Content, 'base64'));
+        } catch (err: unknown) {
+          errors.push(`Runtime data ${folderName}/${relFile}: ${err instanceof Error ? err.message : String(err)}`);
+        }
+      }
+      restoredSettings.push(`Runtime data: ${folderName} (${Object.keys(files).length} file(s))`);
+    }
+  }
+
   // Determine which addons need to be installed
   const existingDirs = new Set(
     fs.readdirSync(addonsPath, { withFileTypes: true })
@@ -1018,6 +1091,293 @@ export function importProfile(
   );
 
   const addonsToInstall = data.addons.filter((a) => !existingDirs.has(a.folderName));
+
+  return { addonsToInstall, restoredSettings, restoredBundles, errors };
+}
+
+/**
+ * Export profile as a ZIP archive.
+ * Contains profile.json + AddOns/<folder>/... + SavedVariables/*.lua
+ * This is a full portable archive of all addon folders and saved data.
+ */
+export function exportProfileAsZip(
+  addonsPath: string,
+  addonList: { folderName: string; catalogId?: string; version: string; isLibrary: boolean }[],
+  _bundleFolders?: string[],
+  options?: { includeAddonSettings?: boolean; includeSavedVars?: boolean; includeUserSettings?: boolean; excludeRuntimeFiles?: Record<string, string[]> },
+  onProgress?: (phase: string, percent: number) => void
+): Buffer {
+  const liveDir = getLiveDir(addonsPath);
+  const zip = new AdmZip();
+
+  onProgress?.('Reading settings…', 5);
+
+  // AddOnSettings.txt
+  const settingsPath = getSettingsPath(addonsPath);
+  let addonSettings: string | null = null;
+  if (options?.includeAddonSettings !== false && fs.existsSync(settingsPath)) {
+    addonSettings = fs.readFileSync(settingsPath, 'utf-8');
+    // Clean up orphaned entries
+    const exportedNames = new Set(addonList.map((a) => a.folderName));
+    const lines = addonSettings.split(/\r?\n/);
+    const filtered: string[] = [];
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (trimmed.startsWith('#') || trimmed === '') { filtered.push(line); continue; }
+      const m = trimmed.match(/^(\S+)\s+\d+$/);
+      if (m) {
+        if (exportedNames.has(m[1]) || m[1].startsWith('ZO_')) filtered.push(line);
+      } else {
+        filtered.push(line);
+      }
+    }
+    addonSettings = filtered.join('\r\n');
+  }
+
+  // UserSettings.txt
+  const userSettingsPath = path.join(liveDir, 'UserSettings.txt');
+  const userSettings = (options?.includeUserSettings !== false && fs.existsSync(userSettingsPath))
+    ? fs.readFileSync(userSettingsPath, 'utf-8')
+    : null;
+
+  // Build profile.json (metadata only)
+  const profile = {
+    formatVersion: 3,
+    exportedAt: new Date().toISOString(),
+    addons: addonList,
+    addonSettings,
+    userSettings,
+  };
+  zip.addFile('profile.json', Buffer.from(JSON.stringify(profile, null, 2), 'utf-8'));
+
+  // AddOn folders — archive ALL addon folders directly
+  const totalFolders = addonList.length;
+  for (let i = 0; i < totalFolders; i++) {
+    const folder = addonList[i].folderName;
+    const folderPath = path.join(addonsPath, folder);
+    onProgress?.(`Adding AddOns… ${folder} (${i + 1}/${totalFolders})`, 10 + Math.round(((i + 1) / totalFolders) * 55));
+    if (!fs.existsSync(folderPath) || !fs.statSync(folderPath).isDirectory()) continue;
+    const resolvedExport = path.resolve(addonsPath, folder);
+    if (!resolvedExport.startsWith(addonsPath + path.sep) || folder.includes('..')) continue;
+    try {
+      zip.addLocalFolder(folderPath, `AddOns/${folder}`);
+      // Remove runtime-created files if user opted out
+      if (options?.excludeRuntimeFiles?.[folder]) {
+        for (const rf of options.excludeRuntimeFiles[folder]) {
+          const entryName = `AddOns/${folder}/${rf}`.replace(/\\/g, '/');
+          try { zip.deleteFile(entryName); } catch { /* entry may not exist */ }
+        }
+      }
+    } catch { /* skip */ }
+  }
+
+  // SavedVariables
+  if (options?.includeSavedVars !== false) {
+    const svDir = getSavedVarsDir(addonsPath);
+    if (fs.existsSync(svDir)) {
+      const files = fs.readdirSync(svDir).filter((f) => f.endsWith('.lua'));
+      for (let i = 0; i < files.length; i++) {
+        const file = files[i];
+        zip.addLocalFile(path.join(svDir, file), 'SavedVariables');
+        onProgress?.(`Adding SavedVariables… (${i + 1}/${files.length})`, 70 + Math.round(((i + 1) / files.length) * 25));
+      }
+    }
+  }
+
+  onProgress?.('Compressing…', 98);
+  return zip.toBuffer();
+}
+
+/**
+ * Preview a ZIP profile: read profile.json and list contents.
+ */
+export function previewProfileZip(zipPath: string): {
+  totalAddons: number; totalLibraries: number; bundledCount: number;
+  hasSettings: boolean; hasUserSettings: boolean; savedVarsCount: number;
+  savedVarFiles: string[]; exportedAt: string; isFullArchive: boolean;
+  addonList: { folderName: string; isLibrary: boolean }[];
+} {
+  const zip = new AdmZip(zipPath);
+  const profileEntry = zip.getEntry('profile.json');
+  if (!profileEntry) throw new Error('Invalid ZIP profile: missing profile.json');
+  const profile = JSON.parse(zip.readAsText(profileEntry));
+  if (!profile.addons) throw new Error('Invalid profile format');
+
+  const svEntries = zip.getEntries().filter(e => e.entryName.startsWith('SavedVariables/') && e.entryName.endsWith('.lua'));
+
+  // v3+: AddOns/ contains all folders; v2: BundledAddons/ only has non-catalog
+  const addonFolders = new Set(
+    zip.getEntries()
+      .filter(e => e.entryName.startsWith('AddOns/'))
+      .map(e => e.entryName.split('/')[1])
+      .filter(Boolean)
+  );
+  const bundledFolders = new Set(
+    zip.getEntries()
+      .filter(e => e.entryName.startsWith('BundledAddons/'))
+      .map(e => e.entryName.split('/')[1])
+      .filter(Boolean)
+  );
+  const isFullArchive = addonFolders.size > 0;
+  const archivedCount = addonFolders.size + bundledFolders.size;
+
+  return {
+    totalAddons: profile.addons.filter((a: { isLibrary: boolean }) => !a.isLibrary).length,
+    totalLibraries: profile.addons.filter((a: { isLibrary: boolean }) => a.isLibrary).length,
+    bundledCount: archivedCount,
+    hasSettings: !!profile.addonSettings,
+    hasUserSettings: !!profile.userSettings,
+    savedVarsCount: svEntries.length,
+    savedVarFiles: svEntries.map(e => path.basename(e.entryName)).sort(),
+    exportedAt: profile.exportedAt || '',
+    isFullArchive,
+    addonList: (profile.addons || []).map((a: { folderName: string; isLibrary: boolean }) => ({
+      folderName: a.folderName,
+      isLibrary: a.isLibrary,
+    })),
+  };
+}
+
+/**
+ * Import a ZIP profile: extract settings, SavedVariables, and bundled addons.
+ */
+export function importProfileFromZip(
+  addonsPath: string,
+  zipPath: string,
+  options?: { importAddonSettings?: boolean; importUserSettings?: boolean; savedVarFilter?: Record<string, boolean>; addonFilter?: Record<string, boolean> }
+): { addonsToInstall: { folderName: string; catalogId?: string; isLibrary: boolean }[]; restoredSettings: string[]; restoredBundles: string[]; errors: string[] } {
+  const liveDir = getLiveDir(addonsPath);
+  const restoredSettings: string[] = [];
+  const restoredBundles: string[] = [];
+  const errors: string[] = [];
+
+  const zip = new AdmZip(zipPath);
+  const profileEntry = zip.getEntry('profile.json');
+  if (!profileEntry) throw new Error('Invalid ZIP profile: missing profile.json');
+  const profile = JSON.parse(zip.readAsText(profileEntry));
+
+  // Restore AddOnSettings.txt
+  if (options?.importAddonSettings !== false && profile.addonSettings) {
+    try {
+      const settingsPath = getSettingsPath(addonsPath);
+      let currentVersion = 0;
+      let currentAckVersion = 0;
+      if (fs.existsSync(settingsPath)) {
+        backupFile(settingsPath, getBackupDir(addonsPath, 'AddOnSettings'));
+        const existing = fs.readFileSync(settingsPath, 'utf-8');
+        const vMatch = existing.match(/^#Version\s+(\d+)$/m);
+        const aMatch = existing.match(/^#AcknowledgedOutOfDateAddonsVersion\s+(\d+)$/m);
+        if (vMatch) currentVersion = parseInt(vMatch[1], 10);
+        if (aMatch) currentAckVersion = parseInt(aMatch[1], 10);
+      }
+      let settingsContent = profile.addonSettings;
+      if (currentVersion > 0) {
+        settingsContent = settingsContent
+          .replace(/^#Version\s+\d+$/m, `#Version ${currentVersion}`)
+          .replace(/^#AcknowledgedOutOfDateAddonsVersion\s+\d+$/m, `#AcknowledgedOutOfDateAddonsVersion ${Math.max(currentVersion, currentAckVersion)}`);
+      }
+      settingsContent = settingsContent.replace(/^#AddOnsEnabled\s+0$/m, '#AddOnsEnabled 1');
+      fs.writeFileSync(settingsPath, settingsContent, 'utf-8');
+      restoredSettings.push('AddOnSettings.txt');
+    } catch (err: unknown) {
+      errors.push(`AddOnSettings.txt: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  // Restore UserSettings.txt
+  if (options?.importUserSettings !== false && profile.userSettings) {
+    try {
+      const userSettingsPath = path.join(liveDir, 'UserSettings.txt');
+      if (fs.existsSync(userSettingsPath)) {
+        backupFile(userSettingsPath, getBackupDir(addonsPath, 'UserSettings'));
+      }
+      fs.writeFileSync(userSettingsPath, profile.userSettings, 'utf-8');
+      restoredSettings.push('UserSettings.txt');
+    } catch (err: unknown) {
+      errors.push(`UserSettings.txt: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  // Restore SavedVariables from ZIP
+  const svDir = getSavedVarsDir(addonsPath);
+  fs.mkdirSync(svDir, { recursive: true });
+  const svEntries = zip.getEntries().filter(e => e.entryName.startsWith('SavedVariables/') && e.entryName.endsWith('.lua'));
+  if (svEntries.length > 0) {
+    // Backup existing SV files
+    const existingSvFiles = fs.existsSync(svDir) ? fs.readdirSync(svDir).filter(f => f.endsWith('.lua')) : [];
+    if (existingSvFiles.length > 0) {
+      const ts = new Date().toISOString().replace(/[:.]/g, '-').replace('T', '_').slice(0, 19);
+      const svBackupDir = path.join(getBackupDir(addonsPath, 'SavedVariables'), `_import_backup_${ts}`);
+      fs.mkdirSync(svBackupDir, { recursive: true });
+      for (const file of existingSvFiles) {
+        try { fs.copyFileSync(path.join(svDir, file), path.join(svBackupDir, file)); } catch { /* ok */ }
+      }
+    }
+
+    for (const entry of svEntries) {
+      const fileName = path.basename(entry.entryName);
+      if (options?.savedVarFilter && options.savedVarFilter[fileName] === false) continue;
+      const resolvedSv = path.resolve(svDir, fileName);
+      if (!resolvedSv.startsWith(svDir + path.sep) || fileName.includes('..')) {
+        errors.push(`Skipped unsafe filename: ${fileName}`);
+        continue;
+      }
+      try {
+        zip.extractEntryTo(entry, svDir, false, true);
+        restoredSettings.push(`SavedVariables/${fileName}`);
+      } catch (err: unknown) {
+        errors.push(`SavedVariables/${fileName}: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+  }
+
+  // Restore addon folders from ZIP (v3: AddOns/, v2 compat: BundledAddons/)
+  const restoredFromZip = new Set<string>();
+  for (const prefix of ['AddOns/', 'BundledAddons/']) {
+    const folderNames = new Set(
+      zip.getEntries()
+        .filter(e => e.entryName.startsWith(prefix) && e.entryName.split('/').length > 2)
+        .map(e => e.entryName.split('/')[1])
+        .filter(Boolean)
+    );
+    for (const folderName of folderNames) {
+      if (restoredFromZip.has(folderName)) continue; // AddOns/ takes priority over BundledAddons/
+      if (options?.addonFilter && options.addonFilter[folderName] === false) continue; // User deselected this addon
+      const resolvedBundle = path.resolve(addonsPath, folderName);
+      if (!resolvedBundle.startsWith(addonsPath + path.sep) || folderName.includes('..')) {
+        errors.push(`Skipped unsafe addon folder: ${folderName}`);
+        continue;
+      }
+      try {
+        const entryPrefix = `${prefix}${folderName}/`;
+        const entries = zip.getEntries().filter(e => e.entryName.startsWith(entryPrefix));
+        for (const entry of entries) {
+          const relativePath = entry.entryName.slice(prefix.length);
+          const destPath = path.join(addonsPath, relativePath);
+          if (entry.isDirectory) {
+            fs.mkdirSync(destPath, { recursive: true });
+          } else {
+            fs.mkdirSync(path.dirname(destPath), { recursive: true });
+            fs.writeFileSync(destPath, entry.getData());
+          }
+        }
+        restoredFromZip.add(folderName);
+        restoredBundles.push(folderName);
+      } catch (err: unknown) {
+        errors.push(`Addon ${folderName}: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+  }
+
+  // Determine which addons need to be installed
+  const existingDirs = new Set(
+    fs.readdirSync(addonsPath, { withFileTypes: true })
+      .filter((d) => d.isDirectory())
+      .map((d) => d.name)
+  );
+  const addonsToInstall = (profile.addons || []).filter((a: { folderName: string }) =>
+    !existingDirs.has(a.folderName) && (!options?.addonFilter || options.addonFilter[a.folderName] !== false)
+  );
 
   return { addonsToInstall, restoredSettings, restoredBundles, errors };
 }

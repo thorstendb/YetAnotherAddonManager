@@ -67,6 +67,32 @@ export interface AddonInfo {
    * Used for accurate cleanup to avoid destroying user settings.
    */
   allSavedVariableNames: string[];
+  /** YAAM database entry for this addon (if present) */
+  yaamMeta?: YaamAddonEntry;
+  /** Files found in the addon folder that were NOT part of the original install (runtime-created) */
+  runtimeFiles?: string[];
+}
+
+/** Per-addon metadata stored in the central YAAM database (yaam-addons.json). */
+export interface YaamAddonEntry {
+  /** ESOUI catalog UID (e.g. "1346") */
+  esouid: string;
+  /** ESOUI info URL */
+  url: string;
+  /** Catalog name at time of install/update */
+  catalogName: string;
+  /** Author from catalog */
+  catalogAuthor: string;
+  /** Version string from the ESOUI catalog record */
+  catalogVersion: string;
+  /** Version string from the addon's local manifest (## Version) */
+  localVersion: string;
+  /** ISO timestamp of first install via YAAM */
+  installedAt: string;
+  /** ISO timestamp of last update via YAAM */
+  updatedAt: string;
+  /** Relative file paths from the original ZIP (install manifest for detecting runtime-created files) */
+  installedFiles?: string[];
 }
 
 export interface DependencyRef {
@@ -270,9 +296,23 @@ export function compareVersionStrings(a: string, b: string, catalogDateEpoch?: n
       const isPreReleasePrefix = shorter.preRelease && shorter.parts.length < longer.parts.length
         && shorter.parts.every((p, i) => p === longer.parts[i]);
       if (!isPreReleasePrefix) {
-        // Catalog version (b) is authoritative after a scheme change.
-        // The catalog always reflects the author's latest upload.
-        return -1;
+        // Scheme mismatch: numeric comparison is meaningless.
+        // Use catalog upload date vs local date-proxy as tiebreaker.
+        // If no catalog date is available, assume equal (avoid false positives).
+        if (!catalogDateEpoch) return 0;
+        const catalogDateParts = parseVersionParts(dateToVersion(catalogDateEpoch)).parts;
+        // local date-based version? compare directly
+        if (va.isDate) {
+          for (let i = 0; i < 3; i++) {
+            const na = va.parts[i] ?? 0;
+            const nb = catalogDateParts[i] ?? 0;
+            if (na !== nb) return na - nb;
+          }
+          return 0;
+        }
+        // Otherwise we can't reliably compare — return 0 to avoid false positives.
+        // The YAAM database version check catches real updates.
+        return 0;
       }
     }
   }
@@ -464,7 +504,10 @@ export const IPC_CHANNELS = {
   RESTORE_SV_FILE: 'restore-sv-file',
   OPEN_IN_EXPLORER: 'open-in-explorer',
   EXPORT_PROFILE: 'export-profile',
+  EXPORT_PROFILE_ZIP: 'export-profile-zip',
   IMPORT_PROFILE: 'import-profile',
+  PREVIEW_PROFILE_ZIP: 'preview-profile-zip',
+  IMPORT_PROFILE_ZIP: 'import-profile-zip',
   BATCH_INSTALL_ADDONS: 'batch-install-addons',
   OPEN_EXTERNAL_URL: 'open-external-url',
   GET_APP_VERSION: 'get-app-version',
@@ -479,4 +522,6 @@ export const IPC_CHANNELS = {
   DELETE_ADDON_BACKUPS: 'delete-addon-backups',
   FETCH_ADDON_DETAILS: 'fetch-addon-details',
   FETCH_CATEGORIES: 'fetch-categories',
+  RECONCILE_YAAM_META: 'reconcile-yaam-meta',
+  GET_YAAM_DB: 'get-yaam-db',
 } as const;

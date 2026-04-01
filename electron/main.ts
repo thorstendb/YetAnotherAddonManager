@@ -6,10 +6,11 @@ import * as fs from 'fs';
 import * as os from 'os';
 import { IPC_CHANNELS } from './shared/types';
 import { loadConfig, saveConfig } from './configStore';
-import { scanAddonsFolder, cleanupUnusedLibraries, deleteAddon, deleteAddonAndExclusiveRefs, previewUnusedLibraries, cleanupSelectedLibraries } from './addonScanner';
+import { scanAddonsFolder, cleanupUnusedLibraries, deleteAddon, deleteAddonAndExclusiveRefs, previewUnusedLibraries, cleanupSelectedLibraries, reconcileYaamMetadata, ReconcileMatch } from './addonScanner';
 import { fetchAddonCatalog, fetchAddonDetails, fetchCategories, installAddon, cleanupDownloadsFolder, previewCleanupDownloads, cleanupDownloadsSelected } from './addonCatalogApi';
-import { parseAddonSettings, setAddonSetting, batchSetAddonSettings, getSavedVarsInfo, deleteSavedVars, cleanupSettings, undoCleanupSettings, listSavedVarsBackups, restoreSavedVarsFile, exportProfile, importProfile, ExportData, previewCleanupSettings, cleanupSettingsSelected } from './settingsManager';
+import { parseAddonSettings, setAddonSetting, batchSetAddonSettings, getSavedVarsInfo, deleteSavedVars, cleanupSettings, undoCleanupSettings, listSavedVarsBackups, restoreSavedVarsFile, exportProfile, importProfile, exportProfileAsZip, previewProfileZip, importProfileFromZip, ExportData, previewCleanupSettings, cleanupSettingsSelected } from './settingsManager';
 import { saveSnapshotIfChanged, listSnapshots, listAddonBackups, restoreAddonFromBackup, backupAddonFolder, deleteAddonBackups, getDirSize, SnapshotAddon } from './snapshotManager';
+import { migrateFromFolderFiles, getAllEntries, getYaamDir } from './yaamDatabase';
 
 /** Extract error message from unknown catch value */
 function errMsg(err: unknown): string {
@@ -154,6 +155,24 @@ ipcMain.handle(IPC_CHANNELS.SCAN_ADDONS, async (_event, addonPath: string) => {
   } catch (err: unknown) {
     console.error('Scan error:', err);
     return [];
+  }
+});
+
+ipcMain.handle(IPC_CHANNELS.RECONCILE_YAAM_META, async (_event, addonsPath: string, matches: ReconcileMatch[]) => {
+  try {
+    return reconcileYaamMetadata(addonsPath, matches);
+  } catch (err: unknown) {
+    console.error('Reconcile error:', err);
+    return { created: 0, updated: 0, details: [] };
+  }
+});
+
+ipcMain.handle(IPC_CHANNELS.GET_YAAM_DB, async (_event, addonsPath: string) => {
+  try {
+    return getAllEntries(addonsPath);
+  } catch (err: unknown) {
+    console.error('Get YAAM DB error:', err);
+    return {};
   }
 });
 
@@ -437,14 +456,15 @@ ipcMain.handle(IPC_CHANNELS.EXPORT_PROFILE, async (
   _event,
   addonsPath: string,
   addonList: { folderName: string; catalogId?: string; version: string; isLibrary: boolean }[],
-  bundleFolders?: string[]
+  bundleFolders?: string[],
+  runtimeFilesMap?: Record<string, string[]>
 ) => {
   try {
     return exportProfile(addonsPath, addonList, bundleFolders, (phase, percent) => {
       if (mainWindow) {
         mainWindow.webContents.send(IPC_CHANNELS.EXPORT_PROGRESS, { phase, percent });
       }
-    });
+    }, runtimeFilesMap);
   } catch (err: unknown) {
     console.error('Export profile error:', err);
     return { error: errMsg(err) };
@@ -456,7 +476,58 @@ ipcMain.handle(IPC_CHANNELS.IMPORT_PROFILE, async (_event, addonsPath: string, d
     return importProfile(addonsPath, data);
   } catch (err: unknown) {
     console.error('Import profile error:', err);
-    return { addonsToInstall: [], restoredSettings: [], errors: [errMsg(err)] };
+    return { addonsToInstall: [], restoredSettings: [], restoredBundles: [], errors: [errMsg(err)] };
+  }
+});
+
+ipcMain.handle(IPC_CHANNELS.EXPORT_PROFILE_ZIP, async (
+  _event,
+  addonsPath: string,
+  addonList: { folderName: string; catalogId?: string; version: string; isLibrary: boolean }[],
+  bundleFolders?: string[],
+  exportOptions?: { includeAddonSettings?: boolean; includeSavedVars?: boolean; includeUserSettings?: boolean }
+) => {
+  try {
+    const buf = exportProfileAsZip(addonsPath, addonList, bundleFolders, exportOptions, (phase, percent) => {
+      if (mainWindow) mainWindow.webContents.send(IPC_CHANNELS.EXPORT_PROGRESS, { phase, percent });
+    });
+
+    const ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+    const result = await dialog.showSaveDialog(mainWindow!, {
+      title: 'Save Profile ZIP',
+      defaultPath: `yaam-profile-${ts}.zip`,
+      filters: [{ name: 'ZIP Archives', extensions: ['zip'] }],
+    });
+    if (result.canceled || !result.filePath) return { canceled: true };
+
+    fs.writeFileSync(result.filePath, buf);
+    return { filePath: result.filePath, size: buf.length };
+  } catch (err: unknown) {
+    console.error('Export profile ZIP error:', err);
+    return { error: errMsg(err) };
+  }
+});
+
+ipcMain.handle(IPC_CHANNELS.PREVIEW_PROFILE_ZIP, async (_event, zipPath: string) => {
+  try {
+    return previewProfileZip(zipPath);
+  } catch (err: unknown) {
+    console.error('Preview profile ZIP error:', err);
+    return { error: errMsg(err) };
+  }
+});
+
+ipcMain.handle(IPC_CHANNELS.IMPORT_PROFILE_ZIP, async (
+  _event,
+  addonsPath: string,
+  zipPath: string,
+  options?: { importAddonSettings?: boolean; importUserSettings?: boolean; savedVarFilter?: Record<string, boolean> }
+) => {
+  try {
+    return importProfileFromZip(addonsPath, zipPath, options);
+  } catch (err: unknown) {
+    console.error('Import profile ZIP error:', err);
+    return { addonsToInstall: [], restoredSettings: [], restoredBundles: [], errors: [errMsg(err)] };
   }
 });
 
@@ -472,8 +543,8 @@ ipcMain.handle(IPC_CHANNELS.BATCH_INSTALL_ADDONS, async (
   const BATCH_SIZE = 4;
 
   while (idsToProcess.length > 0) {
-    // Take the next chunk of unprocessed IDs
-    const currentBatch = idsToProcess.splice(0);
+    // Take the next chunk of unprocessed IDs, deduplicated
+    const currentBatch = [...new Set(idsToProcess.splice(0))];
     for (const id of currentBatch) processedIds.add(id);
 
     for (let i = 0; i < currentBatch.length; i += BATCH_SIZE) {
@@ -653,7 +724,53 @@ ipcMain.on(IPC_CHANNELS.UNSAVED_DIALOG_RESPONSE, (_event, choice: 'save' | 'disc
   // 'cancel' — do nothing
 });
 
-app.whenReady().then(createWindow);
+app.whenReady().then(() => {
+  const config = loadConfig();
+  if (config.addonPath) {
+    const addonsPath = config.addonPath;
+    const liveDir = path.dirname(addonsPath);
+    const yaamDir = getYaamDir(addonsPath);
+
+    // Migration 1: Move yaam-addons.json from Documents/YAAM/ to live/YAAM/
+    const oldDbPath = path.join(os.homedir(), 'Documents', 'YAAM', 'yaam-addons.json');
+    const newDbPath = path.join(yaamDir, 'yaam-addons.json');
+    if (fs.existsSync(oldDbPath) && !fs.existsSync(newDbPath)) {
+      try {
+        fs.renameSync(oldDbPath, newDbPath);
+        console.log('Migrated yaam-addons.json to live/YAAM/');
+      } catch (err) {
+        console.error('Failed to migrate yaam-addons.json:', err);
+        // Fallback: copy instead of move (cross-device)
+        try {
+          fs.copyFileSync(oldDbPath, newDbPath);
+          fs.unlinkSync(oldDbPath);
+          console.log('Migrated yaam-addons.json to live/YAAM/ (copy+delete)');
+        } catch (err2) {
+          console.error('Failed to copy yaam-addons.json:', err2);
+        }
+      }
+    }
+
+    // Migration 2: Move live/Backup/ to live/YAAM/Backup/
+    const oldBackupDir = path.join(liveDir, 'Backup');
+    const newBackupDir = path.join(yaamDir, 'Backup');
+    if (fs.existsSync(oldBackupDir) && !fs.existsSync(newBackupDir)) {
+      try {
+        fs.renameSync(oldBackupDir, newBackupDir);
+        console.log('Migrated Backup/ to YAAM/Backup/');
+      } catch (err) {
+        console.error('Failed to migrate Backup/ folder:', err);
+      }
+    }
+
+    // Migration 3: Migrate old per-folder .yaam.json files
+    const migration = migrateFromFolderFiles(addonsPath);
+    if (migration.migrated > 0) {
+      console.log(`Migrated ${migration.migrated} .yaam.json files to central database`);
+    }
+  }
+  createWindow();
+});
 
 app.on('window-all-closed', () => {
   app.quit();

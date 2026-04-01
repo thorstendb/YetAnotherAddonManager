@@ -8,6 +8,7 @@ import * as path from 'path';
 import AdmZip from 'adm-zip';
 import { CatalogAddon, CatalogCategory } from './shared/types';
 import { scanSpecificAddons } from './addonScanner';
+import { loadDatabase, saveDatabase } from './yaamDatabase';
 
 const API_URL = 'https://api.mmoui.com/v3/game/ESO/filelist.json';
 const CATEGORY_API_URL = 'https://api.mmoui.com/v3/game/ESO/categorylist.json';
@@ -109,8 +110,7 @@ function downloadFile(url: string, destPath: string, maxRedirects = 5, onProgres
       }
       res.pipe(file);
       file.on('finish', () => {
-        file.close();
-        resolve();
+        file.close(() => resolve());
       });
       file.on('error', (err) => {
         fs.unlink(destPath, () => {});
@@ -228,8 +228,8 @@ export async function installAddon(
     const addonInfo = cachedList.find((a) => a.id === addonId);
     if (addonInfo) {
       // Sanitize name: remove characters not safe for filenames
-      const safeName = addonInfo.name.replace(/[<>:"\/ |?*]/g, '_').replace(/_+/g, '_').trim();
-      const safeVersion = addonInfo.version.replace(/[<>:"\/ |?*]/g, '_').trim();
+      const safeName = addonInfo.name.replace(/[<>:"\/\\|?*']/g, '_').replace(/_+/g, '_').trim();
+      const safeVersion = addonInfo.version.replace(/[<>:"\/\\|?*']/g, '_').trim();
       zipName = `${safeName}-${safeVersion}.zip`;
     }
   }
@@ -260,18 +260,26 @@ export async function installAddon(
       downloadUrl = await resolveDownloadUrl(addonId);
     }
     onProgress?.('downloading', 0);
-    await downloadFile(downloadUrl, zipPath, 5, (received, total) => {
-      onProgress?.('downloading', Math.round((received / total) * 100));
-    });
 
-    // Verify MD5 if available
-    if (expectedMd5) {
-      const fileBuffer = fs.readFileSync(zipPath);
-      const actualMd5 = crypto.createHash('md5').update(fileBuffer).digest('hex');
-      if (actualMd5 !== expectedMd5) {
-        fs.unlinkSync(zipPath);
-        throw new Error(`MD5 mismatch: expected ${expectedMd5}, got ${actualMd5}`);
+    // Download with one retry on MD5 mismatch (transient CDN corruption)
+    let lastMd5Error = '';
+    for (let attempt = 0; attempt < 2; attempt++) {
+      await downloadFile(downloadUrl, zipPath, 5, (received, total) => {
+        onProgress?.('downloading', Math.round((received / total) * 100));
+      });
+
+      // Verify MD5 if available
+      if (expectedMd5) {
+        const fileBuffer = fs.readFileSync(zipPath);
+        const actualMd5 = crypto.createHash('md5').update(fileBuffer).digest('hex');
+        if (actualMd5 !== expectedMd5) {
+          try { fs.unlinkSync(zipPath); } catch { /* ignore cleanup errors */ }
+          lastMd5Error = `MD5 mismatch: expected ${expectedMd5}, got ${actualMd5}`;
+          if (attempt === 0) continue; // retry once
+          throw new Error(lastMd5Error);
+        }
       }
+      break; // success
     }
   } else {
     onProgress?.('downloading', 100);
@@ -281,6 +289,21 @@ export async function installAddon(
   // with folder names containing hyphens, dots, or numbers (e.g. LibAddonMenu-2.0)
   onProgress?.('extracting', 0);
   const zip = new AdmZip(zipPath);
+
+  // Capture file manifest from ZIP before extraction (for detecting runtime-created files later)
+  const zipFilesByDir = new Map<string, string[]>();
+  for (const entry of zip.getEntries()) {
+    if (entry.isDirectory) continue;
+    const parts = entry.entryName.split('/');
+    if (parts.length >= 2) {
+      const dir = parts[0];
+      // Store path relative to the addon folder (strip top-level dir)
+      const relPath = parts.slice(1).join('/');
+      if (!zipFilesByDir.has(dir)) zipFilesByDir.set(dir, []);
+      zipFilesByDir.get(dir)!.push(relPath);
+    }
+  }
+
   zip.extractAllTo(addonsPath, true);
   onProgress?.('extracting', 100);
 
@@ -289,6 +312,32 @@ export async function installAddon(
     .filter((d) => d.isDirectory())
     .map((d) => d.name);
   const newDirs = afterDirs.filter((d) => !existingDirs.has(d));
+
+  // Update central YAAM database with install metadata
+  if (cachedList) {
+    const catalogEntry = cachedList.find((a) => a.id === addonId);
+    if (catalogEntry) {
+      const now = new Date().toISOString();
+      const db = loadDatabase(addonsPath);
+      let changed = false;
+      for (const dir of newDirs) {
+        const existing = db.addons[dir];
+        db.addons[dir] = {
+          esouid: catalogEntry.id,
+          url: catalogEntry.infoUrl,
+          catalogName: catalogEntry.name,
+          catalogAuthor: catalogEntry.author,
+          catalogVersion: catalogEntry.version,
+          localVersion: existing?.localVersion || '',
+          installedAt: existing?.installedAt || now,
+          updatedAt: now,
+          installedFiles: zipFilesByDir.get(dir),
+        };
+        changed = true;
+      }
+      if (changed) saveDatabase(db, addonsPath);
+    }
+  }
 
   // Scan only newly installed addon folders for dependencies (fast)
   const installedAddons = scanSpecificAddons(addonsPath, newDirs);
