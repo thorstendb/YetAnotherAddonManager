@@ -33,8 +33,10 @@
       "pattern": "two-part, dot-r revision",
       "input": "2.r1",
       "addon": "LibSort",
-      "expectedParts": [2, 1],
-      "expectedSubParts": []
+      "expectedParts": [2],
+      "expectedSubParts": [],
+      "expectedSuffix": "r",
+      "expectedSuffixParts": [1]
     },
     {
       "pattern": "two-part, v-prefix",
@@ -54,8 +56,10 @@
       "pattern": "three-part, space-r revision",
       "input": "2.0 r41",
       "addon": "LibAddonMenu-2.0",
-      "expectedParts": [2, 0, 41],
-      "expectedSubParts": []
+      "expectedParts": [2, 0],
+      "expectedSubParts": [],
+      "expectedSuffix": "r",
+      "expectedSuffixParts": [41]
     },
     {
       "pattern": "four-part",
@@ -68,15 +72,19 @@
       "pattern": "four-part, concatenated r-revision",
       "input": "3.0r5.0",
       "addon": "LibFilters-3.0",
-      "expectedParts": [3, 0, 5, 0],
-      "expectedSubParts": []
+      "expectedParts": [3, 0],
+      "expectedSubParts": [],
+      "expectedSuffix": "r",
+      "expectedSuffixParts": [5, 0]
     },
     {
       "pattern": "four-part, build keyword",
       "input": "2.3.22 build 1442",
       "addon": "GuildHallButton",
-      "expectedParts": [2, 3, 22, 1442],
-      "expectedSubParts": []
+      "expectedParts": [2, 3, 22],
+      "expectedSubParts": [],
+      "expectedSuffix": "build",
+      "expectedSuffixParts": [1442]
     },
     {
       "pattern": "four-part, very large segments",
@@ -404,6 +412,73 @@
       "b": "3.16.5",
       "expected": "a>b",
       "_note": "without catalogDate, raw numeric comparison: 49 > 3"
+    },
+    {
+      "description": "r-revision: revision bump (LibAddonMenu 2.0 r41→r42)",
+      "a": "2.0 r41",
+      "b": "2.0 r42",
+      "expected": "a<b",
+      "_note": "LibAddonMenu-2.0 style: '2.0 r41' < '2.0 r42'"
+    },
+    {
+      "description": "r-revision: same revision is equal",
+      "a": "2.0 r41",
+      "b": "2.0 r41",
+      "expected": "a=b",
+      "_note": "LibAddonMenu-2.0: same r-revision"
+    },
+    {
+      "description": "r-revision: base version < version with revision",
+      "a": "2.0",
+      "b": "2.0 r41",
+      "expected": "a<b",
+      "_note": "'2.0' ([2,0]) is a prefix of '2.0 r41' ([2,0,41]) — not a scheme change"
+    },
+    {
+      "description": "r-revision: version with revision > base version",
+      "a": "2.0 r41",
+      "b": "2.0",
+      "expected": "a>b",
+      "_note": "'2.0 r41' ([2,0,41]) > '2.0' ([2,0]) — trailing revision part wins"
+    },
+    {
+      "description": "r-revision: base vs revision with catalogDate (not a scheme change)",
+      "a": "2.0",
+      "b": "2.0 r41",
+      "catalogDate": 1774828800,
+      "expected": "a<b",
+      "_note": "Prefix match prevents false scheme-mismatch; normal comparison applies"
+    },
+    {
+      "description": "suffix mismatch: r vs build without catalogDate → unknown",
+      "a": "2.0 r41",
+      "b": "2.0 build 5",
+      "expected": "a==b",
+      "_note": "Different suffix keywords → scheme mismatch, no catalogDate → return 0"
+    },
+    {
+      "description": "suffix mismatch: r vs build with catalogDate → catalog wins",
+      "a": "2.0 r41",
+      "b": "2.0 build 5",
+      "catalogDate": 1774828800,
+      "expected": "a<b",
+      "_note": "Different suffix keywords → scheme mismatch → catalog is authoritative"
+    },
+    {
+      "description": "same suffix: both r → normal revision compare",
+      "a": "2.0 r41",
+      "b": "2.0 r42",
+      "catalogDate": 1774828800,
+      "expected": "a<b",
+      "_note": "Same suffix 'r' → compare revision numbers normally"
+    },
+    {
+      "description": "same suffix: both build → normal build compare",
+      "a": "2.3.22 build 1442",
+      "b": "2.3.22 build 1500",
+      "catalogDate": 1774828800,
+      "expected": "a<b",
+      "_note": "Same suffix 'build' → compare build numbers normally"
     }
   ]
 }

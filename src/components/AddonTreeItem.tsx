@@ -1,7 +1,7 @@
 // Copyright (c) 2026 thorstendb
 // SPDX-License-Identifier: MIT
 import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { AddonInfo, CatalogAddon, CharacterSettings, ADDON_CATEGORIES, getCategoryIconUrl, compareVersionStrings } from '../../electron/shared/types';
+import { AddonInfo, CatalogAddon, CharacterSettings, ADDON_CATEGORIES, getCategoryIconUrl } from '../../electron/shared/types';
 import ColoredText from './ColoredText';
 import RichText, { stripBBCode } from './RichText';
 import ImagePreview from './ImagePreview';
@@ -33,6 +33,7 @@ interface AddonTreeItemProps {
   onNavigateCatalog?: (addonId: string) => void;
   installProgress?: Record<string, { phase: string; percent?: number; current?: number; total?: number }>;
   collapseAllCounter?: number;
+  hasUpdate?: boolean;
 }
 
 const AddonTreeItem: React.FC<AddonTreeItemProps> = ({
@@ -61,6 +62,7 @@ const AddonTreeItem: React.FC<AddonTreeItemProps> = ({
   onNavigateCatalog,
   installProgress,
   collapseAllCounter = 0,
+  hasUpdate = false,
 }) => {
   const [expanded, setExpanded] = useState(false);
   const [subAddonsExpanded, setSubAddonsExpanded] = useState(false);
@@ -310,9 +312,9 @@ const AddonTreeItem: React.FC<AddonTreeItemProps> = ({
               className="row-btn row-btn-install"
               onClick={(e) => { e.stopPropagation(); onInstall(catalogAddon); }}
               disabled={isInstalling}
-              title="Reinstall"
+              title={hasUpdate ? 'Update to catalog version' : 'Reinstall'}
             >
-              {isInstalling ? '⏳' : '🔄'}
+              {isInstalling ? '⏳' : hasUpdate ? '⬆️' : '🔄'}
             </button>
           )}
           {onDelete && (
@@ -382,6 +384,26 @@ const AddonTreeItem: React.FC<AddonTreeItemProps> = ({
       })()}
       {expanded && hasDetails && (
         <div className="tree-children">
+          {/* JSON record button – always visible */}
+          <div className="tree-detail" style={{ position: 'relative' }}>
+            <button
+              style={{ fontSize: '11px', padding: '1px 6px', background: 'none', border: 'none', cursor: 'pointer', borderRadius: '3px', opacity: 0.6, color: '#ccc' }}
+              onClick={(e) => { e.stopPropagation(); setCatalogPopup(p => !p); }}
+              title="Show raw JSON data"
+            >
+              📋 JSON
+            </button>
+            {catalogPopup && (
+              <div ref={catalogPopupRef} className="catalog-json-popup" onClick={(e) => e.stopPropagation()}>
+                <div className="catalog-json-header">
+                  <span>JSON — {addon.title || addon.folderName}</span>
+                  <button className="restore-close-btn" onClick={() => setCatalogPopup(false)} title="Close">✕</button>
+                </div>
+                <pre className="catalog-json-content">{JSON.stringify({ local: addon, ...(catalogAddon ? { catalog: catalogAddon } : {}) }, null, 2)}</pre>
+              </div>
+            )}
+          </div>
+
           {/* Sub-addons – shown as first children */}
           {hasSubAddons && (
             <div className="tree-item">
@@ -880,7 +902,7 @@ const AddonTreeItem: React.FC<AddonTreeItemProps> = ({
             </div>
           )}
 
-          {/* ESOUI Catalog Entry - expandable with JSON popup */}
+          {/* ESOUI Catalog Entry - expandable */}
           {catalogAddon && (
             <div className="tree-item">
               <div
@@ -890,24 +912,6 @@ const AddonTreeItem: React.FC<AddonTreeItemProps> = ({
               >
                 <span className={`tree-chevron ${catalogExpanded ? 'expanded' : ''}`}>▶</span>
                 <span className="detail-label">ESOUI Catalog Entry</span>
-                <span style={{ position: 'relative' }}>
-                  <button
-                    style={{ fontSize: '11px', padding: '1px 6px', background: 'none', border: 'none', cursor: 'pointer', borderRadius: '3px', opacity: 0.6, color: '#ccc' }}
-                    onClick={(e) => { e.stopPropagation(); setCatalogPopup(p => !p); }}
-                    title="Show raw ESOUI JSON data"
-                  >
-                    📋 JSON
-                  </button>
-                  {catalogPopup && (
-                    <div ref={catalogPopupRef} className="catalog-json-popup" onClick={(e) => e.stopPropagation()}>
-                      <div className="catalog-json-header">
-                        <span>ESOUI JSON — {catalogAddon.name}</span>
-                        <button className="restore-close-btn" onClick={() => setCatalogPopup(false)} title="Close">✕</button>
-                      </div>
-                      <pre className="catalog-json-content">{JSON.stringify(catalogAddon, null, 2)}</pre>
-                    </div>
-                  )}
-                </span>
               </div>
               {catalogExpanded && (
                 <div className="tree-children">
@@ -1018,15 +1022,11 @@ const AddonTreeItem: React.FC<AddonTreeItemProps> = ({
               <button className="restore-close-btn" onClick={() => setInfoPopup(false)} title="Close">✕</button>
             </div>
             <div className="addon-info-actions">
-              {catalogAddon && onInstall && (() => {
-                const isUpdate = catalogAddon && addon.version && catalogAddon.version
-                  && compareVersionStrings(addon.version, catalogAddon.version, catalogAddon.date) < 0;
-                return (
-                  <button className="info-action-btn" onClick={() => { setInfoPopup(false); onInstall(catalogAddon); }} disabled={isInstalling} title={isUpdate ? 'Update to catalog version' : 'Reinstall from catalog'}>
-                    {isInstalling ? '⏳' : isUpdate ? '⬆️' : '🔄'} {isUpdate ? 'Update' : 'Reinstall'}
+              {catalogAddon && onInstall && (
+                  <button className="info-action-btn" onClick={() => { setInfoPopup(false); onInstall(catalogAddon); }} disabled={isInstalling} title={hasUpdate ? 'Update to catalog version' : 'Reinstall from catalog'}>
+                    {isInstalling ? '⏳' : hasUpdate ? '⬆️' : '🔄'} {hasUpdate ? 'Update' : 'Reinstall'}
                   </button>
-                );
-              })()}
+              )}
               {onDelete && (
                 <button className="info-action-btn danger" onClick={() => { setInfoPopup(false); onDelete(addon.folderName); }} title="Delete addon">
                   🗑️ Delete

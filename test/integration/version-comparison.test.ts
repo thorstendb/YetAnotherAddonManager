@@ -6,6 +6,7 @@ interface ParseTest {
   pattern: string; input: string; addon: string;
   expectedParts: number[]; expectedSubParts: number[];
   expectedPreRelease?: string; expectedPreReleaseNum?: number;
+  expectedSuffix?: string; expectedSuffixParts?: number[];
 }
 interface CompareTest {
   description: string; a: string; b: string; expected: string;
@@ -25,6 +26,12 @@ describe('parseVersionParts – real-world addon versions', () => {
       }
       if (t.expectedPreReleaseNum !== undefined) {
         expect(result.preReleaseNum).toBe(t.expectedPreReleaseNum);
+      }
+      if (t.expectedSuffix !== undefined) {
+        expect(result.suffix).toBe(t.expectedSuffix);
+      }
+      if (t.expectedSuffixParts !== undefined) {
+        expect(result.suffixParts).toEqual(t.expectedSuffixParts);
       }
     });
   }

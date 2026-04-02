@@ -452,14 +452,19 @@ export function reconcileYaamMetadata(
     const existing = db.addons[m.folderName];
 
     if (!existing) {
-      // No DB entry yet — create if confident match
+      // No DB entry yet — create if confident match.
+      // catalogVersion is intentionally left EMPTY for reconciliation-created
+      // entries.  We don't know when the user installed this addon, so we
+      // can't assume it matches the current catalog version.  An empty
+      // catalogVersion signals "never installed/verified by YAAM", which
+      // makes the addon eligible for the "possible update" list.
       if (!m.confident) continue;
       db.addons[m.folderName] = {
         esouid: m.esouid,
         url: m.url,
         catalogName: m.name,
         catalogAuthor: m.author,
-        catalogVersion: m.version,
+        catalogVersion: '',
         localVersion: m.localVersion,
         installedAt: now,
         updatedAt: now,
@@ -468,12 +473,16 @@ export function reconcileYaamMetadata(
       result.created++;
       result.details.push(`Created DB entry for ${m.folderName} → ${m.name} (#${m.esouid})`);
     } else {
-      // Existing entry — check if it needs updating
+      // Existing entry — check if it needs updating.
+      // catalogVersion tracks what was current AT INSTALL/UPDATE TIME.
+      // It should NOT be bumped to the latest catalog value during reconciliation,
+      // because isUpdateAvailable uses (catalogVersion !== current catalog version)
+      // to detect that a new version was published since last install.
+      // Only update non-catalog fields: esouid, name, author, url, localVersion.
       const needsUpdate =
         existing.esouid !== m.esouid ||
         existing.catalogName !== m.name ||
         existing.catalogAuthor !== m.author ||
-        existing.catalogVersion !== m.version ||
         existing.url !== m.url ||
         existing.localVersion !== m.localVersion;
 
@@ -482,7 +491,6 @@ export function reconcileYaamMetadata(
       const changes: string[] = [];
       if (existing.esouid !== m.esouid) changes.push(`id: ${existing.esouid}→${m.esouid}`);
       if (existing.catalogName !== m.name) changes.push(`name: ${existing.catalogName}→${m.name}`);
-      if (existing.catalogVersion !== m.version) changes.push(`catVer: ${existing.catalogVersion}→${m.version}`);
       if (existing.localVersion !== m.localVersion) changes.push(`localVer: ${existing.localVersion}→${m.localVersion}`);
 
       db.addons[m.folderName] = {
@@ -490,10 +498,16 @@ export function reconcileYaamMetadata(
         url: m.url,
         catalogName: m.name,
         catalogAuthor: m.author,
-        catalogVersion: m.version,
+        catalogVersion: existing.catalogVersion,  // preserve install-time value
         localVersion: m.localVersion,
         installedAt: existing.installedAt,
-        updatedAt: now,
+        // Only bump updatedAt when the local addon files actually changed
+        // (i.e. localVersion differs).  Catalog-only metadata changes
+        // (new catalogVersion, name, author) must NOT reset the timestamp,
+        // otherwise the date-based "possible update" check in
+        // isUpdateAvailable is defeated (updatedAt would always be > catalog date).
+        updatedAt: existing.localVersion !== m.localVersion ? now : existing.updatedAt,
+        installedFiles: existing.installedFiles,
       };
       changed = true;
       result.updated++;
@@ -558,21 +572,32 @@ function moveToRemoved(addonsPath: string, folderNames: string[]): string[] {
 /**
  * Move all unreferenced libraries into Removed/.
  */
-export function previewUnusedLibraries(addonsPath: string): string[] {
+export function previewUnusedLibraries(addonsPath: string): { unreferenced: string[]; optionalOnly: string[] } {
   const allAddons = scanAddonsFolder(addonsPath);
-  const referenced = new Set<string>();
+  // Track required vs optional references separately
+  const requiredRefs = new Set<string>();
+  const optionalRefs = new Set<string>();
   for (const addon of allAddons) {
-    for (const dep of addon.dependsOn) referenced.add(dep.name);
-    for (const dep of addon.optionalDependsOn) referenced.add(dep.name);
+    for (const dep of addon.dependsOn) requiredRefs.add(dep.name);
+    for (const dep of addon.optionalDependsOn) optionalRefs.add(dep.name);
     for (const sub of addon.subAddons) {
-      for (const dep of sub.dependsOn) referenced.add(dep.name);
-      for (const dep of sub.optionalDependsOn) referenced.add(dep.name);
+      for (const dep of sub.dependsOn) requiredRefs.add(dep.name);
+      for (const dep of sub.optionalDependsOn) optionalRefs.add(dep.name);
     }
   }
-  return allAddons
-    .filter((a) => a.isLibrary && !referenced.has(a.folderName) && !referenced.has(a.title))
-    .map((a) => a.folderName)
-    .sort();
+  const unreferenced: string[] = [];
+  const optionalOnly: string[] = [];
+  for (const a of allAddons) {
+    if (!a.isLibrary) continue;
+    const isRequired = requiredRefs.has(a.folderName) || requiredRefs.has(a.title);
+    const isOptional = optionalRefs.has(a.folderName) || optionalRefs.has(a.title);
+    if (!isRequired && !isOptional) {
+      unreferenced.push(a.folderName);
+    } else if (!isRequired && isOptional) {
+      optionalOnly.push(a.folderName);
+    }
+  }
+  return { unreferenced: unreferenced.sort(), optionalOnly: optionalOnly.sort() };
 }
 
 export function cleanupSelectedLibraries(addonsPath: string, folderNames: string[]): { moved: string[]; addons: AddonInfo[] } {

@@ -22,6 +22,8 @@ interface PathBarProps {
   hasAddons: boolean;
   unreferencedCount: number;
   updateCount: number;
+  mightUpdateCount?: number;
+  replacementCount?: number;
   updatingAll?: boolean;
   updateRemaining?: number;
   theme: 'dark' | 'light';
@@ -48,6 +50,8 @@ const PathBar: React.FC<PathBarProps> = ({
   hasAddons,
   unreferencedCount,
   updateCount,
+  mightUpdateCount = 0,
+  replacementCount = 0,
   updatingAll,
   updateRemaining,
   theme,
@@ -129,11 +133,11 @@ const PathBar: React.FC<PathBarProps> = ({
         <legend>Updates</legend>
         <button
           onClick={onUpdateAll}
-          disabled={!updatingAll && (!hasAddons || loading || updateCount === 0)}
-          title={updatingAll ? 'Cancel update' : updateCount > 0 ? `Update ${updateCount} addon(s) with newer versions from catalog` : 'All addons are up-to-date'}
+          disabled={!updatingAll && (!hasAddons || loading || (updateCount === 0 && mightUpdateCount === 0 && replacementCount === 0))}
+          title={updatingAll ? 'Cancel update' : updateCount > 0 ? `Update ${updateCount} addon(s) with newer versions from catalog` : mightUpdateCount > 0 ? `${mightUpdateCount} addon(s) might have updates` : replacementCount > 0 ? `${replacementCount} addon(s) have replacements available` : 'All addons are up-to-date'}
           className={updatingAll ? 'btn-warning' : 'btn-secondary'}
         >
-          {updatingAll ? `❌ Cancel Update${updateRemaining ? ` (${updateRemaining} left)` : ''}` : `⬆ Update All${updateCount > 0 ? ` (${updateCount})` : ''}`}
+          {updatingAll ? `❌ Cancel Update${updateRemaining ? ` (${updateRemaining} left)` : ''}` : `⬆ Update All${updateCount > 0 ? ` (${updateCount})` : mightUpdateCount > 0 ? ` (${mightUpdateCount}?)` : ''}`}
         </button>
         <button
           onClick={onGoBack}

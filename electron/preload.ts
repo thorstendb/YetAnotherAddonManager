@@ -166,7 +166,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.invoke(IPC_CHANNELS.BATCH_INSTALL_ADDONS, addonsPath, addonIds),
   getSystemFonts: (): Promise<string[]> =>
     ipcRenderer.invoke(IPC_CHANNELS.GET_SYSTEM_FONTS),
-  previewCleanupLibs: (addonsPath: string): Promise<string[]> =>
+  previewCleanupLibs: (addonsPath: string): Promise<{ unreferenced: string[]; optionalOnly: string[] }> =>
     ipcRenderer.invoke(IPC_CHANNELS.PREVIEW_CLEANUP_LIBS, addonsPath),
   cleanupLibsSelected: (addonsPath: string, folderNames: string[]): Promise<{ moved: string[]; addons: AddonInfo[] }> =>
     ipcRenderer.invoke(IPC_CHANNELS.CLEANUP_LIBS_SELECTED, addonsPath, folderNames),

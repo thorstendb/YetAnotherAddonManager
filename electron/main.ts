@@ -627,7 +627,7 @@ ipcMain.handle(IPC_CHANNELS.PREVIEW_CLEANUP_LIBS, async (_event, addonsPath: str
     return previewUnusedLibraries(addonsPath);
   } catch (err: unknown) {
     console.error('Preview cleanup libs error:', err);
-    return [];
+    return { unreferenced: [], optionalOnly: [] };
   }
 });
 

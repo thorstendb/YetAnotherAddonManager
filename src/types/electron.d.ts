@@ -120,7 +120,7 @@ declare global {
         addonIds: string[]
       ) => Promise<{ addonId: string; installed: string[]; error?: string }[]>;
       getSystemFonts: () => Promise<string[]>;
-      previewCleanupLibs: (addonsPath: string) => Promise<string[]>;
+      previewCleanupLibs: (addonsPath: string) => Promise<{ unreferenced: string[]; optionalOnly: string[] }>;
       cleanupLibsSelected: (addonsPath: string, folderNames: string[]) => Promise<{ moved: string[]; addons: AddonInfo[] }>;
       previewCleanupSettings: (addonsPath: string, existingAddonNames: string[]) => Promise<{ orphanedSettings: string[]; orphanedSavedVars: string[] }>;
       cleanupSettingsSelected: (

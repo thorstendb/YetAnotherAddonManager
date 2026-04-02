@@ -8,7 +8,7 @@ interface CleanupDialogProps {
   type: CleanupType;
   /** For libs/downloads: simple list of names. For settings: { orphanedSettings, orphanedSavedVars } */
   items: string[];
-  /** Only for settings cleanup: orphaned SavedVariables file names */
+  /** Secondary items: orphaned SavedVariables (settings) or optional-only libs (libs) */
   savedVarItems?: string[];
   onConfirm: (selectedItems: string[], selectedSvItems?: string[]) => void;
   onCancel: () => void;
@@ -29,7 +29,8 @@ const CleanupDialog: React.FC<CleanupDialogProps> = ({
 }) => {
   const closeRef = useRef<HTMLButtonElement>(null);
   const [selected, setSelected] = useState<Set<string>>(() => new Set(items));
-  const [selectedSv, setSelectedSv] = useState<Set<string>>(() => new Set(savedVarItems));
+  // Optional-only libs start unselected (they're less critical); savedVars start selected
+  const [selectedSv, setSelectedSv] = useState<Set<string>>(() => type === 'libs' ? new Set() : new Set(savedVarItems));
 
   useEffect(() => {
     closeRef.current?.focus();
@@ -72,12 +73,13 @@ const CleanupDialog: React.FC<CleanupDialogProps> = ({
     }
   };
 
-  const totalSelected = selected.size + (type === 'settings' ? selectedSv.size : 0);
-  const totalItems = items.length + (type === 'settings' ? savedVarItems.length : 0);
+  const hasSvSection = type === 'settings' || (type === 'libs' && savedVarItems.length > 0);
+  const totalSelected = selected.size + (hasSvSection ? selectedSv.size : 0);
+  const totalItems = items.length + (hasSvSection ? savedVarItems.length : 0);
 
   const handleConfirm = () => {
     if (totalSelected === 0) return;
-    onConfirm(Array.from(selected), type === 'settings' ? Array.from(selectedSv) : undefined);
+    onConfirm(Array.from(selected), hasSvSection ? Array.from(selectedSv) : undefined);
   };
 
   return (
@@ -97,7 +99,11 @@ const CleanupDialog: React.FC<CleanupDialogProps> = ({
               {/* Main items list */}
               {items.length > 0 && (
                 <>
-                  {type === 'settings' && <div className="cleanup-section-label">Orphaned Settings ({items.length})</div>}
+                  {(type === 'settings' || (type === 'libs' && savedVarItems.length > 0)) && (
+                    <div className="cleanup-section-label">
+                      {type === 'settings' ? `Orphaned Settings (${items.length})` : `Unreferenced Libraries (${items.length})`}
+                    </div>
+                  )}
                   <label className="cleanup-select-all" onClick={toggleAll}>
                     <input
                       type="checkbox"
@@ -121,10 +127,12 @@ const CleanupDialog: React.FC<CleanupDialogProps> = ({
                 </>
               )}
 
-              {/* SavedVariables list (settings cleanup only) */}
-              {type === 'settings' && savedVarItems.length > 0 && (
+              {/* Secondary items: SavedVariables (settings) or Optional-only libs (libs) */}
+              {hasSvSection && savedVarItems.length > 0 && (
                 <>
-                  <div className="cleanup-section-label" style={{ marginTop: '12px' }}>Orphaned SavedVariables ({savedVarItems.length})</div>
+                  <div className="cleanup-section-label" style={{ marginTop: '12px' }}>
+                    {type === 'libs' ? `Optional Dependencies Only (${savedVarItems.length})` : `Orphaned SavedVariables (${savedVarItems.length})`}
+                  </div>
                   <label className="cleanup-select-all" onClick={toggleAllSv}>
                     <input
                       type="checkbox"

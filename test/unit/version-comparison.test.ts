@@ -55,13 +55,38 @@ describe('parseVersionParts', () => {
 
   it('handles build keyword', () => {
     const result = parseVersionParts('2.3.22 build 1442');
-    expect(result.parts).toEqual([2, 3, 22, 1442]);
+    expect(result.parts).toEqual([2, 3, 22]);
+    expect(result.suffix).toBe('build');
+    expect(result.suffixParts).toEqual([1442]);
   });
 
   it('handles r-revision formats', () => {
-    expect(parseVersionParts('2.r1').parts).toEqual([2, 1]);
-    expect(parseVersionParts('3.0r5.0').parts).toEqual([3, 0, 5, 0]);
-    expect(parseVersionParts('2.0 r41').parts).toEqual([2, 0, 41]);
+    expect(parseVersionParts('2.r1').parts).toEqual([2]);
+    expect(parseVersionParts('2.r1').suffix).toBe('r');
+    expect(parseVersionParts('2.r1').suffixParts).toEqual([1]);
+
+    expect(parseVersionParts('3.0r5.0').parts).toEqual([3, 0]);
+    expect(parseVersionParts('3.0r5.0').suffix).toBe('r');
+    expect(parseVersionParts('3.0r5.0').suffixParts).toEqual([5, 0]);
+
+    expect(parseVersionParts('2.0 r41').parts).toEqual([2, 0]);
+    expect(parseVersionParts('2.0 r41').suffix).toBe('r');
+    expect(parseVersionParts('2.0 r41').suffixParts).toEqual([41]);
+  });
+
+  it('extracts suffix keyword', () => {
+    expect(parseVersionParts('2.0 r41').suffix).toBe('r');
+    expect(parseVersionParts('2.r1').suffix).toBe('r');
+    expect(parseVersionParts('3.0r5.0').suffix).toBe('r');
+    expect(parseVersionParts('2.3.22 build 1442').suffix).toBe('build');
+    expect(parseVersionParts('1.0 rev3').suffix).toBe('rev');
+  });
+
+  it('suffixParts empty for plain versions', () => {
+    expect(parseVersionParts('1.2.3').suffixParts).toEqual([]);
+    expect(parseVersionParts('86').suffixParts).toEqual([]);
+    expect(parseVersionParts('2025.08.08').suffixParts).toEqual([]);
+    expect(parseVersionParts('v2.31').suffixParts).toEqual([]);
   });
 });
 
@@ -299,5 +324,57 @@ describe('compareVersionStrings', () => {
   // semver→date→semver chain: local was date, catalog now semver (local still date)
   it('transition: date "2025-08-08" → semver "2.0.0" catalog newer', () => {
     expect(compareVersionStrings('2025-08-08', '2.0.0', 1774828800)).toBeLessThan(0);
+  });
+
+  // ── r-revision suffix (LibAddonMenu style: "2.0 r41") ──
+
+  it('r-revision: "2.0 r41" < "2.0 r42" (revision bump)', () => {
+    expect(compareVersionStrings('2.0 r41', '2.0 r42')).toBeLessThan(0);
+  });
+
+  it('r-revision: "2.0 r41" = "2.0 r41" (same revision)', () => {
+    expect(compareVersionStrings('2.0 r41', '2.0 r41')).toBe(0);
+  });
+
+  it('r-revision: "2.0" < "2.0 r41" (base version vs revision)', () => {
+    expect(compareVersionStrings('2.0', '2.0 r41')).toBeLessThan(0);
+  });
+
+  it('r-revision: "2.0 r41" > "2.0" (revision vs base version)', () => {
+    expect(compareVersionStrings('2.0 r41', '2.0')).toBeGreaterThan(0);
+  });
+
+  it('r-revision: "v2.0 r41" < "2.0 r42" (v-prefix + revision bump)', () => {
+    expect(compareVersionStrings('v2.0 r41', '2.0 r42')).toBeLessThan(0);
+  });
+
+  it('r-revision: "2.0" < "2.0 r41" with catalogDate (not a scheme change)', () => {
+    expect(compareVersionStrings('2.0', '2.0 r41', 1774828800)).toBeLessThan(0);
+  });
+
+  it('r-revision: "2.0 r41" > "2.0" with catalogDate (not a scheme change)', () => {
+    expect(compareVersionStrings('2.0 r41', '2.0', 1774828800)).toBeGreaterThan(0);
+  });
+
+  // ── Suffix mismatch (r vs build vs rev) ──
+
+  it('suffix mismatch: "2.0 r41" vs "2.0 build 5" without catalogDate → 0', () => {
+    expect(compareVersionStrings('2.0 r41', '2.0 build 5')).toBe(0);
+  });
+
+  it('suffix mismatch: "2.0 r41" vs "2.0 build 5" with catalogDate → catalog wins', () => {
+    expect(compareVersionStrings('2.0 r41', '2.0 build 5', 1774828800)).toBeLessThan(0);
+  });
+
+  it('suffix mismatch: "1.0 rev3" vs "1.0 r3" with catalogDate → catalog wins', () => {
+    expect(compareVersionStrings('1.0 rev3', '1.0 r3', 1774828800)).toBeLessThan(0);
+  });
+
+  it('same suffix: "2.0 r41" vs "2.0 r42" (both r → normal compare)', () => {
+    expect(compareVersionStrings('2.0 r41', '2.0 r42', 1774828800)).toBeLessThan(0);
+  });
+
+  it('same suffix: "2.3.22 build 1442" vs "2.3.22 build 1500" (both build → normal compare)', () => {
+    expect(compareVersionStrings('2.3.22 build 1442', '2.3.22 build 1500', 1774828800)).toBeLessThan(0);
   });
 });

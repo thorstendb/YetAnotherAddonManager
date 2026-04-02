@@ -128,7 +128,11 @@ function App() {
     window.electronAPI.getConfig().then((config) => {
       if (config.logHeight) setLogHeight(config.logHeight);
       if (config.panelWidths) setPanelWidths(config.panelWidths);
-      if (config.installedCatalogVersions) setInstalledCatalogVersions(config.installedCatalogVersions);
+      // installedCatalogVersions is intentionally NOT loaded from config.
+      // It is a session-only guard set after each install to suppress false
+      // "update available" during the same session.  The persistent guard is
+      // yaamMeta.catalogVersion (checked with cmp >= 0). Loading the persisted
+      // map would mask real updates when the local addon was replaced manually.
       if (config.fontSize) setFontSize(config.fontSize);
       if (config.fontFamily) setFontFamily(config.fontFamily);
       if (config.skipCleanupConfirm) setSkipCleanupConfirm(config.skipCleanupConfirm);
@@ -191,7 +195,9 @@ function App() {
         }
       }
       setCatalogDirNames(dirSet);
-      setCatalogAddons(onlineList);
+      // Only replace catalog if fetch succeeded (non-empty response).
+      // A failed refetch should not clear existing catalog data and break update detection.
+      if (onlineList.length > 0) setCatalogAddons(onlineList);
       // Clear recently-updated tracking since we have fresh data
       setRecentlyUpdated(new Set());
 
@@ -201,12 +207,20 @@ function App() {
         const catById = new Map<string, CatalogAddon>();
         const catByUrl = new Map<string, CatalogAddon>();
         const catByDir = new Map<string, CatalogAddon>();
+        const catByDirIsPrimary = new Map<string, boolean>();
         const dirCount = new Map<string, number>();
         for (const ca of onlineList) {
           catById.set(ca.id, ca);
           if (ca.infoUrl) catByUrl.set(ca.infoUrl.toLowerCase(), ca);
-          for (const d of ca.directories) {
-            catByDir.set(d, ca);
+          for (let i = 0; i < ca.directories.length; i++) {
+            const d = ca.directories[i];
+            const primary = i === 0;
+            const existingPrimary = catByDirIsPrimary.get(d) || false;
+            // Primary dir always wins over secondary; among same tier prefer later (arbitrary)
+            if (!catByDir.has(d) || (primary && !existingPrimary)) {
+              catByDir.set(d, ca);
+              catByDirIsPrimary.set(d, primary);
+            }
             dirCount.set(d, (dirCount.get(d) || 0) + 1);
           }
         }
@@ -241,6 +255,41 @@ function App() {
             if (res.created > 0 || res.updated > 0) {
               addLog(`Database reconciled: ${res.created} created, ${res.updated} updated`, 'info');
               for (const d of res.details) addLog(`  ${d}`, 'info');
+              // Re-inject updated yaamMeta into addons state so update detection
+              // uses fresh catalogVersion / localVersion values without needing a rescan.
+              const matchMap = new Map(matches.map(m => [m.folderName, m]));
+              setAddons(prev => prev.map(a => {
+                const m = matchMap.get(a.folderName);
+                if (!m) return a;
+                // For newly created entries (no existing yaamMeta from scan),
+                // inject a basic yaamMeta so update detection uses the DB guard
+                // instead of falling through to the raw cmp < 0 path.
+                if (!a.yaamMeta) {
+                  return {
+                    ...a,
+                    yaamMeta: {
+                      esouid: m.esouid,
+                      url: m.url,
+                      catalogName: m.name,
+                      catalogAuthor: m.author,
+                      catalogVersion: '',  // empty = never installed via YAAM
+                      localVersion: m.localVersion,
+                      installedAt: new Date().toISOString(),
+                      updatedAt: new Date().toISOString(),
+                    },
+                  };
+                }
+                // Reconciliation only updates localVersion (not catalogVersion).
+                // Only re-inject if localVersion changed.
+                if (a.yaamMeta.localVersion === m.localVersion) return a;
+                return {
+                  ...a,
+                  yaamMeta: {
+                    ...a.yaamMeta,
+                    localVersion: m.localVersion,
+                  },
+                };
+              }));
             }
           }).catch(() => {});
         }
@@ -298,8 +347,15 @@ function App() {
     return map;
   }, [addons]);
 
-  // Set of installed directory names for the online browser
-  const installedDirNames = useMemo(() => new Set(addons.map((a) => a.folderName)), [addons]);
+  // Set of installed directory names for the online browser (includes sub-addon dirs)
+  const installedDirNames = useMemo(() => {
+    const set = new Set<string>();
+    for (const a of addons) {
+      set.add(a.folderName);
+      for (const sub of a.subAddons) set.add(sub.folderName);
+    }
+    return set;
+  }, [addons]);
 
   // Set of addons NOT found in the catalog and without their own download URL
   // (computed after catalog lookup maps below, but declared here for readability)
@@ -334,14 +390,24 @@ function App() {
     return map;
   }, [catalogAddons]);
 
-  // 4. Directory name → CatalogAddon (may collide — keep most-downloaded)
+  // 4. Directory name → CatalogAddon
+  // Prefer entries where the dir is the PRIMARY directory (directories[0]),
+  // not just a bundled library.  Among same-priority entries, keep most-downloaded.
   const catalogByDir = useMemo(() => {
     const map = new Map<string, CatalogAddon>();
+    const isPrimary = new Map<string, boolean>();
     for (const addon of catalogAddons) {
-      for (const dir of addon.directories) {
+      for (let i = 0; i < addon.directories.length; i++) {
+        const dir = addon.directories[i];
+        const primary = i === 0;
         const existing = map.get(dir);
-        if (!existing || addon.totalDownloads > existing.totalDownloads) {
+        const existingPrimary = isPrimary.get(dir) || false;
+        // Primary always beats secondary; among same tier, prefer more downloads
+        if (!existing
+          || (primary && !existingPrimary)
+          || (primary === existingPrimary && addon.totalDownloads > existing.totalDownloads)) {
           map.set(dir, addon);
+          isPrimary.set(dir, primary);
         }
       }
     }
@@ -473,6 +539,15 @@ function App() {
       // Prefer the one with higher downloads (more likely the maintained fork)
       for (const ca of candidates) {
         if (ca.id === currentId) continue;
+        // Skip entries where the shared dir is only a bundled secondary
+        // (not directories[0]) — this addon just bundles a lib, not a real replacement
+        if (ca.directories[0] !== addon.folderName) continue;
+        // Skip if the current match's version is already >= the replacement
+        // (no point suggesting a swap when the installed version is current)
+        if (currentMatch && currentMatch.version) {
+          const cmp = compareVersionStrings(currentMatch.version, ca.version, ca.date);
+          if (cmp >= 0) continue;
+        }
         const existing = map.get(addon.folderName);
         if (!existing || ca.totalDownloads > existing.totalDownloads) {
           map.set(addon.folderName, ca);
@@ -708,16 +783,62 @@ function App() {
    */
   const isUpdateAvailable = useCallback(
     (addon: AddonInfo, catalogAddon: CatalogAddon): boolean => {
-      // Already installed this exact catalog revision
-      if (installedCatalogVersions[catalogAddon.id] === catalogAddon.version) return false;
       // Skip recently-updated addons (local version hasn't been rescanned yet)
       if (recentlyUpdated.has(catalogAddon.id)) return false;
-      // YAAM database records the exact catalog version at install time —
-      // if it matches the current catalog version, no update is needed
-      // regardless of what the local ## Version header says.
-      if (addon.yaamMeta?.catalogVersion === catalogAddon.version) return false;
+      // Session guard: we just installed this exact catalog revision in this
+      // session.  The local manifest version may use a different format than
+      // the catalog (e.g. "1.05" vs "105"), so comparing them is unreliable.
+      // Trust the session record unconditionally.
+      if (installedCatalogVersions[catalogAddon.id] === catalogAddon.version) return false;
       const localVer = getEffectiveVersion(addon, catalogAddon);
-      return compareVersionStrings(localVer, catalogAddon.version, catalogAddon.date) < 0;
+      const cmp = compareVersionStrings(localVer, catalogAddon.version, catalogAddon.date);
+      // YAAM database records the catalog version AND the local manifest
+      // version at install/reconcile time.  If both still match, the addon
+      // hasn't changed — a negative cmp is just a format mismatch
+      // (e.g. manifest "1.05" vs catalog "105"), not a real downgrade.
+      if (addon.yaamMeta?.catalogVersion === catalogAddon.version) {
+        if (cmp > 0) return false;                 // local definitely newer
+        if (cmp === 0) {
+          // Inconclusive — fall through to the date-based check below
+        } else {
+          // cmp < 0: format mismatch (e.g. "1.05" vs "105") or stale DB.
+          // The catalog version hasn't changed since our last install/reconcile,
+          // so there is definitively NO new update.  Any negative cmp is just a
+          // numbering-scheme difference.  Return false unconditionally.
+          return false;
+        }
+      }
+      // Catalog version string literally changed since last reconciliation
+      // AND version comparison is inconclusive (scheme mismatch → cmp === 0).
+      // This is a real update that numeric comparison can't verify.
+      if (cmp === 0 && addon.yaamMeta?.catalogVersion && addon.yaamMeta.catalogVersion !== catalogAddon.version) {
+        // Still check AddOnVersion as a safety net — it often matches the
+        // catalog numbering even when ## Version doesn't.
+        if (addon.addonVersion > 0) {
+          const cmpAV = compareVersionStrings(String(addon.addonVersion), catalogAddon.version, catalogAddon.date);
+          if (cmpAV >= 0) return false;
+        }
+        return true;
+      }
+      if (cmp < 0) {
+        // Before flagging as update, check AddOnVersion (integer) as fallback.
+        // Many addons use different formats for ## Version (e.g. "1.05") vs
+        // the ESOUI UIVersion field (e.g. "105").  The ## AddOnVersion integer
+        // often matches the catalog version numerically.
+        if (addon.addonVersion > 0) {
+          const cmpAV = compareVersionStrings(String(addon.addonVersion), catalogAddon.version, catalogAddon.date);
+          if (cmpAV >= 0) return false;
+        }
+        return true;
+      }
+      // Version comparison inconclusive (scheme mismatch returns 0) —
+      // fall back to catalog upload date vs local install/update date.
+      // If the catalog was updated after our last install, flag as potential update.
+      if (cmp === 0 && catalogAddon.date && addon.yaamMeta?.updatedAt) {
+        const localEpoch = Math.floor(new Date(addon.yaamMeta.updatedAt).getTime() / 1000);
+        if (catalogAddon.date > localEpoch) return true;
+      }
+      return false;
     },
     [installedCatalogVersions, recentlyUpdated, getEffectiveVersion]
   );
@@ -737,6 +858,50 @@ function App() {
     // NOT counted as pending updates — the user must explicitly opt in.
     return count;
   }, [addons, getCatalogAddon, isUpdateAvailable, replacementCandidates]);
+
+  // Count of addons where version comparison is inconclusive (scheme mismatch)
+  // but the catalog version string differs from what we recorded at install/reconcile.
+  // These are NOT counted in updateCount but still make the Update All button available
+  // so the user can review and decide.
+  const mightUpdateCount = useMemo(() => {
+    const seen = new Set<string>();
+    let count = 0;
+    for (const addon of addons) {
+      const catalogAddon = getCatalogAddon(addon);
+      if (!catalogAddon || seen.has(catalogAddon.id)) continue;
+      seen.add(catalogAddon.id);
+      if (isUpdateAvailable(addon, catalogAddon)) continue; // already counted
+      // Skip addons we just installed in this session
+      if (installedCatalogVersions[catalogAddon.id] === catalogAddon.version) continue;
+      if (recentlyUpdated.has(catalogAddon.id)) continue;
+      // No yaamMeta → never tracked by YAAM → might need an update
+      // but only if version comparison is inconclusive
+      if (!addon.yaamMeta || !addon.yaamMeta.catalogVersion) {
+        const localVer = getEffectiveVersion(addon, catalogAddon);
+        // String-equal → definitely same version, skip
+        if (localVer.trim() === catalogAddon.version.trim()) continue;
+        const cmp = compareVersionStrings(localVer, catalogAddon.version, catalogAddon.date);
+        // cmp > 0 → local is newer, no update needed
+        // cmp < 0 → isUpdateAvailable should have caught it (or addonVersion confirmed OK)
+        // cmp === 0 → truly inconclusive (format mismatch), count as "might update"
+        if (cmp === 0) count++;
+        continue;
+      }
+      // Catalog version changed since last install/reconcile → possible update
+      if (addon.yaamMeta.catalogVersion !== catalogAddon.version) {
+        count++;
+        continue;
+      }
+      // Date-based fallback: catalog uploaded after our last install
+      if (catalogAddon.date && addon.yaamMeta.updatedAt) {
+        const localEpoch = Math.floor(new Date(addon.yaamMeta.updatedAt).getTime() / 1000);
+        if (catalogAddon.date > localEpoch) count++;
+      }
+    }
+    console.log('[YAAM] updateCount', updateCount, 'mightUpdateCount', count,
+      'addons', addons.length, 'catalog', addons.filter(a => getCatalogAddon(a)).length);
+    return count;
+  }, [addons, getCatalogAddon, isUpdateAvailable, getEffectiveVersion, updateCount, installedCatalogVersions, recentlyUpdated]);
 
   // Set of folder names that have an update available (used for sorting to top)
   const updatableFolders = useMemo(() => {
@@ -967,32 +1132,33 @@ function App() {
     }
     // Show preview dialog
     try {
-      const items = await window.electronAPI.previewCleanupLibs(addonPath);
-      if (items.length === 0) {
+      const preview = await window.electronAPI.previewCleanupLibs(addonPath);
+      if (preview.unreferenced.length === 0 && preview.optionalOnly.length === 0) {
         addLog('Cleanup: no unreferenced libraries to remove', 'info');
         return;
       }
-      setCleanupDialog({ type: 'libs', items });
+      setCleanupDialog({ type: 'libs', items: preview.unreferenced, savedVarItems: preview.optionalOnly });
     } catch (err: unknown) {
       addLog(`Cleanup preview failed: ${errMsg(err)}`, 'error');
     }
   }, [addonPath, addLog, libraries, unreferencedLibs, skipCleanupConfirm, scanPath]);
 
-  const handleCleanupLibsConfirm = useCallback(async (selectedItems: string[]) => {
+  const handleCleanupLibsConfirm = useCallback(async (selectedItems: string[], selectedOptional?: string[]) => {
     setCleanupDialog(null);
-    if (!addonPath || selectedItems.length === 0) return;
+    const all = [...selectedItems, ...(selectedOptional || [])];
+    if (!addonPath || all.length === 0) return;
     setLoading(true);
-    addLog(`Removing ${selectedItems.length} unreferenced libraries...`);
+    addLog(`Removing ${all.length} unreferenced libraries...`);
     try {
       const backupPaths: { folder: string; path: string }[] = [];
-      for (const folderName of selectedItems) {
+      for (const folderName of all) {
         const lib = libraries.find(l => l.folderName === folderName);
         if (lib && lib.version) {
           const bp = await window.electronAPI.backupAddonFolder(addonPath, folderName, lib.version);
           if (bp) backupPaths.push({ folder: folderName, path: bp });
         }
       }
-      const result = await window.electronAPI.cleanupLibsSelected(addonPath, selectedItems);
+      const result = await window.electronAPI.cleanupLibsSelected(addonPath, all);
       setAddons(result.addons);
       if (result.moved.length > 0) {
         const revertAction = backupPaths.length > 0 ? {
@@ -1038,8 +1204,8 @@ function App() {
     for (const addon of addons) {
       const match = getCatalogMatch(addon);
       if (match && !seen.has(match.catalogAddon.id)) {
-        seen.add(match.catalogAddon.id);
         if (isUpdateAvailable(addon, match.catalogAddon)) {
+          seen.add(match.catalogAddon.id);
           updatable.push({
             folderName: addon.folderName,
             title: addon.title,
@@ -1069,6 +1235,46 @@ function App() {
       });
     }
 
+    // Add "might update" addons: catalog version differs from what we recorded,
+    // or addon was never tracked by YAAM, but version comparison is inconclusive.
+    for (const addon of addons) {
+      const match = getCatalogMatch(addon);
+      if (!match || seen.has(match.catalogAddon.id)) continue;
+      const ca = match.catalogAddon;
+      // Skip session-installed addons
+      if (installedCatalogVersions[ca.id] === ca.version) continue;
+      if (recentlyUpdated.has(ca.id)) continue;
+      let dominated = false;
+      let mightUpdateReason: 'not-tracked' | 'version-changed' | 'date-newer' | undefined;
+      if (!addon.yaamMeta || !addon.yaamMeta.catalogVersion) {
+        // Never tracked or reconciliation-created → check version comparison
+        const localVer = getEffectiveVersion(addon, ca);
+        // String-equal → definitely same version, not inconclusive
+        const cmp = localVer.trim() === ca.version.trim() ? 1 : compareVersionStrings(localVer, ca.version, ca.date);
+        // Only include if comparison is truly inconclusive (format mismatch)
+        if (cmp === 0) { dominated = true; mightUpdateReason = 'not-tracked'; }
+      } else if (addon.yaamMeta.catalogVersion !== ca.version) {
+        // Catalog version changed since last install/reconcile
+        dominated = true; mightUpdateReason = 'version-changed';
+      } else if (ca.date && addon.yaamMeta.updatedAt) {
+        const localEpoch = Math.floor(new Date(addon.yaamMeta.updatedAt).getTime() / 1000);
+        if (ca.date > localEpoch) { dominated = true; mightUpdateReason = 'date-newer'; }
+      }
+      if (dominated) {
+        seen.add(ca.id);
+        updatable.push({
+          folderName: addon.folderName,
+          title: addon.title,
+          localVersion: getEffectiveVersion(addon, ca),
+          catalogVersion: ca.version,
+          catalogId: ca.id,
+          ambiguous: match.ambiguous,
+          mightUpdate: true,
+          mightUpdateReason,
+        });
+      }
+    }
+
     if (updatable.length === 0) {
       addLog('Update All: nothing to update — all addons are up-to-date', 'info');
       return;
@@ -1076,24 +1282,48 @@ function App() {
 
     // Show selection dialog
     setUpdateAllList(updatable);
-  }, [addons, addonPath, getCatalogMatch, addLog, updatingAll, isUpdateAvailable, getEffectiveVersion, replacementCandidates]);
+  }, [addons, addonPath, getCatalogMatch, addLog, updatingAll, isUpdateAvailable, getEffectiveVersion, replacementCandidates, installedCatalogVersions, recentlyUpdated]);
 
   const handleUpdateAllConfirm = useCallback(async (selectedCatalogIds: string[]) => {
     setUpdateAllList(null);
     if (!addonPath || selectedCatalogIds.length === 0) return;
 
     const selectedSet = new Set(selectedCatalogIds);
-    const updatable: { addon: AddonInfo; catalogAddon: CatalogAddon }[] = [];
+    const updatable: { addon: AddonInfo; catalogAddon: CatalogAddon; isReplacement?: boolean }[] = [];
     const seen = new Set<string>();
-    for (const addon of addons) {
-      const catalogAddon = getCatalogAddon(addon);
-      if (catalogAddon && !seen.has(catalogAddon.id) && selectedSet.has(catalogAddon.id)) {
-        seen.add(catalogAddon.id);
-        updatable.push({ addon, catalogAddon });
+
+    // Build folderName → addon map for fast lookup
+    const addonByFolder = new Map<string, AddonInfo>();
+    for (const a of addons) addonByFolder.set(a.folderName, a);
+
+    // Collect replacement catalog IDs so we can flag them
+    const replacementIds = new Set<string>();
+    for (const [, replacement] of replacementCandidates) replacementIds.add(replacement.id);
+
+    // Resolve each selected catalog ID directly (avoids fragile reverse-lookup)
+    for (const id of selectedCatalogIds) {
+      if (seen.has(id)) continue;
+      const catalogAddon = catalogById.get(id);
+      if (!catalogAddon) continue;
+      // Find the local addon: check catalog directories, then fall back to getCatalogAddon
+      let addon: AddonInfo | undefined;
+      for (const dir of catalogAddon.directories) {
+        addon = addonByFolder.get(dir);
+        if (addon) break;
+      }
+      if (!addon) {
+        addon = addons.find(a => getCatalogAddon(a)?.id === id);
+      }
+      if (addon) {
+        seen.add(id);
+        updatable.push({ addon, catalogAddon, isReplacement: replacementIds.has(id) });
       }
     }
 
-    if (updatable.length === 0) return;
+    if (updatable.length === 0) {
+      addLog(`Update All: selected ${selectedCatalogIds.length} addon(s) but none matched local addons`, 'warn');
+      return;
+    }
 
     setUpdatingAll(true);
     setUpdateRemaining(updatable.length);
@@ -1117,13 +1347,19 @@ function App() {
         }
         const batch = updatable.slice(i, i + BATCH_SIZE);
         const results = await Promise.allSettled(
-          batch.map(async ({ addon, catalogAddon }) => {
+          batch.map(async ({ addon, catalogAddon, isReplacement }) => {
             if (updateCancelRef.current) throw new Error('cancelled');
             // Backup current version before updating
             if (addon.version) {
               await window.electronAPI.backupAddonFolder(addonPath, addon.folderName, addon.version);
             }
-            addLog(`Updating "${addon.folderName}" ${addon.version} → ${catalogAddon.version}...`);
+            // For replacements: delete old folder so stale files don't linger
+            if (isReplacement) {
+              addLog(`Replacing "${addon.folderName}" with "${catalogAddon.name}"...`);
+              await window.electronAPI.deleteAddon(addonPath, addon.folderName);
+            } else {
+              addLog(`Updating "${addon.folderName}" ${addon.version} → ${catalogAddon.version}...`);
+            }
             try {
               const result = await window.electronAPI.installAddon(catalogAddon.id, addonPath);
               if (result.error) {
@@ -1165,7 +1401,7 @@ function App() {
       addLog(`Update All complete: ${summaryParts.join(', ')}`, success > 0 ? 'success' : 'warn');
       await scanPath(addonPath);
     }
-  }, [addons, addonPath, getCatalogAddon, addLog, scanPath]);
+  }, [addons, addonPath, catalogById, getCatalogAddon, addLog, scanPath, replacementCandidates]);
 
   const handleCleanupSettings = useCallback(async () => {
     if (!addonPath || addons.length === 0) return;
@@ -1769,6 +2005,8 @@ function App() {
         hasAddons={addons.length > 0}
         unreferencedCount={unreferencedLibs.size}
         updateCount={updateCount}
+        mightUpdateCount={mightUpdateCount}
+        replacementCount={replacementCandidates.size}
         updatingAll={updatingAll}
         updateRemaining={updateRemaining}
         theme={theme}
@@ -1822,6 +2060,7 @@ function App() {
                   onNavigateCatalog={handleNavigateCatalog}
                   installProgress={installProgress}
                   collapseAllCounter={addonCollapseAll}
+                  hasUpdate={(() => { const ca = getCatalogAddon(addon); return !!ca && isUpdateAvailable(addon, ca); })()}
                 />
               </div>
             );
@@ -1873,6 +2112,7 @@ function App() {
                   onNavigateCatalog={handleNavigateCatalog}
                   installProgress={installProgress}
                   collapseAllCounter={libCollapseAll}
+                  hasUpdate={(() => { const ca = getCatalogAddon(lib); return !!ca && isUpdateAvailable(lib, ca); })()}
                 />
               </div>
             );
@@ -1973,7 +2213,7 @@ function App() {
           items={cleanupDialog.items}
           savedVarItems={cleanupDialog.savedVarItems}
           onConfirm={(items, svItems) => {
-            if (cleanupDialog.type === 'libs') handleCleanupLibsConfirm(items);
+            if (cleanupDialog.type === 'libs') handleCleanupLibsConfirm(items, svItems);
             else if (cleanupDialog.type === 'settings') handleCleanupSettingsConfirm(items, svItems);
             else if (cleanupDialog.type === 'downloads') handleCleanupDownloadsConfirm(items);
           }}

@@ -163,6 +163,8 @@ export function parseVersionParts(raw: string): {
   isDate: boolean;
   preRelease?: string;
   preReleaseNum: number;
+  suffix?: string;
+  suffixParts: number[];
 } {
   let s = (raw || '').trim();
 
@@ -191,8 +193,33 @@ export function parseVersionParts(raw: string): {
     s = s.replace(preMatch[0], '');
   }
 
-  // Extract all numeric groups (handles any separator: dots, hyphens, spaces,
-  // slashes, 'r' prefixes, 'build' keyword, etc.)
+  // Detect and extract suffix keywords (r, build, rev) that split the version
+  // into a base part and a suffix part.
+  //   "2.0 r41"        → base "2.0",  suffix "r",     suffixRaw "41"
+  //   "3.0r5.0"        → base "3.0",  suffix "r",     suffixRaw "5.0"
+  //   "2.3.22 build 1442" → base "2.3.22", suffix "build", suffixRaw "1442"
+  //   "2.r1"           → base "2",    suffix "r",     suffixRaw "1"
+  let suffix: string | undefined;
+  let suffixParts: number[] = [];
+  const suffixMatch = s.match(/(?:^|[\s._\d-])(r|build|rev)[\s._-]?(\d[\d.\s]*)/i);
+  if (suffixMatch) {
+    suffix = suffixMatch[1].toLowerCase();
+    // Extract numeric segments from the suffix portion
+    const sfxNums = suffixMatch[2].match(/\d+/g);
+    if (sfxNums) {
+      suffixParts = sfxNums.map(Number);
+    }
+    // Remove the suffix portion from s so that base parts are clean
+    const suffixStart = suffixMatch.index! + (suffixMatch[0].length - suffixMatch[0].trimStart().length);
+    // Find where the suffix keyword starts (might have a leading separator)
+    const fullMatchIdx = s.indexOf(suffixMatch[0]);
+    // Keep everything before the suffix keyword; some leading chars may be separators
+    // We need to find the actual keyword position
+    const keywordIdx = s.toLowerCase().indexOf(suffix, fullMatchIdx);
+    s = s.substring(0, keywordIdx).replace(/[\s._-]+$/, '');
+  }
+
+  // Extract all numeric groups from the base part
   const nums = s.match(/\d+/g);
   let parts = nums ? nums.map(Number) : [0];
 
@@ -201,7 +228,7 @@ export function parseVersionParts(raw: string): {
   // Detect whether this version looks like a date (3 segments with a plausible year)
   const isDate = parts.length === 3 && parts[0] >= 2000 && parts[1] >= 1 && parts[1] <= 12 && parts[2] >= 1 && parts[2] <= 31;
 
-  return { parts, subParts, isDate, preRelease, preReleaseNum };
+  return { parts, subParts, isDate, preRelease, preReleaseNum, suffix, suffixParts };
 }
 
 /**
@@ -317,7 +344,7 @@ export function compareVersionStrings(a: string, b: string, catalogDateEpoch?: n
     }
   }
 
-  // Compare numeric parts
+  // Compare base numeric parts
   const maxLen = Math.max(va.parts.length, vb.parts.length);
   for (let i = 0; i < maxLen; i++) {
     const na = va.parts[i] ?? 0;
@@ -336,6 +363,30 @@ export function compareVersionStrings(a: string, b: string, catalogDateEpoch?: n
     if (orderA !== orderB) return orderA - orderB;
     const preDiff = va.preReleaseNum - vb.preReleaseNum;
     if (preDiff !== 0) return preDiff;
+  }
+
+  // ── Suffix comparison (r, build, rev) ──
+  // Suffix parts are compared only when both versions share the same suffix
+  // keyword, or one has no suffix (no suffix < has suffix).
+  // Different suffix keywords mean incompatible numbering → use catalog.
+  if (va.suffix || vb.suffix) {
+    if (va.suffix && vb.suffix && va.suffix !== vb.suffix) {
+      // Different suffix types → can't compare reliably
+      if (catalogDateEpoch) return -1; // catalog is authoritative
+      return 0;
+    }
+    // Same suffix or one side has no suffix (no suffix = suffixParts [])
+    // No suffix < has suffix (e.g. "2.0" < "2.0 r41")
+    if (!va.suffix && vb.suffix) return -1;
+    if (va.suffix && !vb.suffix) return 1;
+
+    // Both have the same suffix → compare suffixParts
+    const sfxMax = Math.max(va.suffixParts.length, vb.suffixParts.length);
+    for (let i = 0; i < sfxMax; i++) {
+      const sa2 = va.suffixParts[i] ?? 0;
+      const sb2 = vb.suffixParts[i] ?? 0;
+      if (sa2 !== sb2) return sa2 - sb2;
+    }
   }
 
   // Tiebreaker: compare parenthesized sub-version parts (e.g. build numbers, dates)

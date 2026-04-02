@@ -67,6 +67,7 @@ const OnlineBrowser: React.FC<OnlineBrowserProps> = ({
   const [detailsLoading, setDetailsLoading] = useState<Set<string>>(new Set());
   const [dynamicCategories, setDynamicCategories] = useState<Record<string, string>>({});
   const [infoAddonId, setInfoAddonId] = useState<string | null>(null);
+  const [jsonPopupIds, setJsonPopupIds] = useState<Set<string>>(new Set());
   const infoPopupRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
 
@@ -510,7 +511,7 @@ const OnlineBrowser: React.FC<OnlineBrowserProps> = ({
                   <span className="tree-label">
                     {addon.name}
                     {addon.version && <span className="tree-version"> v{addon.version}</span>}
-                    {localVer && <span className="tree-local-version"> [local: v{localVer}]</span>}
+                    {localVer && (hasUpdate || isLocalNewer) && <span className="tree-local-version"> [local: v{localVer}]</span>}
                     {hasUpdate && <span className="tree-update-badge" title="Update available — catalog has a newer version">⬆️</span>}
                     {isLocalNewer && <span className="tree-regression-badge" title="Local version is newer than catalog — possible version scheme change">⚠️</span>}
                   </span>
@@ -564,6 +565,26 @@ const OnlineBrowser: React.FC<OnlineBrowserProps> = ({
                 })()}
                 {isExpanded && (
                   <div className="tree-children">
+                    {/* JSON record button */}
+                    <div className="tree-detail" style={{ position: 'relative' }}>
+                      <button
+                        style={{ fontSize: '11px', padding: '1px 6px', background: 'none', border: 'none', cursor: 'pointer', borderRadius: '3px', opacity: 0.6, color: '#ccc' }}
+                        onClick={(e) => { e.stopPropagation(); setJsonPopupIds(prev => { const s = new Set(prev); if (s.has(addon.id)) s.delete(addon.id); else s.add(addon.id); return s; }); }}
+                        title="Show raw JSON data"
+                      >
+                        📋 JSON
+                      </button>
+                      {jsonPopupIds.has(addon.id) && (
+                        <div className="catalog-json-popup" onClick={(e) => e.stopPropagation()}>
+                          <div className="catalog-json-header">
+                            <span>JSON — {addon.name}</span>
+                            <button className="restore-close-btn" onClick={() => setJsonPopupIds(prev => { const s = new Set(prev); s.delete(addon.id); return s; })} title="Close">✕</button>
+                          </div>
+                          <pre className="catalog-json-content">{JSON.stringify({ catalog: addon, ...(addonDetails[addon.id] ? { details: addonDetails[addon.id] } : {}) }, null, 2)}</pre>
+                        </div>
+                      )}
+                    </div>
+
                     {/* Image preview */}
                     {addon.thumbnails.length > 0 && (
                       <ImagePreview thumbnails={addon.thumbnails} images={addon.images} />

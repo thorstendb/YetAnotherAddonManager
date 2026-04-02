@@ -235,13 +235,6 @@ export async function installAddon(
   }
   const zipPath = path.join(downloadsDir, zipName);
 
-  // Record existing directories before install
-  const existingDirs = new Set(
-    fs.readdirSync(addonsPath, { withFileTypes: true })
-      .filter((d) => d.isDirectory())
-      .map((d) => d.name)
-  );
-
   // Skip download if the exact same versioned ZIP already exists (reinstall case)
   if (!fs.existsSync(zipPath)) {
     // Try direct CDN URL from filedetails first, fall back to page scraping
@@ -307,20 +300,28 @@ export async function installAddon(
   zip.extractAllTo(addonsPath, true);
   onProgress?.('extracting', 100);
 
-  // Find newly created directories
+  // Directories shipped in the ZIP (works for both fresh installs and updates)
+  const shippedDirs = Array.from(zipFilesByDir.keys());
+
+  // Detect truly new directories (used only for missing-dep check below)
   const afterDirs = fs.readdirSync(addonsPath, { withFileTypes: true })
     .filter((d) => d.isDirectory())
     .map((d) => d.name);
-  const newDirs = afterDirs.filter((d) => !existingDirs.has(d));
+
+  // Scan all shipped addon folders for version info and dependencies
+  const installedAddons = scanSpecificAddons(addonsPath, shippedDirs);
 
   // Update central YAAM database with install metadata
+  // (done AFTER scanning so we can store the real local manifest version)
   if (cachedList) {
     const catalogEntry = cachedList.find((a) => a.id === addonId);
     if (catalogEntry) {
       const now = new Date().toISOString();
+      const localVersionByDir = new Map<string, string>();
+      for (const a of installedAddons) localVersionByDir.set(a.folderName, a.version);
       const db = loadDatabase(addonsPath);
       let changed = false;
-      for (const dir of newDirs) {
+      for (const dir of shippedDirs) {
         const existing = db.addons[dir];
         db.addons[dir] = {
           esouid: catalogEntry.id,
@@ -328,7 +329,7 @@ export async function installAddon(
           catalogName: catalogEntry.name,
           catalogAuthor: catalogEntry.author,
           catalogVersion: catalogEntry.version,
-          localVersion: existing?.localVersion || '',
+          localVersion: localVersionByDir.get(dir) || existing?.localVersion || '',
           installedAt: existing?.installedAt || now,
           updatedAt: now,
           installedFiles: zipFilesByDir.get(dir),
@@ -338,9 +339,6 @@ export async function installAddon(
       if (changed) saveDatabase(db, addonsPath);
     }
   }
-
-  // Scan only newly installed addon folders for dependencies (fast)
-  const installedAddons = scanSpecificAddons(addonsPath, newDirs);
 
   // Collect all required dependencies
   const requiredDeps = new Set<string>();
@@ -356,7 +354,7 @@ export async function installAddon(
     (depName) => !depName.startsWith('ZO_') && !allDirNames.has(depName)
   );
 
-  return { installed: newDirs, missingDeps };
+  return { installed: shippedDirs, missingDeps };
 }
 
 /**

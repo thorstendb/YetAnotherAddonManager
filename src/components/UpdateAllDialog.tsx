@@ -14,6 +14,10 @@ export interface UpdatableAddon {
   replacement?: boolean;
   /** Name of the replacement addon (for display) */
   replacementName?: string;
+  /** True when detection is based on catalog date only (not version comparison) */
+  mightUpdate?: boolean;
+  /** Reason for mightUpdate classification */
+  mightUpdateReason?: 'not-tracked' | 'version-changed' | 'date-newer';
 }
 
 interface UpdateAllDialogProps {
@@ -25,11 +29,14 @@ interface UpdateAllDialogProps {
 const UpdateAllDialog: React.FC<UpdateAllDialogProps> = ({ addons, onConfirm, onCancel }) => {
   const closeRef = useRef<HTMLButtonElement>(null);
 
-  const sure = addons.filter(a => !a.ambiguous && !a.replacement);
-  const ambiguous = addons.filter(a => a.ambiguous && !a.replacement);
+  const sure = addons.filter(a => !a.ambiguous && !a.replacement && !a.mightUpdate);
+  const ambiguous = addons.filter(a => a.ambiguous && !a.replacement && !a.mightUpdate);
   const replacements = addons.filter(a => a.replacement);
+  const notTracked = addons.filter(a => a.mightUpdate && a.mightUpdateReason === 'not-tracked');
+  const versionChanged = addons.filter(a => a.mightUpdate && a.mightUpdateReason === 'version-changed');
+  const dateNewer = addons.filter(a => a.mightUpdate && a.mightUpdateReason === 'date-newer');
 
-  // Default: all sure addons selected, replacements deselected, ambiguous deselected
+  // Default: all sure addons selected, replacements/ambiguous/mightUpdate deselected
   const [selected, setSelected] = useState<Set<string>>(
     () => new Set(sure.map(a => a.catalogId))
   );
@@ -54,9 +61,25 @@ const UpdateAllDialog: React.FC<UpdateAllDialogProps> = ({ addons, onConfirm, on
   const selectAll = () => setSelected(new Set(addons.map(a => a.catalogId)));
   const selectNone = () => setSelected(new Set());
 
+  const selectSection = (section: UpdatableAddon[], on: boolean) => {
+    setSelected(prev => {
+      const next = new Set(prev);
+      for (const a of section) on ? next.add(a.catalogId) : next.delete(a.catalogId);
+      return next;
+    });
+  };
+
+  const sectionToggle = (section: UpdatableAddon[]) => (
+    <span style={{ marginLeft: 'auto', whiteSpace: 'nowrap' }}>
+      <button className="link-btn" onClick={() => selectSection(section, true)}>All</button>
+      {' · '}
+      <button className="link-btn" onClick={() => selectSection(section, false)}>None</button>
+    </span>
+  );
+
   const renderRow = (addon: UpdatableAddon) => (
-    <label key={addon.catalogId} className="cleanup-item" onClick={() => toggle(addon.catalogId)}>
-      <input type="checkbox" checked={selected.has(addon.catalogId)} readOnly />
+    <label key={addon.catalogId} className="cleanup-item">
+      <input type="checkbox" checked={selected.has(addon.catalogId)} onChange={() => toggle(addon.catalogId)} />
       <span>
         {addon.replacement
           ? <>{addon.folderName} <span style={{ opacity: 0.7 }}>→</span> <strong>{addon.replacementName}</strong></>
@@ -92,17 +115,25 @@ const UpdateAllDialog: React.FC<UpdateAllDialogProps> = ({ addons, onConfirm, on
                 </span>
               </div>
               <div className="cleanup-items" style={{ maxHeight: 'none' }}>
+                {sure.length > 0 && (
+                  <div style={{ display: 'flex', alignItems: 'center', fontSize: '0.82em', opacity: 0.7, marginBottom: '4px' }}>
+                    ✅ Confirmed updates ({sure.length})
+                    {sectionToggle(sure)}
+                  </div>
+                )}
                 {sure.map(renderRow)}
                 {replacements.length > 0 && (
                   <>
                     <div style={{
+                      display: 'flex', alignItems: 'center',
                       borderTop: '1px solid var(--border-color, #555)',
                       margin: '8px 0 4px',
                       paddingTop: '6px',
                       fontSize: '0.82em',
                       opacity: 0.7,
                     }}>
-                      🔄 Replacement available — a different addon now uses the same folder ({replacements.length})
+                      <span>🔄 Replacement available — a different addon now uses the same folder ({replacements.length})</span>
+                    {sectionToggle(replacements)}
                     </div>
                     {replacements.map(renderRow)}
                   </>
@@ -110,15 +141,65 @@ const UpdateAllDialog: React.FC<UpdateAllDialogProps> = ({ addons, onConfirm, on
                 {ambiguous.length > 0 && (
                   <>
                     <div style={{
+                      display: 'flex', alignItems: 'center',
                       borderTop: '1px solid var(--border-color, #555)',
                       margin: '8px 0 4px',
                       paddingTop: '6px',
                       fontSize: '0.82em',
                       opacity: 0.7,
                     }}>
-                      ⚠ Uncertain match — no ESOUI catalog ID in manifest ({ambiguous.length})
+                      <span>⚠ Uncertain match — no ESOUI catalog ID in manifest ({ambiguous.length})</span>
+                    {sectionToggle(ambiguous)}
                     </div>
                     {ambiguous.map(renderRow)}
+                  </>
+                )}
+                {notTracked.length > 0 && (
+                  <>
+                    <div style={{
+                      display: 'flex', alignItems: 'center',
+                      borderTop: '1px solid var(--border-color, #555)',
+                      margin: '8px 0 4px',
+                      paddingTop: '6px',
+                      fontSize: '0.82em',
+                      opacity: 0.7,
+                    }}>
+                      <span>📋 Not installed via YAAM — version comparison inconclusive ({notTracked.length})</span>
+                    {sectionToggle(notTracked)}
+                    </div>
+                    {notTracked.map(renderRow)}
+                  </>
+                )}
+                {versionChanged.length > 0 && (
+                  <>
+                    <div style={{
+                      display: 'flex', alignItems: 'center',
+                      borderTop: '1px solid var(--border-color, #555)',
+                      margin: '8px 0 4px',
+                      paddingTop: '6px',
+                      fontSize: '0.82em',
+                      opacity: 0.7,
+                    }}>
+                      <span>🔄 Catalog version changed since last install ({versionChanged.length})</span>
+                    {sectionToggle(versionChanged)}
+                    </div>
+                    {versionChanged.map(renderRow)}
+                  </>
+                )}
+                {dateNewer.length > 0 && (
+                  <>
+                    <div style={{
+                      display: 'flex', alignItems: 'center',
+                      borderTop: '1px solid var(--border-color, #555)',
+                      margin: '8px 0 4px',
+                      paddingTop: '6px',
+                      fontSize: '0.82em',
+                      opacity: 0.7,
+                    }}>
+                      <span>📅 Catalog date is newer than local install ({dateNewer.length})</span>
+                    {sectionToggle(dateNewer)}
+                    </div>
+                    {dateNewer.map(renderRow)}
                   </>
                 )}
               </div>
@@ -130,7 +211,6 @@ const UpdateAllDialog: React.FC<UpdateAllDialogProps> = ({ addons, onConfirm, on
           <button
             className="restore-btn ie-action-btn"
             onClick={() => onConfirm(Array.from(selected))}
-            disabled={selected.size === 0}
           >
             ⬆ Update {selected.size > 0 ? `${selected.size} addon(s)` : ''}
           </button>
