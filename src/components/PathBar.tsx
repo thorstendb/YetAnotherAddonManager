@@ -98,31 +98,31 @@ const PathBar: React.FC<PathBarProps> = ({
         <button
           onClick={onCleanup}
           disabled={!hasAddons || loading || unreferencedCount === 0}
-          title={`Move ${unreferencedCount} unreferenced libraries to Removed/ folder`}
+          title={unreferencedCount === 0 ? `Libs — Move unreferenced libraries to Removed/\nNothing to clean up` : `Libs — Move unreferenced libraries to Removed/\n${unreferencedCount} unreferenced lib(s) found`}
           className="btn-warning"
         >
-          🧹 Libs ({unreferencedCount})
+          🧹 {unreferencedCount > 0 && <>({unreferencedCount})</>}
         </button>
         <button
           onClick={onCleanupSettings}
           disabled={!hasAddons || loading}
-          title="Remove orphaned entries from AddOnSettings.txt and SavedVariables (creates backups)"
+          title={`Settings — Remove orphaned saved variables\nCleans AddOnSettings.txt and SavedVariables (creates backups)`}
           className="btn-warning"
         >
-          🗑️ Settings
+          🗑️
         </button>
         <button
           onClick={onCleanupDownloads}
           disabled={!path || loading}
-          title="Move .zip archives from AddOns folder into Downloads subfolder"
+          title={`Archives — Move .zip files to Downloads/\nMoves archives from AddOns folder into subfolder`}
           className="btn-warning"
         >
-          📦 Archives
+          📦
         </button>
         <button
           onClick={onCleanupBackups}
           disabled={!hasAddons || loading}
-          title="Delete old addon backups to free disk space"
+          title={`Backups — Delete old addon backups\nFree disk space by removing outdated backup files`}
           aria-label="Delete old addon backups"
           className="btn-warning"
         >

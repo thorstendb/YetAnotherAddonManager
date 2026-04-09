@@ -24,10 +24,10 @@ const AboutDialog: React.FC<AboutDialogProps> = ({ onClose }) => {
           <h2>About YAAM</h2>
         </div>
         <div className="welcome-body" style={{ textAlign: 'center' }}>
-          <p style={{ fontSize: '16px', fontWeight: 600, color: 'var(--text-primary)', marginBottom: 4 }}>
+          <p style={{ fontSize: '1.143rem', fontWeight: 600, color: 'var(--text-primary)', marginBottom: 4 }}>
             YAAM – Yet Another Addon Manager
           </p>
-          <p style={{ fontSize: '13px', color: 'var(--text-secondary)', margin: '4px 0 16px' }}>
+          <p style={{ fontSize: '0.929rem', color: 'var(--text-secondary)', margin: '4px 0 16px' }}>
             Version {version || '…'}
           </p>
           <p>
@@ -39,7 +39,7 @@ const AboutDialog: React.FC<AboutDialogProps> = ({ onClose }) => {
               🔗 GitHub Repository
             </button>
           </p>
-          <p style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>
+          <p style={{ fontSize: '0.857rem', color: 'var(--text-secondary)' }}>
             © 2026 thorstendb · MIT License
           </p>
         </div>

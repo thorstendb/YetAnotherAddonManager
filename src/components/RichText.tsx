@@ -110,7 +110,8 @@ function parseBBNodes(text: string, start: number, stopTag?: string): ParseResul
           const px = relative
             ? Math.min(Math.max(13 + num * 2, 8), 28)
             : Math.min(Math.max(num, 8), 28);
-          nodes.push(<span key={++keyCounter} style={{ fontSize: `${px}px` }}>{inner.nodes}</span>);
+          const rem = Math.min(Math.max(px / 14, 0.9), 1.3);
+          nodes.push(<span key={++keyCounter} style={{ fontSize: `${rem}rem` }}>{inner.nodes}</span>);
           i = inner.pos;
           continue;
         } else if (tag === 'font') {
@@ -130,7 +131,8 @@ function parseBBNodes(text: string, start: number, stopTag?: string): ParseResul
           if (sizeM) {
             const sn = parseInt(sizeM[1], 10) || 0;
             const rel = sizeM[1].startsWith('+') || sizeM[1].startsWith('-');
-            css.fontSize = `${rel ? Math.min(Math.max(13 + sn * 2, 8), 28) : Math.min(Math.max(sn, 8), 28)}px`;
+            const px = rel ? Math.min(Math.max(13 + sn * 2, 8), 28) : Math.min(Math.max(sn, 8), 28);
+            css.fontSize = `${Math.min(Math.max(px / 14, 0.9), 1.3)}rem`;
           }
           if (colorM) {
             const c = colorM[1];

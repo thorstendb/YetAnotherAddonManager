@@ -68,6 +68,8 @@ const OnlineBrowser: React.FC<OnlineBrowserProps> = ({
   const [dynamicCategories, setDynamicCategories] = useState<Record<string, string>>({});
   const [infoAddonId, setInfoAddonId] = useState<string | null>(null);
   const [jsonPopupIds, setJsonPopupIds] = useState<Set<string>>(new Set());
+  const [descPopupId, setDescPopupId] = useState<string | null>(null);
+  const descPopupRef = useRef<HTMLDivElement>(null);
   const infoPopupRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
 
@@ -118,6 +120,25 @@ const OnlineBrowser: React.FC<OnlineBrowserProps> = ({
       document.removeEventListener('keydown', handleKey);
     };
   }, [infoAddonId]);
+
+  // Close description popup on outside click or Escape
+  useEffect(() => {
+    if (!descPopupId) return;
+    const handleClick = (e: MouseEvent) => {
+      if (descPopupRef.current && !descPopupRef.current.contains(e.target as Node)) {
+        setDescPopupId(null);
+      }
+    };
+    const handleKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setDescPopupId(null);
+    };
+    document.addEventListener('mousedown', handleClick);
+    document.addEventListener('keydown', handleKey);
+    return () => {
+      document.removeEventListener('mousedown', handleClick);
+      document.removeEventListener('keydown', handleKey);
+    };
+  }, [descPopupId]);
 
   // Fetch the addon list and categories on mount
   useEffect(() => {
@@ -565,26 +586,6 @@ const OnlineBrowser: React.FC<OnlineBrowserProps> = ({
                 })()}
                 {isExpanded && (
                   <div className="tree-children">
-                    {/* JSON record button */}
-                    <div className="tree-detail" style={{ position: 'relative' }}>
-                      <button
-                        style={{ fontSize: '11px', padding: '1px 6px', background: 'none', border: 'none', cursor: 'pointer', borderRadius: '3px', opacity: 0.6, color: '#ccc' }}
-                        onClick={(e) => { e.stopPropagation(); setJsonPopupIds(prev => { const s = new Set(prev); if (s.has(addon.id)) s.delete(addon.id); else s.add(addon.id); return s; }); }}
-                        title="Show raw JSON data"
-                      >
-                        📋 JSON
-                      </button>
-                      {jsonPopupIds.has(addon.id) && (
-                        <div className="catalog-json-popup" onClick={(e) => e.stopPropagation()}>
-                          <div className="catalog-json-header">
-                            <span>JSON — {addon.name}</span>
-                            <button className="restore-close-btn" onClick={() => setJsonPopupIds(prev => { const s = new Set(prev); s.delete(addon.id); return s; })} title="Close">✕</button>
-                          </div>
-                          <pre className="catalog-json-content">{JSON.stringify({ catalog: addon, ...(addonDetails[addon.id] ? { details: addonDetails[addon.id] } : {}) }, null, 2)}</pre>
-                        </div>
-                      )}
-                    </div>
-
                     {/* Image preview */}
                     {addon.thumbnails.length > 0 && (
                       <ImagePreview thumbnails={addon.thumbnails} images={addon.images} />
@@ -604,8 +605,32 @@ const OnlineBrowser: React.FC<OnlineBrowserProps> = ({
                         onClick={(e) => { e.stopPropagation(); setDescExpandedIds(prev => { const s = new Set(prev); if (s.has(addon.id)) s.delete(addon.id); else s.add(addon.id); return s; }); }}
                         title={descExpandedIds.has(addon.id) ? 'Click to collapse' : 'Click to expand'}
                       >
-                        <span className="detail-label"><span className="desc-chevron">{descExpandedIds.has(addon.id) ? '▼' : '▶'}</span>Description:</span>{' '}
-                        {descExpandedIds.has(addon.id) ? <RichText text={addonDetails[addon.id].description} /> : stripBBCode(addonDetails[addon.id].description)}
+                        <span className="detail-label"><span className="desc-chevron">{descExpandedIds.has(addon.id) ? '▼' : '▶'}</span>Description:</span>
+                        <button
+                          className="desc-popup-btn"
+                          onClick={(e) => { e.stopPropagation(); setDescPopupId(addon.id); }}
+                          title="Open description in popup"
+                        >
+                          DESCR
+                        </button>
+                        {' '}
+                        {descExpandedIds.has(addon.id) ? <span className="desc-clamped"><RichText text={addonDetails[addon.id].description} /></span> : stripBBCode(addonDetails[addon.id].description)}
+                      </div>
+                    )}
+                    {descPopupId === addon.id && addonDetails[addon.id]?.description && (
+                      <div ref={descPopupRef} className="desc-popup" onClick={(e) => e.stopPropagation()}>
+                        <div className="catalog-json-header">
+                          <span>Description — {addon.name}</span>
+                          <div style={{ display: 'flex', gap: '4px', alignItems: 'center' }}>
+                            <button className="popup-copy-btn" onClick={() => {
+                              const sel = window.getSelection()?.toString();
+                              const text = sel && descPopupRef.current?.contains(window.getSelection()?.anchorNode || null) ? sel : stripBBCode(addonDetails[addon.id].description);
+                              navigator.clipboard?.writeText(text);
+                            }} title="Copy selected or all text">Copy</button>
+                            <button className="restore-close-btn" onClick={() => setDescPopupId(null)} title="Close">✕</button>
+                          </div>
+                        </div>
+                        <div className="desc-popup-content desc-clamped"><RichText text={addonDetails[addon.id].description} /></div>
                       </div>
                     )}
                     {/* Category */}
@@ -886,18 +911,10 @@ const OnlineBrowser: React.FC<OnlineBrowserProps> = ({
               <div className="catalog-json-header">
                 <span>ℹ️ {infoAddon.name}</span>
                 <div style={{ display: 'flex', gap: '4px', alignItems: 'center' }}>
-                  <button
-                    style={{ fontSize: '11px', padding: '1px 6px', background: 'none', border: 'none', cursor: 'pointer', borderRadius: '3px', opacity: 0.6, color: '#ccc' }}
-                    onClick={() => {
-                      const jsonData = { catalog: infoAddon, ...(details ? { details } : {}) };
-                      const el = document.getElementById('online-info-json');
-                      if (el) { el.style.display = el.style.display === 'none' ? 'block' : 'none'; }
-                      else { navigator.clipboard?.writeText(JSON.stringify(jsonData, null, 2)); }
-                    }}
-                    title="Toggle raw ESOUI JSON data"
-                  >
-                    📋 JSON
-                  </button>
+                  <div className="info-view-toggle">
+                    <button className={`info-toggle-btn${!jsonPopupIds.has(infoAddon.id) ? ' active' : ''}`} onClick={() => setJsonPopupIds(prev => { const s = new Set(prev); s.delete(infoAddon.id); return s; })}>Info</button>
+                    <button className={`info-toggle-btn${jsonPopupIds.has(infoAddon.id) ? ' active' : ''}`} onClick={() => setJsonPopupIds(prev => new Set(prev).add(infoAddon.id))}>JSON</button>
+                  </div>
                   <button className="restore-close-btn" onClick={() => setInfoAddonId(null)} title="Close">✕</button>
                 </div>
               </div>
@@ -933,6 +950,7 @@ const OnlineBrowser: React.FC<OnlineBrowserProps> = ({
                   </div>
                 );
               })()}
+              {!jsonPopupIds.has(infoAddonId) ? (
               <div className="addon-info-content">
                 <table className="addon-info-table">
                   <tbody>
@@ -974,15 +992,29 @@ const OnlineBrowser: React.FC<OnlineBrowserProps> = ({
                       <tr><td className="info-label">ChangeLog</td><td style={{ whiteSpace: 'pre-wrap' }}><RichText text={details.changeLog} /></td></tr>
                     )}
                     {details?.md5 && (
-                      <tr><td className="info-label">MD5</td><td style={{ fontFamily: 'monospace', fontSize: '11px' }}>{details.md5}</td></tr>
+                      <tr><td className="info-label">MD5</td><td style={{ fontFamily: 'monospace', fontSize: '0.786rem' }}>{details.md5}</td></tr>
                     )}
                     {details?.fileName && (
                       <tr><td className="info-label">File</td><td>{details.fileName}</td></tr>
                     )}
                   </tbody>
                 </table>
-                <pre id="online-info-json" className="catalog-json-content" style={{ display: 'none' }}>{JSON.stringify({ catalog: infoAddon, ...(details ? { details } : {}) }, null, 2)}</pre>
               </div>
+              ) : (
+              <div className="addon-info-json-panel">
+                <div className="catalog-json-header" style={{ borderTop: 'none' }}>
+                  <button className="popup-copy-btn" onClick={() => {
+                    const sel = window.getSelection()?.toString();
+                    const jsonStr = JSON.stringify({ catalog: infoAddon, ...(details ? { details } : {}) }, null, 2);
+                    const anchor = window.getSelection()?.anchorNode;
+                    const inPopup = anchor && (anchor as Element).closest?.('.addon-info-popup') || anchor?.parentElement?.closest('.addon-info-popup');
+                    const text = sel && inPopup ? sel : jsonStr;
+                    navigator.clipboard?.writeText(text);
+                  }} title="Copy selected or all text">Copy</button>
+                </div>
+                <pre className="catalog-json-content">{JSON.stringify({ catalog: infoAddon, ...(details ? { details } : {}) }, null, 2)}</pre>
+              </div>
+              )}
             </div>
           </div>
         );

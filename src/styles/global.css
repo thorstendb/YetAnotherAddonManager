@@ -47,6 +47,10 @@
   box-sizing: border-box;
 }
 
+html {
+  font-size: 14px;
+}
+
 html, body, #root {
   height: 100%;
   width: 100%;
@@ -57,7 +61,7 @@ body {
   font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, sans-serif;
   background-color: var(--bg-primary);
   color: var(--text-primary);
-  font-size: 14px;
+  font-size: 1.0rem;
   line-height: 1.5;
 }
 

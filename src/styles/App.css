@@ -20,7 +20,7 @@
 
 .toolbar label {
   color: var(--text-secondary);
-  font-size: 13px;
+  font-size: 0.929rem;
   white-space: nowrap;
 }
 
@@ -36,7 +36,7 @@
   border: 1px solid var(--border);
   border-radius: 4px;
   color: var(--text-primary);
-  font-size: 13px;
+  font-size: 0.929rem;
   outline: none;
   transition: border-color 0.2s;
 }
@@ -52,7 +52,7 @@
   color: var(--bg-primary);
   border: none;
   border-radius: 4px;
-  font-size: 12px;
+  font-size: 0.857rem;
   font-weight: 600;
   cursor: pointer;
   white-space: nowrap;
@@ -99,7 +99,7 @@
 }
 
 .toolbar-group legend {
-  font-size: 10px;
+  font-size: 0.714rem;
   color: var(--text-secondary);
   padding: 0 4px;
 }
@@ -113,7 +113,7 @@
   background: var(--bg-surface);
   border: 1px solid var(--border);
   border-radius: 6px;
-  font-size: 14px;
+  font-size: 1.0rem;
   line-height: 1;
   cursor: pointer;
   display: flex;
@@ -142,7 +142,7 @@
 /* ---- Status bar ---- */
 .status-bar {
   padding: 4px 16px;
-  font-size: 12px;
+  font-size: 0.857rem;
   color: var(--text-muted);
   display: flex;
   align-items: center;
@@ -230,7 +230,7 @@
   background: var(--bg-surface);
   border-bottom: 1px solid var(--border);
   font-weight: 600;
-  font-size: 13px;
+  font-size: 0.929rem;
   color: var(--text-secondary);
   flex-shrink: 0;
 }
@@ -240,7 +240,7 @@
   color: var(--text-secondary);
   padding: 1px 8px;
   border-radius: 10px;
-  font-size: 11px;
+  font-size: 0.786rem;
   font-weight: 500;
 }
 
@@ -249,7 +249,7 @@
   border: none;
   color: var(--text-muted);
   cursor: pointer;
-  font-size: 13px;
+  font-size: 0.929rem;
   padding: 0 3px;
   border-radius: 3px;
   line-height: 1;
@@ -273,7 +273,7 @@
 }
 
 .tree-search-icon {
-  font-size: 12px;
+  font-size: 0.857rem;
   color: var(--text-muted);
   flex-shrink: 0;
 }
@@ -286,7 +286,7 @@
   border: 1px solid var(--border);
   border-radius: 4px;
   color: var(--text-primary);
-  font-size: 12px;
+  font-size: 0.857rem;
   outline: none;
   transition: border-color 0.2s;
 }
@@ -300,7 +300,7 @@
   border: none;
   color: var(--text-muted);
   cursor: pointer;
-  font-size: 12px;
+  font-size: 0.857rem;
   padding: 1px 4px;
   border-radius: 3px;
   flex-shrink: 0;
@@ -316,7 +316,7 @@
   border: 1px solid var(--border);
   border-radius: 4px;
   color: var(--text-primary);
-  font-size: 11px;
+  font-size: 0.786rem;
   padding: 2px 4px;
   max-width: 140px;
   flex-shrink: 0;
@@ -334,7 +334,7 @@
   border: none;
   color: var(--bg-primary);
   cursor: pointer;
-  font-size: 11px;
+  font-size: 0.786rem;
   font-weight: 600;
   padding: 2px 8px;
   border-radius: 4px;
@@ -393,7 +393,7 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 10px;
+  font-size: 0.714rem;
   color: var(--text-muted);
   flex-shrink: 0;
   transition: transform 0.15s;
@@ -461,13 +461,13 @@
 }
 
 .tree-icon {
-  font-size: 14px;
+  font-size: 1.0rem;
   flex-shrink: 0;
 }
 
 .tree-label {
   flex: 1;
-  font-size: 13px;
+  font-size: 0.929rem;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -475,7 +475,7 @@
 
 .tree-version {
   color: var(--text-secondary);
-  font-size: 11px;
+  font-size: 0.786rem;
   font-weight: 400;
 }
 
@@ -492,7 +492,7 @@
   background: none;
   border: none;
   cursor: pointer;
-  font-size: 13px;
+  font-size: 0.929rem;
   padding: 1px 4px;
   border-radius: 3px;
   opacity: 0;
@@ -544,7 +544,7 @@
 
 .delete-popup-item {
   padding: 6px 14px;
-  font-size: 13px;
+  font-size: 0.929rem;
   cursor: pointer;
   color: var(--text-primary);
   transition: background 0.1s;
@@ -572,7 +572,7 @@
 }
 
 .tree-detail {
-  font-size: 12px;
+  font-size: 0.857rem;
   color: var(--text-muted);
   padding: 2px 12px 2px calc(38px + var(--tree-indent));
 }
@@ -602,7 +602,8 @@
 }
 
 /* Catalog JSON popup */
-.catalog-json-popup {
+.catalog-json-popup,
+.desc-popup {
   position: fixed;
   top: 50%;
   left: 50%;
@@ -616,6 +617,7 @@
   max-height: 70vh;
   display: flex;
   flex-direction: column;
+  user-select: text;
 }
 .catalog-json-header {
   display: flex;
@@ -623,24 +625,37 @@
   align-items: center;
   padding: 10px 14px;
   border-bottom: 1px solid var(--border);
-  font-size: 12px;
+  font-size: 0.857rem;
   font-weight: 600;
 }
 .catalog-json-content {
   padding: 12px 14px;
   margin: 0;
   overflow: auto;
-  font-size: 11px;
+  font-size: 0.786rem;
   line-height: 1.4;
   white-space: pre-wrap;
   word-break: break-all;
   color: var(--text-primary);
 }
 
+.addon-info-json-panel {
+  min-height: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  border-top: 1px solid var(--border);
+}
+
+.addon-info-json-panel .catalog-json-content {
+  flex: 1;
+  min-height: 0;
+}
+
 .tree-detail .dep-version,
 .tree-subtree-leaf .dep-version {
   color: var(--text-secondary);
-  font-size: 11px;
+  font-size: 0.786rem;
 }
 
 .dep-actions {
@@ -650,7 +665,7 @@
 }
 
 .dep-btn {
-  font-size: 11px !important;
+  font-size: 0.786rem !important;
   padding: 0 3px !important;
   min-width: 0 !important;
 }
@@ -688,7 +703,7 @@
 }
 
 .install-progress-label {
-  font-size: 10px;
+  font-size: 0.714rem;
   color: var(--text-muted);
   white-space: nowrap;
   min-width: 80px;
@@ -701,7 +716,7 @@
 
 .unreferenced-marker {
   color: var(--yellow);
-  font-size: 12px;
+  font-size: 0.857rem;
 }
 
 /* ---- Not in catalog marker ---- */
@@ -711,12 +726,12 @@
 
 .catalog-missing {
   color: var(--red);
-  font-size: 14px;
+  font-size: 1.0rem;
 }
 
 .catalog-mismatch {
   color: var(--yellow, #f5a623);
-  font-size: 14px;
+  font-size: 1.0rem;
 }
 
 /* ---- Missing dependency indicator ---- */
@@ -726,7 +741,7 @@
 
 .dep-not-installed {
   color: var(--red);
-  font-size: 10px;
+  font-size: 0.714rem;
   font-style: italic;
   margin-left: 4px;
 }
@@ -741,7 +756,7 @@
   align-items: center;
   gap: 6px;
   cursor: pointer;
-  font-size: 12px;
+  font-size: 0.857rem;
   color: var(--text-secondary);
 }
 
@@ -758,7 +773,7 @@
 
 .saved-vars-indicator {
   margin-left: 4px;
-  font-size: 11px;
+  font-size: 0.786rem;
 }
 
 /* ---- Context menu ---- */
@@ -773,7 +788,7 @@
 
 .context-menu-item {
   padding: 6px 14px;
-  font-size: 13px;
+  font-size: 0.929rem;
   cursor: pointer;
   color: var(--text-primary);
   transition: background 0.1s;
@@ -808,12 +823,12 @@
 }
 
 .empty-state .icon {
-  font-size: 48px;
+  font-size: 3.429rem;
   opacity: 0.3;
 }
 
 .empty-state p {
-  font-size: 14px;
+  font-size: 1.0rem;
 }
 
 /* ---- Subtree rows (Depends on / Referenced by) ---- */
@@ -822,7 +837,7 @@
   align-items: center;
   gap: 4px;
   padding: 2px 12px 2px calc(38px + var(--tree-indent));
-  font-size: 12px;
+  font-size: 0.857rem;
   color: var(--text-secondary);
   cursor: pointer;
   user-select: none;
@@ -838,16 +853,16 @@
   align-items: center;
   gap: 4px;
   padding: 1px 12px 1px calc(54px + var(--tree-indent));
-  font-size: 12px;
+  font-size: 0.857rem;
 }
 
 .tree-leaf-icon {
-  font-size: 11px;
+  font-size: 0.786rem;
   flex-shrink: 0;
 }
 
 .tree-badge-small {
-  font-size: 10px;
+  font-size: 0.714rem;
   color: var(--text-muted);
   background: var(--bg-secondary);
   padding: 0 5px;
@@ -865,7 +880,7 @@
 }
 
 .sub-addon-row .tree-icon {
-  font-size: 12px;
+  font-size: 0.857rem;
   flex-shrink: 0;
 }
 
@@ -876,11 +891,11 @@
   text-overflow: ellipsis;
   white-space: nowrap;
   color: var(--text-primary);
-  font-size: 12px;
+  font-size: 0.857rem;
 }
 
 .sub-addon-badge {
-  font-size: 10px;
+  font-size: 0.714rem;
   color: var(--text-muted);
   background: var(--bg-secondary);
   padding: 0 5px;
@@ -890,7 +905,7 @@
 }
 
 .sub-addon-sv {
-  font-size: 11px;
+  font-size: 0.786rem;
   flex-shrink: 0;
   margin-left: 2px;
 }
@@ -942,7 +957,7 @@
   background: var(--bg-surface);
   border-bottom: 1px solid var(--border);
   font-weight: 600;
-  font-size: 12px;
+  font-size: 0.857rem;
   color: var(--text-secondary);
   flex-shrink: 0;
 }
@@ -965,7 +980,7 @@
   padding: 1px 8px;
   border-radius: 3px;
   cursor: pointer;
-  font-size: 11px;
+  font-size: 0.786rem;
   font-weight: 500;
 }
 
@@ -979,7 +994,7 @@
   border: 1px solid var(--border);
   color: var(--accent);
   cursor: pointer;
-  font-size: 11px;
+  font-size: 0.786rem;
   padding: 1px 8px;
   border-radius: 3px;
   margin-left: 8px;
@@ -1005,21 +1020,21 @@
   justify-content: center;
   height: 100%;
   color: var(--text-muted);
-  font-size: 12px;
+  font-size: 0.857rem;
 }
 
 .log-entry {
   display: flex;
   gap: 8px;
   padding: 1px 14px;
-  font-size: 12px;
+  font-size: 0.857rem;
   line-height: 1.5;
 }
 
 .log-time {
   color: var(--text-muted);
   flex-shrink: 0;
-  font-size: 11px;
+  font-size: 0.786rem;
 }
 
 .log-message {
@@ -1070,7 +1085,7 @@
   border: 1px solid var(--border);
   border-radius: 4px;
   color: var(--text-primary);
-  font-size: 12px;
+  font-size: 0.857rem;
   outline: none;
   transition: border-color 0.2s;
 }
@@ -1085,7 +1100,7 @@
   border: 1px solid var(--border);
   border-radius: 4px;
   color: var(--text-primary);
-  font-size: 12px;
+  font-size: 0.857rem;
   outline: none;
   cursor: pointer;
   max-width: 140px;
@@ -1101,7 +1116,7 @@
   border: 1px solid var(--border);
   border-radius: 4px;
   color: var(--text-primary);
-  font-size: 13px;
+  font-size: 0.929rem;
   cursor: pointer;
   transition: background 0.15s;
   flex-shrink: 0;
@@ -1120,7 +1135,7 @@
   display: flex;
   align-items: center;
   gap: 4px;
-  font-size: 12px;
+  font-size: 0.857rem;
   color: var(--text-secondary);
   cursor: pointer;
   white-space: nowrap;
@@ -1133,17 +1148,17 @@
 
 .tree-local-version {
   color: var(--text-secondary);
-  font-size: 11px;
+  font-size: 0.786rem;
   font-weight: 400;
 }
 
 .tree-update-badge {
-  font-size: 12px;
+  font-size: 0.857rem;
   margin-left: 4px;
 }
 
 .tree-regression-badge {
-  font-size: 12px;
+  font-size: 0.857rem;
   margin-left: 4px;
 }
 
@@ -1165,7 +1180,7 @@
 
 .online-link {
   color: var(--accent);
-  font-size: 12px;
+  font-size: 0.857rem;
   cursor: pointer;
   text-decoration: none;
   transition: color 0.15s;
@@ -1199,13 +1214,13 @@
 }
 
 .thumb-loading {
-  font-size: 11px;
+  font-size: 0.786rem;
   color: var(--text-muted);
   font-style: italic;
 }
 
 .thumb-count {
-  font-size: 11px;
+  font-size: 0.786rem;
   color: var(--accent);
   cursor: pointer;
 }
@@ -1259,7 +1274,7 @@
   color: var(--text-primary);
   border: 1px solid var(--border);
   border-radius: 50%;
-  font-size: 16px;
+  font-size: 1.143rem;
   cursor: pointer;
   display: flex;
   align-items: center;
@@ -1283,7 +1298,7 @@
   color: var(--text-primary);
   border: 1px solid var(--border);
   border-radius: 6px;
-  font-size: 28px;
+  font-size: 2.0rem;
   cursor: pointer;
   display: flex;
   align-items: center;
@@ -1314,7 +1329,7 @@
   color: var(--text-secondary);
   padding: 3px 12px;
   border-radius: 12px;
-  font-size: 12px;
+  font-size: 0.857rem;
   border: 1px solid var(--border);
 }
 
@@ -1356,17 +1371,17 @@
 
 .welcome-header h2 {
   margin: 0;
-  font-size: 18px;
+  font-size: 1.286rem;
   color: var(--text-primary);
 }
 
 .welcome-icon {
-  font-size: 24px;
+  font-size: 1.714rem;
 }
 
 .welcome-body {
   padding: 16px 24px;
-  font-size: 13px;
+  font-size: 0.929rem;
   line-height: 1.6;
   color: var(--text-secondary);
 }
@@ -1377,7 +1392,7 @@
 
 .welcome-warning {
   color: var(--yellow, #e0c478);
-  font-size: 15px;
+  font-size: 1.071rem;
   text-align: center;
 }
 
@@ -1407,12 +1422,12 @@
   background: var(--bg-surface);
   padding: 1px 6px;
   border-radius: 3px;
-  font-size: 12px;
+  font-size: 0.857rem;
   color: var(--text-primary);
 }
 
 .welcome-hint {
-  font-size: 12px;
+  font-size: 0.857rem;
   color: var(--text-secondary);
   opacity: 0.8;
 }
@@ -1429,7 +1444,7 @@
   padding: 8px 20px;
   border: none;
   border-radius: 6px;
-  font-size: 13px;
+  font-size: 0.929rem;
   font-weight: 600;
   cursor: pointer;
   transition: background 0.15s, opacity 0.15s;
@@ -1477,19 +1492,19 @@
 }
 
 .unsaved-icon {
-  font-size: 32px;
+  font-size: 2.286rem;
   margin-bottom: 8px;
 }
 
 .unsaved-title {
-  font-size: 16px;
+  font-size: 1.143rem;
   font-weight: 700;
   color: var(--text-primary);
   margin-bottom: 8px;
 }
 
 .unsaved-message {
-  font-size: 13px;
+  font-size: 0.929rem;
   line-height: 1.6;
   color: var(--text-secondary);
   margin-bottom: 20px;
@@ -1505,7 +1520,7 @@
   padding: 8px 18px;
   border: none;
   border-radius: 6px;
-  font-size: 13px;
+  font-size: 0.929rem;
   font-weight: 600;
   cursor: pointer;
   transition: background 0.15s, opacity 0.15s;
@@ -1565,7 +1580,7 @@
 }
 
 .restore-title {
-  font-size: 16px;
+  font-size: 1.143rem;
   font-weight: 700;
   color: var(--text-primary);
 }
@@ -1574,7 +1589,7 @@
   background: none;
   border: none;
   color: var(--text-muted);
-  font-size: 16px;
+  font-size: 1.143rem;
   cursor: pointer;
   padding: 4px 8px;
   border-radius: 4px;
@@ -1598,7 +1613,7 @@
   border: none;
   border-bottom: 2px solid transparent;
   color: var(--text-muted);
-  font-size: 13px;
+  font-size: 0.929rem;
   font-weight: 600;
   cursor: pointer;
   transition: color 0.15s, border-color 0.15s;
@@ -1626,7 +1641,7 @@
   border: 1px solid var(--border);
   border-radius: 6px;
   color: var(--text-primary);
-  font-size: 13px;
+  font-size: 0.929rem;
   margin-bottom: 12px;
   outline: none;
   transition: border-color 0.15s;
@@ -1650,7 +1665,7 @@
 }
 
 .restore-addon-name {
-  font-size: 13px;
+  font-size: 0.929rem;
   font-weight: 600;
   color: var(--text-primary);
   margin-bottom: 6px;
@@ -1659,13 +1674,13 @@
 .restore-current-ver {
   font-weight: 400;
   color: var(--text-muted);
-  font-size: 12px;
+  font-size: 0.857rem;
 }
 
 .restore-not-installed {
   font-weight: 400;
   color: var(--yellow);
-  font-size: 12px;
+  font-size: 0.857rem;
 }
 
 .restore-versions {
@@ -1684,7 +1699,7 @@
 }
 
 .restore-version-label {
-  font-size: 12px;
+  font-size: 0.857rem;
   color: var(--text-secondary);
   font-family: var(--font-mono, monospace);
 }
@@ -1695,7 +1710,7 @@
   color: var(--contrast-on-color);
   border: none;
   border-radius: 4px;
-  font-size: 12px;
+  font-size: 0.857rem;
   font-weight: 600;
   cursor: pointer;
   transition: opacity 0.15s;
@@ -1713,13 +1728,13 @@
 
 .restore-btn-sm {
   padding: 2px 8px;
-  font-size: 11px;
+  font-size: 0.786rem;
 }
 
 .restore-empty {
   text-align: center;
   color: var(--text-muted);
-  font-size: 13px;
+  font-size: 0.929rem;
   padding: 24px 0;
   line-height: 1.6;
 }
@@ -1732,7 +1747,7 @@
 }
 
 .restore-snapshot-selector label {
-  font-size: 13px;
+  font-size: 0.929rem;
   font-weight: 600;
   color: var(--text-secondary);
 }
@@ -1744,7 +1759,7 @@
   border: 1px solid var(--border);
   border-radius: 6px;
   color: var(--text-primary);
-  font-size: 12px;
+  font-size: 0.857rem;
   outline: none;
 }
 
@@ -1759,7 +1774,7 @@
 }
 
 .restore-diff-title {
-  font-size: 13px;
+  font-size: 0.929rem;
   font-weight: 600;
   color: var(--text-primary);
 }
@@ -1771,7 +1786,7 @@
 }
 
 .restore-diff-label {
-  font-size: 12px;
+  font-size: 0.857rem;
   font-weight: 600;
   color: var(--text-secondary);
   margin-bottom: 2px;
@@ -1784,7 +1799,7 @@
   padding: 4px 8px;
   border-radius: 4px;
   background: var(--bg-surface);
-  font-size: 12px;
+  font-size: 0.857rem;
 }
 
 .restore-diff-name {
@@ -1796,13 +1811,13 @@
 .restore-diff-ver {
   color: var(--text-muted);
   font-family: var(--font-mono, monospace);
-  font-size: 11px;
+  font-size: 0.786rem;
 }
 
 .restore-diff-empty {
   text-align: center;
   color: var(--text-muted);
-  font-size: 13px;
+  font-size: 0.929rem;
   padding: 16px 0;
 }
 
@@ -1815,7 +1830,7 @@
 
 .ie-description {
   color: var(--text-secondary);
-  font-size: 13px;
+  font-size: 0.929rem;
   line-height: 1.6;
   margin: 0;
 }
@@ -1827,7 +1842,7 @@
 }
 
 .ie-stat {
-  font-size: 13px;
+  font-size: 0.929rem;
   color: var(--text-primary);
 }
 
@@ -1841,7 +1856,7 @@
   display: flex;
   align-items: center;
   gap: 8px;
-  font-size: 13px;
+  font-size: 0.929rem;
   color: var(--text-secondary);
   cursor: pointer;
 }
@@ -1853,7 +1868,7 @@
 .ie-action-btn {
   align-self: flex-start;
   padding: 8px 18px;
-  font-size: 13px;
+  font-size: 0.929rem;
 }
 
 .ie-file-row {
@@ -1863,7 +1878,7 @@
 }
 
 .ie-file-name {
-  font-size: 13px;
+  font-size: 0.929rem;
   color: var(--text-muted);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1878,13 +1893,13 @@
 }
 
 .ie-date {
-  font-size: 12px;
+  font-size: 0.857rem;
   color: var(--text-muted);
   margin-top: 8px;
 }
 
 .ie-warning {
-  font-size: 12px;
+  font-size: 0.857rem;
   color: var(--yellow, #e0c478);
   margin: 0;
 }
@@ -1901,7 +1916,7 @@
   align-items: center;
   justify-content: space-between;
   padding: 8px 10px;
-  font-size: 13px;
+  font-size: 0.929rem;
   font-weight: 600;
   color: var(--text-primary);
   background: var(--bg-primary);
@@ -1912,7 +1927,7 @@
   background: none;
   border: none;
   color: var(--accent);
-  font-size: 12px;
+  font-size: 0.857rem;
   cursor: pointer;
   padding: 2px 6px;
   border-radius: 4px;
@@ -1933,7 +1948,7 @@
   align-items: center;
   gap: 8px;
   padding: 3px 10px;
-  font-size: 12px;
+  font-size: 0.857rem;
   color: var(--text-secondary);
   cursor: pointer;
 }
@@ -1967,7 +1982,7 @@
 }
 
 .settings-label {
-  font-size: 13px;
+  font-size: 0.929rem;
   font-weight: 600;
   color: var(--text-secondary);
   min-width: 80px;
@@ -1987,7 +2002,7 @@
 }
 
 .settings-value {
-  font-size: 12px;
+  font-size: 0.857rem;
   color: var(--text-muted);
   min-width: 36px;
   text-align: right;
@@ -2000,7 +2015,7 @@
   border: 1px solid var(--border);
   border-radius: 4px;
   color: var(--text-primary);
-  font-size: 13px;
+  font-size: 0.929rem;
   cursor: pointer;
 }
 
@@ -2027,7 +2042,7 @@
 }
 
 .cleanup-section-label {
-  font-size: 12px;
+  font-size: 0.857rem;
   font-weight: 600;
   color: var(--text-secondary);
   margin-bottom: 6px;
@@ -2038,7 +2053,7 @@
   align-items: center;
   gap: 8px;
   padding: 4px 0;
-  font-size: 13px;
+  font-size: 0.929rem;
   font-weight: 600;
   color: var(--text-primary);
   cursor: pointer;
@@ -2060,7 +2075,7 @@
   align-items: center;
   gap: 8px;
   padding: 3px 8px;
-  font-size: 12px;
+  font-size: 0.857rem;
   color: var(--text-primary);
   cursor: pointer;
   user-select: none;
@@ -2104,9 +2119,11 @@
 .addon-info-content {
   padding: 12px 14px;
   overflow: auto;
-  font-size: 12px;
+  font-size: 0.857rem;
   line-height: 1.5;
   color: var(--text-primary);
+  flex: 1 1 auto;
+  min-height: 0;
 }
 
 .addon-info-table {
@@ -2125,7 +2142,7 @@
   text-align: right;
   width: 120px;
   font-weight: 600;
-  font-size: 11px;
+  font-size: 0.786rem;
 }
 
 /* ---- Expandable description ---- */
@@ -2135,6 +2152,7 @@
   text-overflow: ellipsis;
   cursor: pointer;
   max-width: 500px;
+  position: relative;
 }
 
 .desc-expanded {
@@ -2144,9 +2162,66 @@
   max-width: 500px;
 }
 
+.desc-popup-btn {
+  background: none;
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 0.714rem;
+  padding: 0 4px;
+  border-radius: 3px;
+  margin-left: 6px;
+  opacity: 0;
+  transition: opacity 0.15s, background 0.15s, color 0.15s;
+  vertical-align: middle;
+}
+
+.desc-expandable:hover .desc-popup-btn {
+  opacity: 0.7;
+}
+
+.desc-popup-btn:hover {
+  opacity: 1 !important;
+  background: var(--bg-surface);
+  color: var(--text-primary);
+}
+
+.desc-popup-content {
+  padding: 12px 14px;
+  margin: 0;
+  overflow: auto;
+  font-size: 1rem;
+  line-height: 1.5;
+  color: var(--text-primary);
+  user-select: text;
+  flex: 1;
+  min-height: 0;
+}
+
+.popup-copy-btn {
+  background: none;
+  border: 1px solid var(--border);
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-size: 0.786rem;
+  padding: 2px 8px;
+  border-radius: 4px;
+  margin-right: 6px;
+  transition: background 0.15s, color 0.15s;
+}
+
+.popup-copy-btn:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.desc-clamped * {
+  font-size: clamp(0.9rem, inherit, 1.3rem) !important;
+}
+
 .desc-chevron {
   display: inline-block;
-  font-size: 8px;
+  font-size: 0.571rem;
   margin-right: 3px;
   vertical-align: middle;
   opacity: 0.6;
@@ -2170,7 +2245,7 @@
   border-radius: 4px;
   background: var(--bg-secondary);
   color: var(--text-primary);
-  font-size: 11px;
+  font-size: 0.786rem;
   cursor: pointer;
   white-space: nowrap;
 }
@@ -2187,6 +2262,39 @@
 .info-action-btn.danger:hover {
   background: rgba(220, 53, 69, 0.2);
   border-color: rgba(220, 53, 69, 0.5);
+}
+
+/* ---- Info/JSON view toggle ---- */
+.info-view-toggle {
+  display: inline-flex;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.info-toggle-btn {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  font-size: 0.714rem;
+  font-weight: 600;
+  padding: 2px 10px;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+
+.info-toggle-btn:not(:last-child) {
+  border-right: 1px solid var(--border);
+}
+
+.info-toggle-btn.active {
+  background: var(--accent);
+  color: #fff;
+}
+
+.info-toggle-btn:not(.active):hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
 }
 
 

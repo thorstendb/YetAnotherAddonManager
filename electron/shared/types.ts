@@ -411,8 +411,8 @@ export interface AppConfig {
   /** Catalog addon ID → UIVersion when last installed. Prevents false "update available" when
    *  the local manifest ## Version doesn't match the catalog UIVersion string. */
   installedCatalogVersions?: Record<string, string>;
-  /** UI font size in pixels (default 14) */
-  fontSize?: number;
+  /** UI font scale percentage (default 100) */
+  fontScale?: number;
   /** UI font family (CSS value) */
   fontFamily?: string;
   /** Skip cleanup confirmation dialogs */

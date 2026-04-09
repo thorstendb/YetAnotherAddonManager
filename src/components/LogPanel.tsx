@@ -93,29 +93,20 @@ const LogPanel: React.FC<LogPanelProps> = ({ logs, height, knownNames, onNavigat
         <div className="log-header-actions">
           <button
             className="log-action-btn"
-            title="Copy selected text"
+            title="Copy selected text or all log entries"
             onClick={() => {
-              const text = window.getSelection()?.toString();
+              const sel = window.getSelection()?.toString();
+              const text = sel || logs
+                .map((e) => `[${e.timestamp.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}] ${e.message}`)
+                .join('\n');
               if (text) window.electronAPI.writeClipboard(text);
             }}
           >
-            Copy Selected
-          </button>
-          <button
-            className="log-action-btn"
-            title="Copy all log entries"
-            onClick={() => {
-              const text = logs
-                .map((e) => `[${e.timestamp.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}] ${e.message}`)
-                .join('\n');
-              window.electronAPI.writeClipboard(text);
-            }}
-          >
-            Copy All
+            Copy
           </button>
           {onClear && (
             <button className="log-action-btn" title="Clear all log entries" onClick={onClear}>
-              Clear All
+              Clear
             </button>
           )}
         </div>

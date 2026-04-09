@@ -469,7 +469,7 @@ const ImportExportDialog: React.FC<ImportExportDialogProps> = ({
 
               {/* Export mode radio buttons */}
               <div className="ie-options" style={{ marginBottom: 8 }}>
-                <div style={{ fontSize: '11px', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: 4 }}>Export Mode</div>
+                <div style={{ fontSize: '0.786rem', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: 4 }}>Export Mode</div>
                 <label className="ie-option">
                   <input
                     type="radio"
@@ -491,7 +491,7 @@ const ImportExportDialog: React.FC<ImportExportDialogProps> = ({
                 {exportMode === 'references-only' && (
                   <>
                     <div style={{
-                      margin: '4px 0 0 22px', padding: '6px 10px', fontSize: '11px',
+                      margin: '4px 0 0 22px', padding: '6px 10px', fontSize: '0.786rem',
                       background: 'var(--warning-bg, rgba(255,180,0,0.1))',
                       color: 'var(--warning-text, #e0a000)',
                       borderRadius: 4, borderLeft: '3px solid var(--warning-text, #e0a000)',
@@ -516,7 +516,7 @@ const ImportExportDialog: React.FC<ImportExportDialogProps> = ({
 
               {/* Settings checkboxes */}
               <div className="ie-options">
-                <div style={{ fontSize: '11px', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: 4 }}>Include Settings</div>
+                <div style={{ fontSize: '0.786rem', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: 4 }}>Include Settings</div>
                 <label className="ie-option">
                   <input type="checkbox" checked={includeAddonSettings} onChange={(e) => setIncludeAddonSettings(e.target.checked)} />
                   ⚙️ AddOnSettings.txt (addon on/off per character)
@@ -567,7 +567,7 @@ const ImportExportDialog: React.FC<ImportExportDialogProps> = ({
                         <span className="ie-sv-name">
                           {addon.folderName}
                           {addon.runtimeFiles && addon.runtimeFiles.length > 0 && (
-                            <span style={{ color: 'var(--warning-text, #e0a000)', marginLeft: 4, fontSize: '10px' }}
+                            <span style={{ color: 'var(--warning-text, #e0a000)', marginLeft: 4, fontSize: '0.714rem' }}
                               title={`${addon.runtimeFiles.length} extra file(s): ${addon.runtimeFiles.slice(0, 5).join(', ')}${addon.runtimeFiles.length > 5 ? '…' : ''}`}>
                               📂+{addon.runtimeFiles.length}
                             </span>
@@ -580,7 +580,7 @@ const ImportExportDialog: React.FC<ImportExportDialogProps> = ({
 
               {exportProgress && (
                 <div style={{ margin: '12px 0' }}>
-                  <div style={{ fontSize: '12px', color: 'var(--text-secondary)', marginBottom: 4 }}>
+                  <div style={{ fontSize: '0.857rem', color: 'var(--text-secondary)', marginBottom: 4 }}>
                     {exportProgress.phase}
                   </div>
                   <div className="status-progress-track" style={{ height: 6 }}>
@@ -635,7 +635,7 @@ const ImportExportDialog: React.FC<ImportExportDialogProps> = ({
 
                   {(importPreview.hasSettings || importPreview.hasUserSettings) && (
                     <div className="ie-options" style={{ marginTop: 10 }}>
-                      <div style={{ fontSize: '11px', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: 4 }}>General Settings</div>
+                      <div style={{ fontSize: '0.786rem', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: 4 }}>General Settings</div>
                       {importPreview.hasSettings && (
                         <label className="ie-option">
                           <input
@@ -694,7 +694,7 @@ const ImportExportDialog: React.FC<ImportExportDialogProps> = ({
                               />
                               <span className="ie-sv-name">
                                 {addon.folderName}
-                                {addon.isLibrary && <span style={{ opacity: 0.5, marginLeft: 4, fontSize: '10px' }}>📚</span>}
+                                {addon.isLibrary && <span style={{ opacity: 0.5, marginLeft: 4, fontSize: '0.714rem' }}>📚</span>}
                               </span>
                             </label>
                           ))}
@@ -743,7 +743,7 @@ const ImportExportDialog: React.FC<ImportExportDialogProps> = ({
 
               {importProgress && (
                 <div style={{ margin: '12px 0' }}>
-                  <div style={{ fontSize: '12px', color: 'var(--text-secondary)', marginBottom: 4 }}>
+                  <div style={{ fontSize: '0.857rem', color: 'var(--text-secondary)', marginBottom: 4 }}>
                     {importProgress.phase}
                   </div>
                   <div className="status-progress-track" style={{ height: 6 }}>

@@ -73,7 +73,7 @@ function App() {
   const [showImportExport, setShowImportExport] = useState(false);
   const [showAbout, setShowAbout] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
-  const [fontSize, setFontSize] = useState(14);
+  const [fontScale, setFontScale] = useState(120);
   const [fontFamily, setFontFamily] = useState("'Segoe UI', sans-serif");
   const [skipCleanupConfirm, setSkipCleanupConfirm] = useState(false);
   const [cleanupDialog, setCleanupDialog] = useState<{
@@ -101,11 +101,11 @@ function App() {
     localStorage.setItem('yaam-theme', theme);
   }, [theme]);
 
-  // Apply font settings to body
+  // Apply font settings to root
   useEffect(() => {
-    document.body.style.fontSize = `${fontSize}px`;
+    document.documentElement.style.fontSize = `${14 * fontScale / 100}px`;
     document.body.style.fontFamily = fontFamily;
-  }, [fontSize, fontFamily]);
+  }, [fontScale, fontFamily]);
 
   const toggleTheme = useCallback(() => {
     setTheme((t) => (t === 'dark' ? 'light' : 'dark'));
@@ -133,7 +133,7 @@ function App() {
       // "update available" during the same session.  The persistent guard is
       // yaamMeta.catalogVersion (checked with cmp >= 0). Loading the persisted
       // map would mask real updates when the local addon was replaced manually.
-      if (config.fontSize) setFontSize(config.fontSize);
+      if (config.fontScale) setFontScale(config.fontScale);
       if (config.fontFamily) setFontFamily(config.fontFamily);
       if (config.skipCleanupConfirm) setSkipCleanupConfirm(config.skipCleanupConfirm);
       if (config.welcomeAccepted) {
@@ -2195,14 +2195,14 @@ function App() {
       {showAbout && <AboutDialog onClose={() => setShowAbout(false)} />}
       {showSettings && (
         <SettingsDialog
-          fontSize={fontSize}
+          fontScale={fontScale}
           fontFamily={fontFamily}
           skipCleanupConfirm={skipCleanupConfirm}
           onApply={(s) => {
-            setFontSize(s.fontSize);
+            setFontScale(s.fontScale);
             setFontFamily(s.fontFamily);
             setSkipCleanupConfirm(s.skipCleanupConfirm);
-            window.electronAPI.saveUiSettings({ fontSize: s.fontSize, fontFamily: s.fontFamily, skipCleanupConfirm: s.skipCleanupConfirm });
+            window.electronAPI.saveUiSettings({ fontScale: s.fontScale, fontFamily: s.fontFamily, skipCleanupConfirm: s.skipCleanupConfirm });
           }}
           onClose={() => setShowSettings(false)}
         />
@@ -2242,7 +2242,7 @@ function App() {
             </div>
             <div className="restore-content" style={{ padding: '16px 20px' }}>
               <p>Delete "<strong>{deleteConfirm.title}</strong>"?</p>
-              <p style={{ fontSize: '12px', opacity: 0.7 }}>The addon will be moved to the Removed/ folder.</p>
+              <p style={{ fontSize: '0.857rem', opacity: 0.7 }}>The addon will be moved to the Removed/ folder.</p>
             </div>
             <div className="settings-actions" style={{ padding: '12px 16px' }}>
               <button className="restore-btn" onClick={() => setDeleteConfirm(null)}>Cancel</button>

@@ -81,6 +81,8 @@ const AddonTreeItem: React.FC<AddonTreeItemProps> = ({
   const [catalogDetails, setCatalogDetails] = useState<{ description: string; changeLog: string; md5: string; downloadUrl: string; fileName: string } | null>(null);
   const [catalogDetailsLoading, setCatalogDetailsLoading] = useState(false);
   const [descExpanded, setDescExpanded] = useState(false);
+  const [descPopup, setDescPopup] = useState(false);
+  const descPopupRef = useRef<HTMLDivElement>(null);
   const [catalogDescExpanded, setCatalogDescExpanded] = useState(false);
   const [subDescExpanded, setSubDescExpanded] = useState<Set<string>>(new Set());
   const [infoPopup, setInfoPopup] = useState(false);
@@ -223,6 +225,25 @@ const AddonTreeItem: React.FC<AddonTreeItemProps> = ({
       document.removeEventListener('keydown', handleKey);
     };
   }, [infoPopup]);
+
+  // Close description popup on outside click or Escape
+  useEffect(() => {
+    if (!descPopup) return;
+    const handleClick = (e: MouseEvent) => {
+      if (descPopupRef.current && !descPopupRef.current.contains(e.target as Node)) {
+        setDescPopup(false);
+      }
+    };
+    const handleKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setDescPopup(false);
+    };
+    document.addEventListener('mousedown', handleClick);
+    document.addEventListener('keydown', handleKey);
+    return () => {
+      document.removeEventListener('mousedown', handleClick);
+      document.removeEventListener('keydown', handleKey);
+    };
+  }, [descPopup]);
 
   // Fetch catalog details on demand when catalog expanded or info popup opened
   useEffect(() => {
@@ -384,26 +405,6 @@ const AddonTreeItem: React.FC<AddonTreeItemProps> = ({
       })()}
       {expanded && hasDetails && (
         <div className="tree-children">
-          {/* JSON record button – always visible */}
-          <div className="tree-detail" style={{ position: 'relative' }}>
-            <button
-              style={{ fontSize: '11px', padding: '1px 6px', background: 'none', border: 'none', cursor: 'pointer', borderRadius: '3px', opacity: 0.6, color: '#ccc' }}
-              onClick={(e) => { e.stopPropagation(); setCatalogPopup(p => !p); }}
-              title="Show raw JSON data"
-            >
-              📋 JSON
-            </button>
-            {catalogPopup && (
-              <div ref={catalogPopupRef} className="catalog-json-popup" onClick={(e) => e.stopPropagation()}>
-                <div className="catalog-json-header">
-                  <span>JSON — {addon.title || addon.folderName}</span>
-                  <button className="restore-close-btn" onClick={() => setCatalogPopup(false)} title="Close">✕</button>
-                </div>
-                <pre className="catalog-json-content">{JSON.stringify({ local: addon, ...(catalogAddon ? { catalog: catalogAddon } : {}) }, null, 2)}</pre>
-              </div>
-            )}
-          </div>
-
           {/* Sub-addons – shown as first children */}
           {hasSubAddons && (
             <div className="tree-item">
@@ -625,8 +626,32 @@ const AddonTreeItem: React.FC<AddonTreeItemProps> = ({
               onClick={(e) => { e.stopPropagation(); setDescExpanded(p => !p); }}
               title={descExpanded ? 'Click to collapse' : 'Click to expand'}
             >
-              <span className="detail-label"><span className="desc-chevron">{descExpanded ? '▼' : '▶'}</span>Description:</span>{' '}
-              {descExpanded ? <RichText text={addon.description} /> : stripBBCode(addon.description)}
+              <span className="detail-label"><span className="desc-chevron">{descExpanded ? '▼' : '▶'}</span>Description:</span>
+              <button
+                className="desc-popup-btn"
+                onClick={(e) => { e.stopPropagation(); setDescPopup(true); }}
+                title="Open description in popup"
+              >
+                DESCR
+              </button>
+              {' '}
+              {descExpanded ? <span className="desc-clamped"><RichText text={addon.description} /></span> : stripBBCode(addon.description)}
+            </div>
+          )}
+          {descPopup && addon.description && (
+            <div ref={descPopupRef} className="desc-popup" onClick={(e) => e.stopPropagation()}>
+              <div className="catalog-json-header">
+                <span>Description — {addon.title || addon.folderName}</span>
+                <div style={{ display: 'flex', gap: '4px', alignItems: 'center' }}>
+                  <button className="popup-copy-btn" onClick={() => {
+                    const sel = window.getSelection()?.toString();
+                    const text = sel && descPopupRef.current?.contains(window.getSelection()?.anchorNode || null) ? sel : stripBBCode(addon.description);
+                    navigator.clipboard?.writeText(text);
+                  }} title="Copy selected or all text">Copy</button>
+                  <button className="restore-close-btn" onClick={() => setDescPopup(false)} title="Close">✕</button>
+                </div>
+              </div>
+              <div className="desc-popup-content desc-clamped"><RichText text={addon.description} /></div>
             </div>
           )}
           {/* Contributors */}
@@ -1019,7 +1044,13 @@ const AddonTreeItem: React.FC<AddonTreeItemProps> = ({
           <div ref={infoPopupRef} className="addon-info-popup" onClick={(e) => e.stopPropagation()}>
             <div className="catalog-json-header">
               <span>ℹ️ {addon.title || addon.folderName}</span>
-              <button className="restore-close-btn" onClick={() => setInfoPopup(false)} title="Close">✕</button>
+              <div style={{ display: 'flex', gap: '4px', alignItems: 'center' }}>
+                <div className="info-view-toggle">
+                  <button className={`info-toggle-btn${!catalogPopup ? ' active' : ''}`} onClick={() => setCatalogPopup(false)}>Info</button>
+                  <button className={`info-toggle-btn${catalogPopup ? ' active' : ''}`} onClick={() => setCatalogPopup(true)}>JSON</button>
+                </div>
+                <button className="restore-close-btn" onClick={() => setInfoPopup(false)} title="Close">✕</button>
+              </div>
             </div>
             <div className="addon-info-actions">
               {catalogAddon && onInstall && (
@@ -1048,6 +1079,7 @@ const AddonTreeItem: React.FC<AddonTreeItemProps> = ({
                 </button>
               )}
             </div>
+            {!catalogPopup ? (
             <div className="addon-info-content">
               <table className="addon-info-table">
                 <tbody>
@@ -1092,7 +1124,7 @@ const AddonTreeItem: React.FC<AddonTreeItemProps> = ({
                     <tr><td className="info-label">ChangeLog</td><td style={{ whiteSpace: 'pre-wrap' }}><RichText text={catalogDetails.changeLog} /></td></tr>
                   )}
                   {catalogDetails?.md5 && (
-                    <tr><td className="info-label">MD5</td><td style={{ fontFamily: 'monospace', fontSize: '11px' }}>{catalogDetails.md5}</td></tr>
+                    <tr><td className="info-label">MD5</td><td style={{ fontFamily: 'monospace', fontSize: '0.786rem' }}>{catalogDetails.md5}</td></tr>
                   )}
                   {catalogDetails?.fileName && (
                     <tr><td className="info-label">File</td><td>{catalogDetails.fileName}</td></tr>
@@ -1118,6 +1150,19 @@ const AddonTreeItem: React.FC<AddonTreeItemProps> = ({
                 </tbody>
               </table>
             </div>
+            ) : (
+            <div ref={catalogPopupRef} className="addon-info-json-panel">
+              <div className="catalog-json-header" style={{ borderTop: 'none' }}>
+                <button className="popup-copy-btn" onClick={() => {
+                  const sel = window.getSelection()?.toString();
+                  const jsonStr = JSON.stringify({ local: addon, ...(catalogAddon ? { catalog: catalogAddon } : {}) }, null, 2);
+                  const text = sel && catalogPopupRef.current?.contains(window.getSelection()?.anchorNode || null) ? sel : jsonStr;
+                  navigator.clipboard?.writeText(text);
+                }} title="Copy selected or all text">Copy</button>
+              </div>
+              <pre className="catalog-json-content">{JSON.stringify({ local: addon, ...(catalogAddon ? { catalog: catalogAddon } : {}) }, null, 2)}</pre>
+            </div>
+            )}
           </div>
         </div>
       )}

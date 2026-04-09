@@ -138,11 +138,11 @@ ipcMain.handle(IPC_CHANNELS.SET_ADDON_PATH, async (_event, addonPath: string) =>
   return config;
 });
 
-ipcMain.handle(IPC_CHANNELS.SAVE_UI_SETTINGS, async (_event, settings: { logHeight?: number; panelWidths?: number[]; fontSize?: number; fontFamily?: string; skipCleanupConfirm?: boolean }) => {
+ipcMain.handle(IPC_CHANNELS.SAVE_UI_SETTINGS, async (_event, settings: { logHeight?: number; panelWidths?: number[]; fontScale?: number; fontFamily?: string; skipCleanupConfirm?: boolean }) => {
   const config = loadConfig();
   if (settings.logHeight !== undefined) config.logHeight = settings.logHeight;
   if (settings.panelWidths !== undefined) config.panelWidths = settings.panelWidths;
-  if (settings.fontSize !== undefined) config.fontSize = settings.fontSize;
+  if (settings.fontScale !== undefined) config.fontScale = settings.fontScale;
   if (settings.fontFamily !== undefined) config.fontFamily = settings.fontFamily;
   if (settings.skipCleanupConfirm !== undefined) config.skipCleanupConfirm = settings.skipCleanupConfirm;
   saveConfig(config);

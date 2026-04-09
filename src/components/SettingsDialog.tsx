@@ -3,24 +3,24 @@
 import React, { useEffect, useRef, useState } from 'react';
 
 interface SettingsDialogProps {
-  fontSize: number;
+  fontScale: number;
   fontFamily: string;
   skipCleanupConfirm: boolean;
-  onApply: (settings: { fontSize: number; fontFamily: string; skipCleanupConfirm: boolean }) => void;
+  onApply: (settings: { fontScale: number; fontFamily: string; skipCleanupConfirm: boolean }) => void;
   onClose: () => void;
 }
 
 const DEFAULT_FONT = "'Segoe UI', sans-serif";
 
 const SettingsDialog: React.FC<SettingsDialogProps> = ({
-  fontSize,
+  fontScale,
   fontFamily,
   skipCleanupConfirm,
   onApply,
   onClose,
 }) => {
   const closeRef = useRef<HTMLButtonElement>(null);
-  const [localFontSize, setLocalFontSize] = useState(fontSize);
+  const [localFontScale, setLocalFontScale] = useState(fontScale);
   const [localFontFamily, setLocalFontFamily] = useState(fontFamily);
   const [localSkipCleanup, setLocalSkipCleanup] = useState(skipCleanupConfirm);
   const [systemFonts, setSystemFonts] = useState<string[]>([]);
@@ -41,12 +41,12 @@ const SettingsDialog: React.FC<SettingsDialogProps> = ({
   }, []);
 
   const handleApply = () => {
-    onApply({ fontSize: localFontSize, fontFamily: localFontFamily, skipCleanupConfirm: localSkipCleanup });
+    onApply({ fontScale: localFontScale, fontFamily: localFontFamily, skipCleanupConfirm: localSkipCleanup });
     onClose();
   };
 
   const handleReset = () => {
-    setLocalFontSize(14);
+    setLocalFontScale(100);
     setLocalFontFamily(DEFAULT_FONT);
     setLocalSkipCleanup(false);
   };
@@ -63,17 +63,17 @@ const SettingsDialog: React.FC<SettingsDialogProps> = ({
         </div>
         <div className="restore-content" style={{ padding: '16px 20px' }}>
           <div className="settings-row">
-            <label className="settings-label">Font Size</label>
+            <label className="settings-label">Font Scale</label>
             <div className="settings-control">
               <input
                 type="range"
-                min={10}
-                max={22}
-                step={1}
-                value={localFontSize}
-                onChange={(e) => setLocalFontSize(Number(e.target.value))}
+                min={75}
+                max={150}
+                step={5}
+                value={localFontScale}
+                onChange={(e) => setLocalFontScale(Number(e.target.value))}
               />
-              <span className="settings-value">{localFontSize}px</span>
+              <span className="settings-value">{localFontScale}%</span>
             </div>
           </div>
           <div className="settings-row">
@@ -93,8 +93,8 @@ const SettingsDialog: React.FC<SettingsDialogProps> = ({
               </select>
             </div>
           </div>
-          <div className="settings-preview" style={{ fontFamily: localFontFamily, fontSize: localFontSize }}>
-            <span style={{ opacity: 0.5, fontSize: '11px' }}>{displayFontName(localFontFamily)}</span>
+          <div className="settings-preview" style={{ fontFamily: localFontFamily, fontSize: `${14 * localFontScale / 100}px` }}>
+            <span style={{ opacity: 0.5, fontSize: '0.786rem' }}>{displayFontName(localFontFamily)}</span>
             <br />
             ABCabc 0123456789 — Preview
           </div>
