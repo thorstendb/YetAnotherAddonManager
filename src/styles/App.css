@@ -387,6 +387,16 @@
   padding-left: 10px;
 }
 
+.tree-item-row.has-update {
+  background: var(--bg-update);
+}
+
+.tree-item-row.has-update.selected {
+  background: var(--bg-update);
+  border-left: 2px solid var(--accent);
+  padding-left: 10px;
+}
+
 .tree-chevron {
   width: 16px;
   height: 16px;

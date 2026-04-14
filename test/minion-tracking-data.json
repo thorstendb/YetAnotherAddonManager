@@ -1,0 +1,1576 @@
+[
+  {
+    "uid": "2551",
+    "md5": "6e876f2012ed5a810343da87b6d024ff",
+    "uiVersion": "1.1.13",
+    "dirs": [
+      "LootLog"
+    ]
+  },
+  {
+    "uid": "2161",
+    "md5": "56d74d2167c33ad030e2ac5e65359fe4",
+    "uiVersion": "6.0.7",
+    "dirs": [
+      "LibSavedVars"
+    ]
+  },
+  {
+    "uid": "2542",
+    "md5": "b8d7dbb32729fd38a05c28a072d0ab21",
+    "uiVersion": "1.2.17",
+    "dirs": [
+      "LibMarify"
+    ]
+  },
+  {
+    "uid": "1899",
+    "md5": "578fed1658ebdff0c60d9b5f3894f9e5",
+    "uiVersion": "1.5.1",
+    "dirs": [
+      "DailyAlchemy"
+    ]
+  },
+  {
+    "uid": "1901",
+    "md5": "7f5a49e338c00bf4a4597269a6a39f8f",
+    "uiVersion": "1.5.3",
+    "dirs": [
+      "DailyProvisioning"
+    ]
+  },
+  {
+    "uid": "1523",
+    "md5": "3180d7e8dcb83a4e94416bb9cecdcbe1",
+    "uiVersion": "1.3.2",
+    "dirs": [
+      "VotansImprovedQuests"
+    ]
+  },
+  {
+    "uid": "1737",
+    "md5": "6b7ed69efc1ee811a4d0dc522fbeaf9e",
+    "uiVersion": "1.009",
+    "dirs": [
+      "LibMOTD"
+    ]
+  },
+  {
+    "uid": "3395",
+    "md5": "01f515224c4ed1906b62e850397528c5",
+    "uiVersion": "3.1.0",
+    "dirs": [
+      "ElmsMarkers"
+    ]
+  },
+  {
+    "uid": "2778",
+    "md5": "9fe278439f59ab659f084ae4df945802",
+    "uiVersion": "1.21",
+    "dirs": [
+      "HyperTankingTools"
+    ]
+  },
+  {
+    "uid": "3060",
+    "md5": "21d08f5b27c10ae0c2aecf749cc95bd7",
+    "uiVersion": "6.8.2",
+    "dirs": [
+      "QcellRockgroveHelper"
+    ]
+  },
+  {
+    "uid": "1585",
+    "md5": "64af9274bf2d5d03a7b539d6d0f88bc0",
+    "uiVersion": "1.25",
+    "dirs": [
+      "AlchemyUnknown"
+    ]
+  },
+  {
+    "uid": "2600",
+    "md5": "13b174e4a1343893622a1317529458ba",
+    "uiVersion": "1.0.5",
+    "dirs": [
+      "HowLong"
+    ]
+  },
+  {
+    "uid": "1902",
+    "md5": "1067611edc56f520a9fb666d68496a94",
+    "uiVersion": "18",
+    "dirs": [
+      "LibFoodDrinkBuff"
+    ]
+  },
+  {
+    "uid": "3497",
+    "md5": "abc1524257a5211a100e33fb5975c302",
+    "uiVersion": "1.2.2",
+    "dirs": [
+      "HowToCloudrest"
+    ]
+  },
+  {
+    "uid": "1192",
+    "md5": "0d9255d78d5bd8649e8b40a284758def",
+    "uiVersion": "1.1.42",
+    "dirs": [
+      "Tank"
+    ]
+  },
+  {
+    "uid": "2486",
+    "md5": "fe74d97b3369dd87d3cbee2f7a2d0829",
+    "uiVersion": "3.0",
+    "dirs": [
+      "FsBountyDecay"
+    ]
+  },
+  {
+    "uid": "3551",
+    "md5": "7159ec4855859b4caf1f8fbaa554465c",
+    "uiVersion": "1.0",
+    "dirs": [
+      "NoLogoutConfirmation"
+    ]
+  },
+  {
+    "uid": "3175",
+    "md5": "5b9f6b4ee68525fc3025f74c161d53ce",
+    "uiVersion": "3.0.5",
+    "dirs": [
+      "HideHousePreview"
+    ]
+  },
+  {
+    "uid": "3879",
+    "md5": "6ec48114e6a5c0b6c2ab78ab6c4a3f5a",
+    "uiVersion": "1.4.3",
+    "dirs": [
+      "LucentCitadel"
+    ]
+  },
+  {
+    "uid": "3413",
+    "md5": "864c27a31df4834a4c616a9ad9b911c2",
+    "uiVersion": "1.0",
+    "dirs": [
+      "TributeImprovedLeaderboard"
+    ]
+  },
+  {
+    "uid": "2160",
+    "md5": "69e1a9e7599970320b3e3fe6be2b9773",
+    "uiVersion": "1.4.0",
+    "dirs": [
+      "ConfirmMasterWrit"
+    ]
+  },
+  {
+    "uid": "2118",
+    "md5": "f8786d60d4c3b83aa2e0dceb834eb4bb",
+    "uiVersion": "4.4.0",
+    "dirs": [
+      "LibMainMenu-2.0"
+    ]
+  },
+  {
+    "uid": "3442",
+    "md5": "b5a68b7e94c5399cea5afa822b054088",
+    "uiVersion": "2.1.3",
+    "dirs": [
+      "BSCs-HowToKynesAegis"
+    ]
+  },
+  {
+    "uid": "850",
+    "md5": "a224d8b97ab61c46bd8fb3b28e104773",
+    "uiVersion": "4.1.8",
+    "dirs": [
+      "Postmaster"
+    ]
+  },
+  {
+    "uid": "3486",
+    "md5": "5fa72ec399b46e51cd69b08e84a94665",
+    "uiVersion": "1.1",
+    "dirs": [
+      "HowToKyne"
+    ]
+  },
+  {
+    "uid": "3006",
+    "md5": "ce8221cdc815d31ecbfedc4af22499cb",
+    "uiVersion": "1.0",
+    "dirs": [
+      "AntiquityDiggingTurnCounter"
+    ]
+  },
+  {
+    "uid": "3238",
+    "md5": "2a6662e14ec5bb4aaa14171ab28eab81",
+    "uiVersion": "1.0.7",
+    "dirs": [
+      "PerfectRockgrove"
+    ]
+  },
+  {
+    "uid": "44",
+    "md5": "d3677186749e00e49d5fcdc715504b84",
+    "uiVersion": "1.0 r7",
+    "dirs": [
+      "LibStub"
+    ]
+  },
+  {
+    "uid": "802",
+    "md5": "eef054f698f6a7778623eb55214fd8d2",
+    "uiVersion": "1.0 r11",
+    "dirs": [
+      "LibMsgWin-1.0"
+    ]
+  },
+  {
+    "uid": "3156",
+    "md5": "d6f4296e18962a2f31efffc0a0e9d2b3",
+    "uiVersion": "0.0.3",
+    "dirs": [
+      "LibHandler"
+    ]
+  },
+  {
+    "uid": "2328",
+    "md5": "9a9b4b319c2d816b7035484e8652141a",
+    "uiVersion": "5",
+    "dirs": [
+      "CyrillicChatFilterRevived"
+    ]
+  },
+  {
+    "uid": "3754",
+    "md5": "bc45189ec9df61471447d964c8304f4e",
+    "uiVersion": "1.5.3",
+    "dirs": [
+      "TauntHelper"
+    ]
+  },
+  {
+    "uid": "3439",
+    "md5": "f4da77e3decbdaddd0ceeb0c56389a3b",
+    "uiVersion": "1.0.5",
+    "dirs": [
+      "CombatAlertsExtended"
+    ]
+  },
+  {
+    "uid": "2445",
+    "md5": "55b2bcc5fb994fcc06c45a96781e6c4b",
+    "uiVersion": "1.0.0",
+    "dirs": [
+      "VotansImprovedMulticraft"
+    ]
+  },
+  {
+    "uid": "2807",
+    "md5": "e395c35f47e3e90d0cab799007601553",
+    "uiVersion": "0.0.2",
+    "dirs": [
+      "LibDelayedHandler"
+    ]
+  },
+  {
+    "uid": "2935",
+    "md5": "0152d87d7b86a60d55f3e134cafb63f9",
+    "uiVersion": "0.2.4",
+    "dirs": [
+      "InCombatMenuBlock"
+    ]
+  },
+  {
+    "uid": "2825",
+    "md5": "34d9f6c7efc6fcd99e67ce6f9ff0691c",
+    "uiVersion": "1.5",
+    "dirs": [
+      "BindAll"
+    ]
+  },
+  {
+    "uid": "2628",
+    "md5": "db701c3c32c63110eba52f2007e02d8a",
+    "uiVersion": "3.4.5",
+    "dirs": [
+      "LibAlchemyStation"
+    ]
+  },
+  {
+    "uid": "2393",
+    "md5": "a58e7d4b0d3110cebd072637981bbea5",
+    "uiVersion": "1.0.1",
+    "dirs": [
+      "TankHelper"
+    ]
+  },
+  {
+    "uid": "1755",
+    "md5": "17a1f31161c17fc429bbd6c0bdbd7143",
+    "uiVersion": "1.022",
+    "dirs": [
+      "DryzlerElderGeekNetTaunt"
+    ]
+  },
+  {
+    "uid": "1664",
+    "md5": "d0569ff26caa7e972942e11b6da2bf62",
+    "uiVersion": "3.12",
+    "dirs": [
+      "Lib3D"
+    ]
+  },
+  {
+    "uid": "3630",
+    "md5": "5ab8264ae73ffdb0b022e51b1a14ab9d",
+    "uiVersion": "3.6.2",
+    "dirs": [
+      "SlipsSanitysEdgeAssist"
+    ]
+  },
+  {
+    "uid": "1969",
+    "md5": "51b7b01e89fc7007f8b558aca6ee0e62",
+    "uiVersion": "1.2",
+    "dirs": [
+      "RaidTools"
+    ]
+  },
+  {
+    "uid": "2840",
+    "md5": "cd80708fd0d746015256482a0277cc89",
+    "uiVersion": "1.3.1",
+    "dirs": [
+      "ravSpeed"
+    ]
+  },
+  {
+    "uid": "2430",
+    "md5": "0a08abae65d031d76c4f67c4961e989b",
+    "uiVersion": "1.3.10",
+    "dirs": [
+      "HowToSunspire"
+    ]
+  },
+  {
+    "uid": "3354",
+    "md5": "aa1ecefb2ea612280108e4ebea5e4fde",
+    "uiVersion": "2.0.3",
+    "dirs": [
+      "QcellDreadsailReefHelper"
+    ]
+  },
+  {
+    "uid": "1647",
+    "md5": "0fb3f28a69b7e0b17ab72dc8335546a8",
+    "uiVersion": "1.34",
+    "dirs": [
+      "LibBinaryEncode"
+    ]
+  },
+  {
+    "uid": "958",
+    "md5": "b2aecc5171696e0232b3e5c092a23147",
+    "uiVersion": "1.6.5",
+    "dirs": [
+      "VotansFishFillet"
+    ]
+  },
+  {
+    "uid": "540",
+    "md5": "5640de1fcd6c123f6b5551282dc0e04d",
+    "uiVersion": "2.r1",
+    "dirs": [
+      "LibSort"
+    ]
+  },
+  {
+    "uid": "2815",
+    "md5": "dab4b627805766001b164552637ea597",
+    "uiVersion": "0.1.5",
+    "dirs": [
+      "LibUnitTracker"
+    ]
+  },
+  {
+    "uid": "2784",
+    "md5": "94cf0467d13b064da253f0540b8639e6",
+    "uiVersion": "1.0.3",
+    "dirs": [
+      "LibGuildRoster"
+    ]
+  },
+  {
+    "uid": "2439",
+    "md5": "82bc9b9a997c350e745040558e0a6b30",
+    "uiVersion": "3.0",
+    "dirs": [
+      "LibFsCommons"
+    ]
+  },
+  {
+    "uid": "2462",
+    "md5": "d0524b1953d31324efc380fcb070aa42",
+    "uiVersion": "2.8",
+    "dirs": [
+      "FancyActionBar"
+    ]
+  },
+  {
+    "uid": "1847",
+    "md5": "c05b484ea62586c8c95843600d311257",
+    "uiVersion": "1.2.0",
+    "dirs": [
+      "AsylumNotifier"
+    ]
+  },
+  {
+    "uid": "3093",
+    "md5": "1d99a05278f48fd2725cba8a82ed6b25",
+    "uiVersion": "101032.1",
+    "dirs": [
+      "CompanionInfo"
+    ]
+  },
+  {
+    "uid": "163",
+    "md5": "b389efc0545e25bcef9c23a71c6990a4",
+    "uiVersion": "v2.31",
+    "dirs": [
+      "SousChef"
+    ]
+  },
+  {
+    "uid": "2651",
+    "md5": "ec861a8a61f3d9c0bdfebb6ce5a1af72",
+    "uiVersion": "42.1",
+    "dirs": [
+      "displayleads"
+    ]
+  },
+  {
+    "uid": "2381",
+    "md5": "08e32730202f4ef8a49f8b9040ac0ffd",
+    "uiVersion": "1.9",
+    "dirs": [
+      "WorldMapWayshrinesController"
+    ]
+  },
+  {
+    "uid": "1146",
+    "md5": "ed8a6c18e044441f4547a78bdeb35363",
+    "uiVersion": "7.3.0",
+    "dirs": [
+      "LibCustomMenu"
+    ]
+  },
+  {
+    "uid": "1206",
+    "md5": "92add8b122a09c227be250c466a3ac84",
+    "uiVersion": "1.0.0",
+    "dirs": [
+      "HarvensItemStatsComparsion"
+    ]
+  },
+  {
+    "uid": "3297",
+    "md5": "2579459c598c4a819e7ad6b17e5e80e5",
+    "uiVersion": "2025.03.14",
+    "dirs": [
+      "LibDataShare"
+    ]
+  },
+  {
+    "uid": "3657",
+    "md5": "4aa0ead3d53aecdcb928cdbb25abcced",
+    "uiVersion": "1.2.6",
+    "dirs": [
+      "SanitysEdgeHelper"
+    ]
+  },
+  {
+    "uid": "3449",
+    "md5": "a863f170edf0e24d8352b07840d07228",
+    "uiVersion": "0.4",
+    "dirs": [
+      "LazyDecon"
+    ]
+  },
+  {
+    "uid": "2382",
+    "md5": "0f2d6320b9c0af49f6faf4fdc7737aeb",
+    "uiVersion": "1.2.2",
+    "dirs": [
+      "LibChatMessage"
+    ]
+  },
+  {
+    "uid": "2277",
+    "md5": "af2f93305f8bb1b350ee066a34784abe",
+    "uiVersion": "1.2.0",
+    "dirs": [
+      "LibDateTime"
+    ]
+  },
+  {
+    "uid": "2276",
+    "md5": "4d90ead7036e8451cd1517b09ee61b15",
+    "uiVersion": "1.0.3",
+    "dirs": [
+      "LibGetText"
+    ]
+  },
+  {
+    "uid": "601",
+    "md5": "14112cd4c4ee7bafa6408864c92c2a1a",
+    "uiVersion": "3.3.3",
+    "dirs": [
+      "LibGPS"
+    ]
+  },
+  {
+    "uid": "3585",
+    "md5": "cbcecccb02bca29091620b14abdd3c5e",
+    "uiVersion": "1.0.1",
+    "dirs": [
+      "LibId64"
+    ]
+  },
+  {
+    "uid": "1302",
+    "md5": "b33b9f54c365f8109bf5057267111d85",
+    "uiVersion": "2.1.0",
+    "dirs": [
+      "LibMapPing"
+    ]
+  },
+  {
+    "uid": "2274",
+    "md5": "a62c10fb01ac5e2aa7623c4b9a83779c",
+    "uiVersion": "1.1.2",
+    "dirs": [
+      "LibPromises"
+    ]
+  },
+  {
+    "uid": "1311",
+    "md5": "011a6b983f909abd8312f71dc7fc60a5",
+    "uiVersion": "1.0.7",
+    "dirs": [
+      "LibTextFilter"
+    ]
+  },
+  {
+    "uid": "3887",
+    "md5": "f4b9a44b8885a61eee86f9ad2a77da9e",
+    "uiVersion": "1.21",
+    "dirs": [
+      "ScriptTracker"
+    ]
+  },
+  {
+    "uid": "405",
+    "md5": "3343a4fcca8f9a4f37daac493a2146a9",
+    "uiVersion": "5.10.2",
+    "dirs": [
+      "PotionMaker"
+    ]
+  },
+  {
+    "uid": "303",
+    "md5": "6cdde7377f9f73a454ff8fe23c42533a",
+    "uiVersion": "1.24",
+    "dirs": [
+      "SpentSkillPoints"
+    ]
+  },
+  {
+    "uid": "185",
+    "md5": "cb4caa3aa7c4372b3de78dd04b83a8f3",
+    "uiVersion": "1.38",
+    "dirs": [
+      "CustomCompassPins"
+    ]
+  },
+  {
+    "uid": "563",
+    "md5": "f0b27a3f39341db9308fcaf08d048f05",
+    "uiVersion": "1.0 r47",
+    "dirs": [
+      "LibMapPins-1.0"
+    ]
+  },
+  {
+    "uid": "3929",
+    "md5": "d6ef2ddd6d40a167c49c3f590ea419ae",
+    "uiVersion": "3.12",
+    "dirs": [
+      "AmIBlockingPlus"
+    ]
+  },
+  {
+    "uid": "2898",
+    "md5": "6ad294fc25da5e711d441ee8457080e2",
+    "uiVersion": "3.14",
+    "dirs": [
+      "CarosLootList"
+    ]
+  },
+  {
+    "uid": "3897",
+    "md5": "ba40b6622c27bc6dd844f0e2d5be4e6d",
+    "uiVersion": "0.7.0",
+    "dirs": [
+      "LucentCitadelHelper"
+    ]
+  },
+  {
+    "uid": "1355",
+    "md5": "5f94f9c1fc1a77c1a084c36ed46165df",
+    "uiVersion": "2.30",
+    "dirs": [
+      "RaidNotifier"
+    ]
+  },
+  {
+    "uid": "918",
+    "md5": "dcb2a70bae32eed2a957bf60e2a2f9a6",
+    "uiVersion": "1.16.3",
+    "dirs": [
+      "VotansFisherman"
+    ]
+  },
+  {
+    "uid": "1419",
+    "md5": "6c66a03248187c8d48600db6a0b5eb92",
+    "uiVersion": "3.0.13",
+    "dirs": [
+      "CraftBagExtended"
+    ]
+  },
+  {
+    "uid": "695",
+    "md5": "08a5d1e742c2e6fce2e902c3dd359994",
+    "uiVersion": "1.7.6",
+    "dirs": [
+      "AwesomeGuildStore"
+    ]
+  },
+  {
+    "uid": "3346",
+    "md5": "25085a9e48de81f4d580d01e241a379d",
+    "uiVersion": "6",
+    "dirs": [
+      "LibAddonMenuSoundSlider"
+    ]
+  },
+  {
+    "uid": "3158",
+    "md5": "cb700bc6fbdbda168b1923e587c56971",
+    "uiVersion": "1.7.15",
+    "dirs": [
+      "BanditsCompanions"
+    ]
+  },
+  {
+    "uid": "7",
+    "md5": "45ff607b0f816fad03092d5f2d170559",
+    "uiVersion": "2.0 r41",
+    "dirs": [
+      "LibAddonMenu-2.0"
+    ]
+  },
+  {
+    "uid": "2363",
+    "md5": "3449aa38db44ceb9d9c68ed79e4934af",
+    "uiVersion": "3.1.6",
+    "dirs": [
+      "LibLootSummary"
+    ]
+  },
+  {
+    "uid": "2204",
+    "md5": "311e690bdb47de2ffd8768a6af7b214c",
+    "uiVersion": "7.53",
+    "dirs": [
+      "LibPrice"
+    ]
+  },
+  {
+    "uid": "1399",
+    "md5": "ff3089d00ab24886fb05382da9e21273",
+    "uiVersion": "2.1.8",
+    "dirs": [
+      "VotansMiniMap"
+    ]
+  },
+  {
+    "uid": "288",
+    "md5": "a431db0d8b1c253706d1454ebc8bcd9f",
+    "uiVersion": "105",
+    "dirs": [
+      "LoreBooks"
+    ]
+  },
+  {
+    "uid": "1605",
+    "md5": "fc2b9a6c15d254ad657c8fed4d165fe7",
+    "uiVersion": "7.5.6",
+    "dirs": [
+      "WritWorthy"
+    ]
+  },
+  {
+    "uid": "1590",
+    "md5": "ecebb84cad37a0c6c3bb979b4714987e",
+    "uiVersion": "2.99",
+    "dirs": [
+      "CraftStoreFixedAndImproved"
+    ]
+  },
+  {
+    "uid": "3353",
+    "md5": "529c54cdd88bb676a4f3c6d1a496467a",
+    "uiVersion": "1.19",
+    "dirs": [
+      "LibMapData"
+    ]
+  },
+  {
+    "uid": "2618",
+    "md5": "4cd05d6fb31224d01f3d5756828769eb",
+    "uiVersion": "2.6",
+    "dirs": [
+      "LibAlchemy"
+    ]
+  },
+  {
+    "uid": "57",
+    "md5": "b83ff16a48c38c83a2b25ed478ae4f72",
+    "uiVersion": "3.16.5",
+    "dirs": [
+      "HarvestMap"
+    ]
+  },
+  {
+    "uid": "584",
+    "md5": "955a7b03dad231385559f615a8eb2ceb",
+    "uiVersion": "2.1.2",
+    "dirs": [
+      "LibHarvensAddonSettings"
+    ]
+  },
+  {
+    "uid": "3546",
+    "md5": "4349ac6246c3efef0d1f32c5820d491a",
+    "uiVersion": "2.41",
+    "dirs": [
+      "LibScrollableMenu"
+    ]
+  },
+  {
+    "uid": "2171",
+    "md5": "018451e36e914057b96a8a672b72c993",
+    "uiVersion": "8.97",
+    "dirs": [
+      "LibZone"
+    ]
+  },
+  {
+    "uid": "1480",
+    "md5": "067bb3061c2d3fb0a50534828233b537",
+    "uiVersion": "4.6.7.1",
+    "dirs": [
+      "ItemBrowser"
+    ]
+  },
+  {
+    "uid": "3910",
+    "md5": "64412ac1cbcf19fa74ce2814d726dbb5",
+    "uiVersion": "3.3.0",
+    "dirs": [
+      "DDPositions"
+    ]
+  },
+  {
+    "uid": "665",
+    "md5": "612dfebfb885db7a7aebcdd219ad41fc",
+    "uiVersion": "1.42.9",
+    "dirs": [
+      "RareFishTracker"
+    ]
+  },
+  {
+    "uid": "2633",
+    "md5": "fdadd8a2fea629b7fddf42b1394e09a0",
+    "uiVersion": "2026.01.22",
+    "dirs": [
+      "AutoInvite"
+    ]
+  },
+  {
+    "uid": "3363",
+    "md5": "6ab6af317f6f8b7849b18180031c4ffd",
+    "uiVersion": "9",
+    "dirs": [
+      "LibExoYsUtilities"
+    ]
+  },
+  {
+    "uid": "2125",
+    "md5": "4dfb03f11b09934a2e1e62a57aac80ba",
+    "uiVersion": "3.1.2",
+    "dirs": [
+      "LibAsync"
+    ]
+  },
+  {
+    "uid": "56",
+    "md5": "fbbef03c7856fdf45320a662b2041b15",
+    "uiVersion": "1.1 r37",
+    "dirs": [
+      "LibMediaProvider"
+    ]
+  },
+  {
+    "uid": "1455",
+    "md5": "85abead4c7b425c24a9a95fea325b4dd",
+    "uiVersion": "4.9.0",
+    "dirs": [
+      "LootLog"
+    ]
+  },
+  {
+    "uid": "3619",
+    "md5": "e79f6784b6a0bdd742ac234160300763",
+    "uiVersion": "2.0.1",
+    "dirs": [
+      "ExoYsCruxTracker"
+    ]
+  },
+  {
+    "uid": "2753",
+    "md5": "5c28f074c1146f37b950a781f8ee11ab",
+    "uiVersion": "3.8.24",
+    "dirs": [
+      "MasterMerchant"
+    ]
+  },
+  {
+    "uid": "2241",
+    "md5": "50c609edd5469703007100f8bae3b61c",
+    "uiVersion": "0.8.9",
+    "dirs": [
+      "LibSets"
+    ]
+  },
+  {
+    "uid": "93",
+    "md5": "6813849baa3ceca85b6d8e544c0c592e",
+    "uiVersion": "10.0.7.2",
+    "dirs": [
+      "pChat"
+    ]
+  },
+  {
+    "uid": "3364",
+    "md5": "87fd13cda936f35bedb2d085b3ab4aba",
+    "uiVersion": "1.6.1",
+    "dirs": [
+      "ExoYsTributesEnhancement"
+    ]
+  },
+  {
+    "uid": "3317",
+    "md5": "dd578dce204c761cf27ac4007cb6d88e",
+    "uiVersion": "3.0.2",
+    "dirs": [
+      "LibCharacterKnowledge"
+    ]
+  },
+  {
+    "uid": "1881",
+    "md5": "7936fc0fc632c24cf9a9fd92059a2a54",
+    "uiVersion": "1.99.4",
+    "dirs": [
+      "MapPins"
+    ]
+  },
+  {
+    "uid": "2143",
+    "md5": "39853e20fe71e208fd7f420407f3b412",
+    "uiVersion": "4.0.3",
+    "dirs": [
+      "BeamMeUp"
+    ]
+  },
+  {
+    "uid": "2311",
+    "md5": "116ad5cd07cef153cd458e80a296d580",
+    "uiVersion": "2026-03-30",
+    "dirs": [
+      "HodorReflexes"
+    ]
+  },
+  {
+    "uid": "2804",
+    "md5": "360aecdc53aea057f12c27520b978d34",
+    "uiVersion": "3.0.0",
+    "dirs": [
+      "SetCollectionMarker"
+    ]
+  },
+  {
+    "uid": "2834",
+    "md5": "05aa07585b68d9fcc53f4fbc645dbde0",
+    "uiVersion": "1.13.3",
+    "dirs": [
+      "OdySupportIcons"
+    ]
+  },
+  {
+    "uid": "1346",
+    "md5": "aee492bbd59fdedf4414c5d524d856ed",
+    "uiVersion": "4.0.5.7",
+    "dirs": [
+      "DolgubonsLazyWritCreator"
+    ]
+  },
+  {
+    "uid": "3170",
+    "md5": "0fdc5ff9547107f34e8420a10866f4b0",
+    "uiVersion": "1.23.2",
+    "dirs": [
+      "WizardsWardrobe"
+    ]
+  },
+  {
+    "uid": "1855",
+    "md5": "fb2790e6214826746f746b0906d5623b",
+    "uiVersion": "2.4.10",
+    "dirs": [
+      "CombatAlerts"
+    ]
+  },
+  {
+    "uid": "2528",
+    "md5": "fdba0628e7d14d7d3e9aafefd5736972",
+    "uiVersion": "86",
+    "dirs": [
+      "LibCombat"
+    ]
+  },
+  {
+    "uid": "1643",
+    "md5": "8e0a08725c27e818b6f569b9e568bbcf",
+    "uiVersion": "4.435",
+    "dirs": [
+      "BanditsUserInterface"
+    ]
+  },
+  {
+    "uid": "2373",
+    "md5": "410a5d76e16554a9f39c9bd738ab2cfe",
+    "uiVersion": "1.7.4",
+    "dirs": [
+      "CombatMetronome"
+    ]
+  },
+  {
+    "uid": "1970",
+    "md5": "03be0ee83f6bfeca5b65e422902d824c",
+    "uiVersion": "2.3.22",
+    "dirs": [
+      "GuildHallButton"
+    ]
+  },
+  {
+    "uid": "2817",
+    "md5": "4e36c981f23d2008b76b417b06f49ca4",
+    "uiVersion": "2.7.0",
+    "dirs": [
+      "LibHistoire"
+    ]
+  },
+  {
+    "uid": "3137",
+    "md5": "103706268e2298f42d20c435fad98504",
+    "uiVersion": "2.14.0",
+    "dirs": [
+      "CrutchAlerts"
+    ]
+  },
+  {
+    "uid": "1594",
+    "md5": "dfcda00d8389516629601b6165da08cc",
+    "uiVersion": "4.035",
+    "dirs": [
+      "LibLazyCrafting"
+    ]
+  },
+  {
+    "uid": "2938",
+    "md5": "bf79d8f157fe7316f0bb34025876c904",
+    "uiVersion": "3.0.2",
+    "dirs": [
+      "CharacterKnowledge"
+    ]
+  },
+  {
+    "uid": "3512",
+    "md5": "c627ec43de6ec10a532326cf6f85fbb4",
+    "uiVersion": "2026.04.07",
+    "dirs": [
+      "PersonalAssistant"
+    ]
+  },
+  {
+    "uid": "2275",
+    "md5": "61d35635729aa885c09ef050a55bd82e",
+    "uiVersion": "2.5.3",
+    "dirs": [
+      "LibDebugLogger"
+    ]
+  },
+  {
+    "uid": "2892",
+    "md5": "f710b3eed117c0e8da53403182b20564",
+    "uiVersion": "9.16",
+    "dirs": [
+      "PithkaAchievementTracker"
+    ]
+  },
+  {
+    "uid": "1360",
+    "md5": "bd61c2623a0b779f558d4de206766191",
+    "uiVersion": "1.7.7",
+    "dirs": [
+      "CombatMetrics"
+    ]
+  },
+  {
+    "uid": "1253",
+    "md5": "b317a0bac4a829ff369c0c5b71137864",
+    "uiVersion": "6",
+    "dirs": [
+      "libAddonKeybinds"
+    ]
+  },
+  {
+    "uid": "",
+    "md5": "",
+    "uiVersion": "",
+    "dirs": []
+  },
+  {
+    "uid": "",
+    "md5": "",
+    "uiVersion": "",
+    "dirs": []
+  },
+  {
+    "uid": "",
+    "md5": "",
+    "uiVersion": "",
+    "dirs": []
+  },
+  {
+    "uid": "",
+    "md5": "",
+    "uiVersion": "",
+    "dirs": []
+  },
+  {
+    "uid": "",
+    "md5": "",
+    "uiVersion": "",
+    "dirs": []
+  },
+  {
+    "uid": "",
+    "md5": "",
+    "uiVersion": "",
+    "dirs": []
+  },
+  {
+    "uid": "",
+    "md5": "",
+    "uiVersion": "",
+    "dirs": []
+  },
+  {
+    "uid": "",
+    "md5": "",
+    "uiVersion": "",
+    "dirs": []
+  },
+  {
+    "uid": "",
+    "md5": "",
+    "uiVersion": "",
+    "dirs": []
+  },
+  {
+    "uid": "",
+    "md5": "",
+    "uiVersion": "",
+    "dirs": []
+  },
+  {
+    "uid": "",
+    "md5": "",
+    "uiVersion": "",
+    "dirs": []
+  },
+  {
+    "uid": "",
+    "md5": "",
+    "uiVersion": "",
+    "dirs": []
+  },
+  {
+    "uid": "",
+    "md5": "",
+    "uiVersion": "",
+    "dirs": []
+  },
+  {
+    "uid": "",
+    "md5": "",
+    "uiVersion": "",
+    "dirs": []
+  },
+  {
+    "uid": "",
+    "md5": "",
+    "uiVersion": "",
+    "dirs": []
+  },
+  {
+    "uid": "",
+    "md5": "",
+    "uiVersion": "",
+    "dirs": []
+  },
+  {
+    "uid": "",
+    "md5": "",
+    "uiVersion": "",
+    "dirs": []
+  },
+  {
+    "uid": "",
+    "md5": "",
+    "uiVersion": "",
+    "dirs": []
+  },
+  {
+    "uid": "",
+    "md5": "",
+    "uiVersion": "",
+    "dirs": []
+  },
+  {
+    "uid": "",
+    "md5": "",
+    "uiVersion": "",
+    "dirs": []
+  },
+  {
+    "uid": "",
+    "md5": "",
+    "uiVersion": "",
+    "dirs": []
+  },
+  {
+    "uid": "",
+    "md5": "",
+    "uiVersion": "",
+    "dirs": []
+  },
+  {
+    "uid": "",
+    "md5": "",
+    "uiVersion": "",
+    "dirs": []
+  },
+  {
+    "uid": "",
+    "md5": "",
+    "uiVersion": "",
+    "dirs": []
+  },
+  {
+    "uid": "",
+    "md5": "",
+    "uiVersion": "",
+    "dirs": []
+  },
+  {
+    "uid": "",
+    "md5": "",
+    "uiVersion": "",
+    "dirs": []
+  },
+  {
+    "uid": "",
+    "md5": "",
+    "uiVersion": "",
+    "dirs": []
+  },
+  {
+    "uid": "",
+    "md5": "",
+    "uiVersion": "",
+    "dirs": []
+  },
+  {
+    "uid": "",
+    "md5": "",
+    "uiVersion": "",
+    "dirs": []
+  },
+  {
+    "uid": "",
+    "md5": "",
+    "uiVersion": "",
+    "dirs": []
+  },
+  {
+    "uid": "",
+    "md5": "",
+    "uiVersion": "",
+    "dirs": []
+  },
+  {
+    "uid": "",
+    "md5": "",
+    "uiVersion": "",
+    "dirs": []
+  },
+  {
+    "uid": "",
+    "md5": "",
+    "uiVersion": "",
+    "dirs": []
+  },
+  {
+    "uid": "",
+    "md5": "",
+    "uiVersion": "",
+    "dirs": []
+  },
+  {
+    "uid": "",
+    "md5": "",
+    "uiVersion": "",
+    "dirs": []
+  },
+  {
+    "uid": "",
+    "md5": "",
+    "uiVersion": "",
+    "dirs": []
+  },
+  {
+    "uid": "",
+    "md5": "",
+    "uiVersion": "",
+    "dirs": []
+  },
+  {
+    "uid": "",
+    "md5": "",
+    "uiVersion": "",
+    "dirs": []
+  },
+  {
+    "uid": "",
+    "md5": "",
+    "uiVersion": "",
+    "dirs": []
+  },
+  {
+    "uid": "",
+    "md5": "",
+    "uiVersion": "",
+    "dirs": []
+  },
+  {
+    "uid": "",
+    "md5": "",
+    "uiVersion": "",
+    "dirs": []
+  },
+  {
+    "uid": "",
+    "md5": "",
+    "uiVersion": "",
+    "dirs": []
+  },
+  {
+    "uid": "",
+    "md5": "",
+    "uiVersion": "",
+    "dirs": []
+  },
+  {
+    "uid": "",
+    "md5": "",
+    "uiVersion": "",
+    "dirs": []
+  },
+  {
+    "uid": "",
+    "md5": "",
+    "uiVersion": "",
+    "dirs": []
+  },
+  {
+    "uid": "",
+    "md5": "",
+    "uiVersion": "",
+    "dirs": []
+  },
+  {
+    "uid": "",
+    "md5": "",
+    "uiVersion": "",
+    "dirs": []
+  },
+  {
+    "uid": "",
+    "md5": "",
+    "uiVersion": "",
+    "dirs": []
+  },
+  {
+    "uid": "",
+    "md5": "",
+    "uiVersion": "",
+    "dirs": []
+  },
+  {
+    "uid": "",
+    "md5": "",
+    "uiVersion": "",
+    "dirs": []
+  },
+  {
+    "uid": "",
+    "md5": "",
+    "uiVersion": "",
+    "dirs": []
+  },
+  {
+    "uid": "",
+    "md5": "",
+    "uiVersion": "",
+    "dirs": []
+  },
+  {
+    "uid": "",
+    "md5": "",
+    "uiVersion": "",
+    "dirs": []
+  },
+  {
+    "uid": "",
+    "md5": "",
+    "uiVersion": "",
+    "dirs": []
+  },
+  {
+    "uid": "",
+    "md5": "",
+    "uiVersion": "",
+    "dirs": []
+  },
+  {
+    "uid": "",
+    "md5": "",
+    "uiVersion": "",
+    "dirs": []
+  },
+  {
+    "uid": "",
+    "md5": "",
+    "uiVersion": "",
+    "dirs": []
+  },
+  {
+    "uid": "",
+    "md5": "",
+    "uiVersion": "",
+    "dirs": []
+  },
+  {
+    "uid": "",
+    "md5": "",
+    "uiVersion": "",
+    "dirs": []
+  },
+  {
+    "uid": "",
+    "md5": "",
+    "uiVersion": "",
+    "dirs": []
+  },
+  {
+    "uid": "",
+    "md5": "",
+    "uiVersion": "",
+    "dirs": []
+  },
+  {
+    "uid": "",
+    "md5": "",
+    "uiVersion": "",
+    "dirs": []
+  },
+  {
+    "uid": "",
+    "md5": "",
+    "uiVersion": "",
+    "dirs": []
+  },
+  {
+    "uid": "",
+    "md5": "",
+    "uiVersion": "",
+    "dirs": []
+  },
+  {
+    "uid": "",
+    "md5": "",
+    "uiVersion": "",
+    "dirs": []
+  },
+  {
+    "uid": "",
+    "md5": "",
+    "uiVersion": "",
+    "dirs": []
+  },
+  {
+    "uid": "",
+    "md5": "",
+    "uiVersion": "",
+    "dirs": []
+  },
+  {
+    "uid": "",
+    "md5": "",
+    "uiVersion": "",
+    "dirs": []
+  },
+  {
+    "uid": "",
+    "md5": "",
+    "uiVersion": "",
+    "dirs": []
+  },
+  {
+    "uid": "",
+    "md5": "",
+    "uiVersion": "",
+    "dirs": []
+  },
+  {
+    "uid": "",
+    "md5": "",
+    "uiVersion": "",
+    "dirs": []
+  },
+  {
+    "uid": "",
+    "md5": "",
+    "uiVersion": "",
+    "dirs": []
+  },
+  {
+    "uid": "",
+    "md5": "",
+    "uiVersion": "",
+    "dirs": []
+  },
+  {
+    "uid": "",
+    "md5": "",
+    "uiVersion": "",
+    "dirs": []
+  },
+  {
+    "uid": "",
+    "md5": "",
+    "uiVersion": "",
+    "dirs": []
+  },
+  {
+    "uid": "",
+    "md5": "",
+    "uiVersion": "",
+    "dirs": []
+  },
+  {
+    "uid": "",
+    "md5": "",
+    "uiVersion": "",
+    "dirs": []
+  },
+  {
+    "uid": "",
+    "md5": "",
+    "uiVersion": "",
+    "dirs": []
+  },
+  {
+    "uid": "",
+    "md5": "",
+    "uiVersion": "",
+    "dirs": []
+  },
+  {
+    "uid": "",
+    "md5": "",
+    "uiVersion": "",
+    "dirs": []
+  },
+  {
+    "uid": "",
+    "md5": "",
+    "uiVersion": "",
+    "dirs": []
+  },
+  {
+    "uid": "",
+    "md5": "",
+    "uiVersion": "",
+    "dirs": []
+  },
+  {
+    "uid": "",
+    "md5": "",
+    "uiVersion": "",
+    "dirs": []
+  },
+  {
+    "uid": "",
+    "md5": "",
+    "uiVersion": "",
+    "dirs": []
+  },
+  {
+    "uid": "",
+    "md5": "",
+    "uiVersion": "",
+    "dirs": []
+  }
+]

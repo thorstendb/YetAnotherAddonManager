@@ -3,7 +3,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { AddonInfo, DependencyRef, ColorSegment, YaamAddonEntry } from './shared/types';
-import { loadDatabase, saveDatabase, YaamDatabase } from './yaamDatabase';
+import { loadDatabase, saveDatabase, YaamDatabase, readMarkerFile, writeMarkerFile } from './yaamDatabase';
 
 /**
  * Parse color codes from a string.
@@ -234,6 +234,7 @@ function parseManifest(
     pcDependsOn: pcDeps,
     allSavedVariableNames,
     yaamMeta: undefined, // injected from DB after scan
+    yaamMarker: undefined, // injected from .yaam.json after scan
   };
 }
 
@@ -338,10 +339,49 @@ export function scanAddonsFolder(addonsPath: string): AddonInfo[] {
     }
   }
 
-  // Inject yaamMeta from the central database + detect runtime-created files
+  // Inject yaamMeta from the central database + detect runtime-created files.
+  // If the DB has no entry but a .yaam.json marker exists in the folder,
+  // restore the DB entry from it (resilience against DB loss).
   const db = loadDatabase(addonsPath);
+  let dbChanged = false;
   for (const addon of addons) {
-    const entry = db.addons[addon.folderName];
+    let entry = db.addons[addon.folderName];
+
+    // Read .yaam.json marker file from the addon folder
+    const marker = readMarkerFile(addonsPath, addon.folderName);
+    addon.yaamMarker = marker ?? undefined;
+
+    if (!entry?.esouid && marker) {
+      // DB entry missing but marker exists — restore from marker
+      entry = {
+        esouid: marker.esouid,
+        url: '',
+        catalogName: marker.catalogName,
+        catalogAuthor: '',
+        catalogVersion: marker.catalogVersion,
+        localVersion: addon.version,
+        installedAt: marker.installedAt,
+        updatedAt: marker.updatedAt,
+      };
+      db.addons[addon.folderName] = entry;
+      dbChanged = true;
+    } else if (entry?.esouid && marker && entry.catalogVersion !== marker.catalogVersion) {
+      // Marker differs from DB (e.g. after restoring an older backup).
+      // The marker lives inside the addon folder and is the ground truth
+      // for what is actually on disk.
+      entry.catalogVersion = marker.catalogVersion;
+      db.addons[addon.folderName] = entry;
+      dbChanged = true;
+    } else if (entry?.esouid && entry.catalogVersion && !marker) {
+      // DB has a tracked version but no marker file on disk.
+      // The addon folder was likely replaced (e.g. restored from a backup
+      // taken before YAAM tracking).  Clear catalogVersion so the addon
+      // falls to Tier 3 (best-effort) update detection.
+      entry.catalogVersion = '';
+      db.addons[addon.folderName] = entry;
+      dbChanged = true;
+    }
+
     if (entry?.esouid) {
       addon.yaamMeta = entry;
     }
@@ -353,6 +393,7 @@ export function scanAddonsFolder(addonsPath: string): AddonInfo[] {
       }
     }
   }
+  if (dbChanged) saveDatabase(db, addonsPath);
 
   return addons;
 }

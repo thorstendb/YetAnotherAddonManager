@@ -10,7 +10,7 @@ import { scanAddonsFolder, cleanupUnusedLibraries, deleteAddon, deleteAddonAndEx
 import { fetchAddonCatalog, fetchAddonDetails, fetchCategories, installAddon, cleanupDownloadsFolder, previewCleanupDownloads, cleanupDownloadsSelected } from './addonCatalogApi';
 import { parseAddonSettings, setAddonSetting, batchSetAddonSettings, getSavedVarsInfo, deleteSavedVars, cleanupSettings, undoCleanupSettings, listSavedVarsBackups, restoreSavedVarsFile, exportProfile, importProfile, exportProfileAsZip, previewProfileZip, importProfileFromZip, ExportData, previewCleanupSettings, cleanupSettingsSelected } from './settingsManager';
 import { saveSnapshotIfChanged, listSnapshots, listAddonBackups, restoreAddonFromBackup, backupAddonFolder, deleteAddonBackups, SnapshotAddon } from './snapshotManager';
-import { migrateFromFolderFiles, getAllEntries, getYaamDir } from './yaamDatabase';
+import { migrateFromFolderFiles, getAllEntries, getYaamDir, cleanupMarkerFiles } from './yaamDatabase';
 
 /** Extract error message from unknown catch value */
 function errMsg(err: unknown): string {
@@ -173,6 +173,15 @@ ipcMain.handle(IPC_CHANNELS.GET_YAAM_DB, async (_event, addonsPath: string) => {
   } catch (err: unknown) {
     console.error('Get YAAM DB error:', err);
     return {};
+  }
+});
+
+ipcMain.handle(IPC_CHANNELS.CLEANUP_YAAM_MARKERS, async (_event, addonsPath: string) => {
+  try {
+    return cleanupMarkerFiles(addonsPath);
+  } catch (err: unknown) {
+    console.error('Cleanup markers error:', err);
+    return 0;
   }
 });
 
@@ -683,17 +692,6 @@ ipcMain.handle(IPC_CHANNELS.ACCEPT_WELCOME, async () => {
   config.welcomeAccepted = true;
   saveConfig(config);
   return config;
-});
-
-ipcMain.handle(IPC_CHANNELS.SAVE_INSTALLED_VERSIONS, async (_event, versions: Record<string, string>) => {
-  const config = loadConfig();
-  if (!config.installedCatalogVersions) config.installedCatalogVersions = {};
-  Object.assign(config.installedCatalogVersions, versions);
-  // Remove entries with empty values (used to signal deletion after restore)
-  for (const [key, val] of Object.entries(config.installedCatalogVersions)) {
-    if (!val) delete config.installedCatalogVersions[key];
-  }
-  saveConfig(config);
 });
 
 ipcMain.handle(IPC_CHANNELS.QUIT_APP, async () => {

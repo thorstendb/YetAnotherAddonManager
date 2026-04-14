@@ -71,8 +71,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.invoke(IPC_CHANNELS.CLEANUP_DOWNLOADS, addonsPath),
   saveUiSettings: (settings: { logHeight?: number; panelWidths?: number[]; fontSize?: number; fontFamily?: string; skipCleanupConfirm?: boolean }): Promise<AppConfig> =>
     ipcRenderer.invoke(IPC_CHANNELS.SAVE_UI_SETTINGS, settings),
-  saveInstalledVersions: (versions: Record<string, string>): Promise<void> =>
-    ipcRenderer.invoke(IPC_CHANNELS.SAVE_INSTALLED_VERSIONS, versions),
+
   onInstallProgress: (callback: (data: { addonId: string; phase: string; percent?: number; current?: number; total?: number }) => void) => {
     const handler = (_event: IpcRendererEvent, data: { addonId: string; phase: string; percent?: number; current?: number; total?: number }) => callback(data);
     ipcRenderer.on(IPC_CHANNELS.INSTALL_PROGRESS, handler);
@@ -191,4 +190,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.invoke(IPC_CHANNELS.RECONCILE_YAAM_META, addonsPath, matches),
   getYaamDb: (addonsPath: string): Promise<Record<string, { esouid: string; url: string; catalogName: string; catalogAuthor: string; catalogVersion: string; localVersion: string; installedAt: string; updatedAt: string }>> =>
     ipcRenderer.invoke(IPC_CHANNELS.GET_YAAM_DB, addonsPath),
+  cleanupYaamMarkers: (addonsPath: string): Promise<number> =>
+    ipcRenderer.invoke(IPC_CHANNELS.CLEANUP_YAAM_MARKERS, addonsPath),
 });

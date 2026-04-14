@@ -20,6 +20,7 @@
   --peach: #7ca8c9;
   --contrast-on-color: #1a1d24;
   --tree-indent: 20px;
+  --bg-update: rgba(91, 155, 213, 0.12);
 }
 
 /* ---- Light ---- */
@@ -39,6 +40,7 @@
   --red: #b8394a;
   --peach: #4a80a8;
   --contrast-on-color: #ffffff;
+  --bg-update: rgba(43, 108, 176, 0.10);
 }
 
 * {

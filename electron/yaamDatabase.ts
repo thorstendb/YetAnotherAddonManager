@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: MIT
 import * as fs from 'fs';
 import * as path from 'path';
+import type { YaamMarker } from './shared/types';
 
 /**
  * Per-addon metadata stored in the central YAAM database.
@@ -122,6 +123,87 @@ export function setEntries(addonsPath: string, entries: Record<string, YaamAddon
 /** Get all entries as a Record. */
 export function getAllEntries(addonsPath: string): Record<string, YaamAddonEntry> {
   return loadDatabase(addonsPath).addons;
+}
+
+// ─── Per-folder .yaam.json marker files ───
+
+const MARKER_FILE = '.yaam.json';
+
+/**
+ * Write a .yaam.json marker file into an addon folder.
+ * This provides resilient tracking that survives DB loss.
+ */
+export function writeMarkerFile(addonsPath: string, folderName: string, entry: YaamAddonEntry): void {
+  const markerPath = path.join(addonsPath, folderName, MARKER_FILE);
+  const marker: YaamMarker = {
+    esouid: entry.esouid,
+    catalogVersion: entry.catalogVersion,
+    catalogName: entry.catalogName,
+    installedAt: entry.installedAt,
+    updatedAt: entry.updatedAt,
+  };
+  try {
+    fs.writeFileSync(markerPath, JSON.stringify(marker, null, 2), 'utf-8');
+  } catch (err) {
+    console.error(`Failed to write ${MARKER_FILE} for ${folderName}:`, err);
+  }
+}
+
+/**
+ * Read a .yaam.json marker file from an addon folder.
+ * Returns null if the file doesn't exist or is invalid.
+ */
+export function readMarkerFile(addonsPath: string, folderName: string): YaamMarker | null {
+  const markerPath = path.join(addonsPath, folderName, MARKER_FILE);
+  try {
+    if (!fs.existsSync(markerPath)) return null;
+    const raw = fs.readFileSync(markerPath, 'utf-8');
+    const data = JSON.parse(raw);
+    if (!data.esouid) return null;
+    return {
+      esouid: data.esouid,
+      catalogVersion: data.catalogVersion || data.version || '',
+      catalogName: data.catalogName || data.name || '',
+      installedAt: data.installedAt || '',
+      updatedAt: data.updatedAt || '',
+    };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Delete all .yaam.json marker files from addon folders and clear
+ * catalogVersion in the DB so every addon falls to best-effort detection.
+ * Returns the number of marker files deleted.
+ */
+export function cleanupMarkerFiles(addonsPath: string): number {
+  if (!addonsPath || !fs.existsSync(addonsPath)) return 0;
+  let count = 0;
+  const db = loadDatabase(addonsPath);
+  let dbChanged = false;
+  try {
+    const entries = fs.readdirSync(addonsPath, { withFileTypes: true });
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue;
+      const markerPath = path.join(addonsPath, entry.name, MARKER_FILE);
+      try {
+        if (fs.existsSync(markerPath)) {
+          fs.unlinkSync(markerPath);
+          count++;
+        }
+      } catch { /* skip */ }
+      // Also clear catalogVersion in DB so Tier 3 kicks in
+      if (db.addons[entry.name]?.catalogVersion) {
+        db.addons[entry.name].catalogVersion = '';
+        dbChanged = true;
+      }
+    }
+  } catch (err) {
+    console.error('Failed to cleanup marker files:', err);
+  }
+  if (dbChanged) saveDatabase(db, addonsPath);
+  return count;
 }
 
 /**

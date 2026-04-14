@@ -8,6 +8,7 @@ import * as path from 'path';
 import AdmZip from 'adm-zip';
 import { CatalogAddon, CatalogCategory } from './shared/types';
 import { scanSpecificAddons } from './addonScanner';
+import { loadDatabase, saveDatabase, writeMarkerFile } from './yaamDatabase';
 import { loadDatabase, saveDatabase } from './yaamDatabase';
 
 const API_URL = 'https://api.mmoui.com/v3/game/ESO/filelist.json';
@@ -323,7 +324,7 @@ export async function installAddon(
       let changed = false;
       for (const dir of shippedDirs) {
         const existing = db.addons[dir];
-        db.addons[dir] = {
+        const entry = {
           esouid: catalogEntry.id,
           url: catalogEntry.infoUrl,
           catalogName: catalogEntry.name,
@@ -334,6 +335,9 @@ export async function installAddon(
           updatedAt: now,
           installedFiles: zipFilesByDir.get(dir),
         };
+        db.addons[dir] = entry;
+        // Write per-folder .yaam.json marker for resilient tracking
+        writeMarkerFile(addonsPath, dir, entry);
         changed = true;
       }
       if (changed) saveDatabase(db, addonsPath);

@@ -7,6 +7,7 @@ interface SettingsDialogProps {
   fontFamily: string;
   skipCleanupConfirm: boolean;
   onApply: (settings: { fontScale: number; fontFamily: string; skipCleanupConfirm: boolean }) => void;
+  onCleanupMarkers?: () => void;
   onClose: () => void;
 }
 
@@ -17,6 +18,7 @@ const SettingsDialog: React.FC<SettingsDialogProps> = ({
   fontFamily,
   skipCleanupConfirm,
   onApply,
+  onCleanupMarkers,
   onClose,
 }) => {
   const closeRef = useRef<HTMLButtonElement>(null);
@@ -108,6 +110,21 @@ const SettingsDialog: React.FC<SettingsDialogProps> = ({
               <span className="settings-label" style={{ minWidth: 0 }}>Cleanup without confirmation</span>
             </label>
           </div>
+          {onCleanupMarkers && (
+            <div style={{ borderTop: '1px solid var(--border)', margin: '12px 0', paddingTop: '12px' }}>
+              <div style={{ marginBottom: 6, fontSize: '0.857rem', color: 'var(--text-secondary)' }}>
+                Remove all YAAM tracking files (.yaam.json) from addon folders and reset version tracking.
+                Addons will use best-effort update detection until the next install/update.
+              </div>
+              <button
+                className="restore-btn"
+                style={{ color: 'var(--red)' }}
+                onClick={onCleanupMarkers}
+              >
+                🗑️ Reset YAAM Tracking
+              </button>
+            </div>
+          )}
           <div className="settings-actions">
             <button className="restore-btn" onClick={handleReset}>
               ↩ Reset

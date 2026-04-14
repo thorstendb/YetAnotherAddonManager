@@ -69,6 +69,8 @@ export interface AddonInfo {
   allSavedVariableNames: string[];
   /** YAAM database entry for this addon (if present) */
   yaamMeta?: YaamAddonEntry;
+  /** YAAM marker file data read from .yaam.json in the addon folder */
+  yaamMarker?: YaamMarker;
   /** Files found in the addon folder that were NOT part of the original install (runtime-created) */
   runtimeFiles?: string[];
 }
@@ -93,6 +95,24 @@ export interface YaamAddonEntry {
   updatedAt: string;
   /** Relative file paths from the original ZIP (install manifest for detecting runtime-created files) */
   installedFiles?: string[];
+}
+
+/**
+ * Per-addon marker file (.yaam.json) stored directly in each addon folder.
+ * Provides resilient tracking: survives DB loss, is portable across machines,
+ * and enables instant identification of YAAM-managed addons without DB lookup.
+ */
+export interface YaamMarker {
+  /** ESOUI catalog UID (e.g. "1346") — the golden key */
+  esouid: string;
+  /** ESOUI catalog version string at time of install/update */
+  catalogVersion: string;
+  /** Catalog name at time of install/update */
+  catalogName: string;
+  /** ISO timestamp of first install via YAAM */
+  installedAt: string;
+  /** ISO timestamp of last update via YAAM */
+  updatedAt: string;
 }
 
 export interface DependencyRef {
@@ -408,9 +428,6 @@ export interface AppConfig {
   panelWidths?: number[];
   /** Whether the user has accepted the welcome/disclaimer dialog */
   welcomeAccepted?: boolean;
-  /** Catalog addon ID → UIVersion when last installed. Prevents false "update available" when
-   *  the local manifest ## Version doesn't match the catalog UIVersion string. */
-  installedCatalogVersions?: Record<string, string>;
   /** UI font scale percentage (default 100) */
   fontScale?: number;
   /** UI font family (CSS value) */
@@ -536,7 +553,7 @@ export const IPC_CHANNELS = {
   CLEANUP_DOWNLOADS: 'cleanup-downloads',
   SAVE_UI_SETTINGS: 'save-ui-settings',
   ACCEPT_WELCOME: 'accept-welcome',
-  SAVE_INSTALLED_VERSIONS: 'save-installed-versions',
+
   INSTALL_PROGRESS: 'install-progress',
   UNDO_CLEANUP_SETTINGS: 'undo-cleanup-settings',
   QUIT_APP: 'quit-app',
@@ -575,4 +592,5 @@ export const IPC_CHANNELS = {
   FETCH_CATEGORIES: 'fetch-categories',
   RECONCILE_YAAM_META: 'reconcile-yaam-meta',
   GET_YAAM_DB: 'get-yaam-db',
+  CLEANUP_YAAM_MARKERS: 'cleanup-yaam-markers',
 } as const;

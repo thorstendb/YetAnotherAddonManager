@@ -286,7 +286,7 @@ const AddonTreeItem: React.FC<AddonTreeItemProps> = ({
   return (
     <div className="tree-item">
       <div
-        className={`tree-item-row ${isSelected ? 'selected' : ''}`}
+        className={`tree-item-row ${isSelected ? 'selected' : ''} ${hasUpdate ? 'has-update' : ''}`}
         onClick={handleClick}
         onContextMenu={handleRightClick}
       >
