@@ -19,6 +19,8 @@ export interface YaamAddonEntry {
   catalogAuthor: string;
   /** Version string from the ESOUI catalog record */
   catalogVersion: string;
+  /** Catalog date (epoch seconds) at time of install/update — detects re-publishes */
+  catalogDate?: number;
   /** Version string from the addon's local manifest (## Version) */
   localVersion: string;
   /** ISO timestamp of first install via YAAM */
@@ -138,6 +140,7 @@ export function writeMarkerFile(addonsPath: string, folderName: string, entry: Y
   const marker: YaamMarker = {
     esouid: entry.esouid,
     catalogVersion: entry.catalogVersion,
+    catalogDate: entry.catalogDate,
     catalogName: entry.catalogName,
     installedAt: entry.installedAt,
     updatedAt: entry.updatedAt,
@@ -163,6 +166,7 @@ export function readMarkerFile(addonsPath: string, folderName: string): YaamMark
     return {
       esouid: data.esouid,
       catalogVersion: data.catalogVersion || data.version || '',
+      catalogDate: typeof data.catalogDate === 'number' ? data.catalogDate : undefined,
       catalogName: data.catalogName || data.name || '',
       installedAt: data.installedAt || '',
       updatedAt: data.updatedAt || '',
@@ -193,9 +197,10 @@ export function cleanupMarkerFiles(addonsPath: string): number {
           count++;
         }
       } catch { /* skip */ }
-      // Also clear catalogVersion in DB so Tier 3 kicks in
+      // Also clear catalogVersion/catalogDate in DB so Tier 3 kicks in
       if (db.addons[entry.name]?.catalogVersion) {
         db.addons[entry.name].catalogVersion = '';
+        db.addons[entry.name].catalogDate = undefined;
         dbChanged = true;
       }
     }
@@ -229,7 +234,11 @@ export function migrateFromFolderFiles(addonsPath: string): { migrated: number; 
         const old = JSON.parse(raw);
         if (!old.esouid) continue;
 
-        // Only migrate if not already in DB (don't overwrite newer data)
+        // Only migrate if not already in DB (don't overwrite newer data).
+        // If the addon IS already in the DB, leave the .yaam.json in place —
+        // it is actively used by scanAddonsFolder as a "ground truth" marker
+        // for what version is on disk.  Deleting it would cause the scan to
+        // clear catalogVersion, defeating Tier-2 update detection.
         if (!db.addons[entry.name]) {
           db.addons[entry.name] = {
             esouid: old.esouid,
@@ -242,11 +251,11 @@ export function migrateFromFolderFiles(addonsPath: string): { migrated: number; 
             updatedAt: old.updatedAt || new Date().toISOString(),
           };
           changed = true;
-        }
 
-        // Delete the old per-folder file
-        fs.unlinkSync(metaPath);
-        result.migrated++;
+          // Delete migrated file (data now lives in the central DB)
+          fs.unlinkSync(metaPath);
+          result.migrated++;
+        }
       } catch (err) {
         console.error(`Failed to migrate .yaam.json for ${entry.name}:`, err);
         result.errors++;

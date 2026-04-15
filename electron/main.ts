@@ -7,7 +7,7 @@ import * as os from 'os';
 import { IPC_CHANNELS } from './shared/types';
 import { loadConfig, saveConfig } from './configStore';
 import { scanAddonsFolder, cleanupUnusedLibraries, deleteAddon, deleteAddonAndExclusiveRefs, previewUnusedLibraries, cleanupSelectedLibraries, reconcileYaamMetadata, ReconcileMatch } from './addonScanner';
-import { fetchAddonCatalog, fetchAddonDetails, fetchCategories, installAddon, cleanupDownloadsFolder, previewCleanupDownloads, cleanupDownloadsSelected } from './addonCatalogApi';
+import { fetchAddonCatalog, fetchAddonDetails, fetchCategories, installAddon, cleanupDownloadsFolder, previewCleanupDownloads, cleanupDownloadsSelected, updateCatalogSnapshot } from './addonCatalogApi';
 import { parseAddonSettings, setAddonSetting, batchSetAddonSettings, getSavedVarsInfo, deleteSavedVars, cleanupSettings, undoCleanupSettings, listSavedVarsBackups, restoreSavedVarsFile, exportProfile, importProfile, exportProfileAsZip, previewProfileZip, importProfileFromZip, ExportData, previewCleanupSettings, cleanupSettingsSelected } from './settingsManager';
 import { saveSnapshotIfChanged, listSnapshots, listAddonBackups, restoreAddonFromBackup, backupAddonFolder, deleteAddonBackups, SnapshotAddon } from './snapshotManager';
 import { migrateFromFolderFiles, getAllEntries, getYaamDir, cleanupMarkerFiles } from './yaamDatabase';
@@ -231,6 +231,23 @@ ipcMain.handle(IPC_CHANNELS.FETCH_ADDON_CATALOG, async (_event, forceRefresh: bo
   } catch (err: unknown) {
     console.error('Fetch addon catalog error:', err);
     return [];
+  }
+});
+
+ipcMain.handle(IPC_CHANNELS.UPDATE_CATALOG_SNAPSHOT, async (_event, addonsPath: string) => {
+  try {
+    const catalog = await fetchAddonCatalog();
+    const diff = updateCatalogSnapshot(addonsPath, catalog);
+    if (!diff) return null;
+    // Serialize Map/Set for IPC transport
+    return {
+      changed: Array.from(diff.changed.entries()),
+      added: Array.from(diff.added),
+      removed: Array.from(diff.removed),
+    };
+  } catch (err: unknown) {
+    console.error('Update catalog snapshot error:', err);
+    return null;
   }
 });
 

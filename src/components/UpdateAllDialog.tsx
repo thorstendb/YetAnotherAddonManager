@@ -69,13 +69,23 @@ const UpdateAllDialog: React.FC<UpdateAllDialogProps> = ({ addons, onConfirm, on
     });
   };
 
-  const sectionToggle = (section: UpdatableAddon[]) => (
-    <span style={{ marginLeft: 'auto', whiteSpace: 'nowrap' }}>
-      <button className="link-btn" onClick={() => selectSection(section, true)}>All</button>
-      {' · '}
-      <button className="link-btn" onClick={() => selectSection(section, false)}>None</button>
-    </span>
-  );
+  const SectionCheckbox: React.FC<{ section: UpdatableAddon[] }> = ({ section }) => {
+    const count = section.filter(a => selected.has(a.catalogId)).length;
+    const all = count === section.length;
+    const none = count === 0;
+    const ref = React.useCallback((el: HTMLInputElement | null) => {
+      if (el) el.indeterminate = !all && !none;
+    }, [all, none]);
+    return (
+      <input
+        type="checkbox"
+        ref={ref}
+        checked={!none}
+        onChange={() => selectSection(section, !all)}
+        style={{ marginRight: '6px', accentColor: (!all && !none) ? '#888' : undefined }}
+      />
+    );
+  };
 
   const renderRow = (addon: UpdatableAddon) => (
     <label key={addon.catalogId} className="cleanup-item">
@@ -108,97 +118,92 @@ const UpdateAllDialog: React.FC<UpdateAllDialogProps> = ({ addons, onConfirm, on
             <>
               <div style={{ display: 'flex', gap: '8px', marginBottom: '8px', fontSize: '0.85em', opacity: 0.8 }}>
                 <span>{addons.length} addon(s) with updates</span>
-                <span style={{ marginLeft: 'auto' }}>
-                  <button className="link-btn" onClick={selectAll}>All</button>
-                  {' · '}
-                  <button className="link-btn" onClick={selectNone}>None</button>
-                </span>
               </div>
               <div className="cleanup-items" style={{ maxHeight: 'none' }}>
                 {sure.length > 0 && (
-                  <div style={{ display: 'flex', alignItems: 'center', fontSize: '0.82em', opacity: 0.7, marginBottom: '4px' }}>
+                  <label style={{ display: 'flex', alignItems: 'center', fontSize: '0.82em', opacity: 0.7, marginBottom: '4px', cursor: 'pointer' }}>
+                    <SectionCheckbox section={sure} />
                     ✅ Confirmed updates ({sure.length})
-                    {sectionToggle(sure)}
-                  </div>
+                  </label>
                 )}
                 {sure.map(renderRow)}
                 {replacements.length > 0 && (
                   <>
-                    <div style={{
-                      display: 'flex', alignItems: 'center',
+                    <label style={{
+                      display: 'flex', alignItems: 'center', cursor: 'pointer',
                       borderTop: '1px solid var(--border-color, #555)',
                       margin: '8px 0 4px',
                       paddingTop: '6px',
                       fontSize: '0.82em',
                       opacity: 0.7,
                     }}>
+                      <SectionCheckbox section={replacements} />
                       <span>🔄 Replacement available — a different addon now uses the same folder ({replacements.length})</span>
-                    {sectionToggle(replacements)}
-                    </div>
+                    </label>
                     {replacements.map(renderRow)}
                   </>
                 )}
                 {ambiguous.length > 0 && (
                   <>
-                    <div style={{
-                      display: 'flex', alignItems: 'center',
+                    <label style={{
+                      display: 'flex', alignItems: 'center', cursor: 'pointer',
                       borderTop: '1px solid var(--border-color, #555)',
                       margin: '8px 0 4px',
                       paddingTop: '6px',
                       fontSize: '0.82em',
                       opacity: 0.7,
                     }}>
+                      <SectionCheckbox section={ambiguous} />
                       <span>⚠ Uncertain match — no ESOUI catalog ID in manifest ({ambiguous.length})</span>
-                    {sectionToggle(ambiguous)}
-                    </div>
+                    </label>
                     {ambiguous.map(renderRow)}
                   </>
                 )}
                 {notTracked.length > 0 && (
                   <>
-                    <div style={{
-                      display: 'flex', alignItems: 'center',
+                    <label style={{
+                      display: 'flex', alignItems: 'center', cursor: 'pointer',
                       borderTop: '1px solid var(--border-color, #555)',
                       margin: '8px 0 4px',
                       paddingTop: '6px',
                       fontSize: '0.82em',
                       opacity: 0.7,
                     }}>
+                      <SectionCheckbox section={notTracked} />
                       <span>📋 Not installed via YAAM — version comparison inconclusive ({notTracked.length})</span>
-                    {sectionToggle(notTracked)}
-                    </div>
+                    </label>
                     {notTracked.map(renderRow)}
                   </>
                 )}
                 {versionChanged.length > 0 && (
                   <>
-                    <div style={{
-                      display: 'flex', alignItems: 'center',
+                    <label style={{
+                      display: 'flex', alignItems: 'center', cursor: 'pointer',
                       borderTop: '1px solid var(--border-color, #555)',
                       margin: '8px 0 4px',
                       paddingTop: '6px',
                       fontSize: '0.82em',
                       opacity: 0.7,
                     }}>
+                      <SectionCheckbox section={versionChanged} />
                       <span>🔄 Catalog version changed since last install ({versionChanged.length})</span>
-                    {sectionToggle(versionChanged)}
-                    </div>
+                    </label>
                     {versionChanged.map(renderRow)}
                   </>
                 )}
                 {dateNewer.length > 0 && (
                   <>
-                    <div style={{
-                      display: 'flex', alignItems: 'center',
+                    <label style={{
+                      display: 'flex', alignItems: 'center', cursor: 'pointer',
                       borderTop: '1px solid var(--border-color, #555)',
                       margin: '8px 0 4px',
                       paddingTop: '6px',
                       fontSize: '0.82em',
                       opacity: 0.7,
                     }}>
+                      <SectionCheckbox section={dateNewer} />
                       <span>📅 Catalog date is newer than local install ({dateNewer.length})</span>
-                    {sectionToggle(dateNewer)}
-                    </div>
+                    </label>
                     {dateNewer.map(renderRow)}
                   </>
                 )}

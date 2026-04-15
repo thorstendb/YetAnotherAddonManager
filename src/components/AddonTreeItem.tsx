@@ -322,11 +322,11 @@ const AddonTreeItem: React.FC<AddonTreeItemProps> = ({
         </span>
         <span className="tree-row-actions">
           <button
-            className="row-btn"
+            className="row-btn row-btn-info"
             onClick={(e) => { e.stopPropagation(); setInfoPopup(true); }}
             title="Show addon details"
           >
-            ℹ️
+            i
           </button>
           {catalogAddon && onInstall && (
             <button

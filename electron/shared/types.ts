@@ -87,6 +87,8 @@ export interface YaamAddonEntry {
   catalogAuthor: string;
   /** Version string from the ESOUI catalog record */
   catalogVersion: string;
+  /** Catalog date (epoch seconds) at time of install/update — detects re-publishes */
+  catalogDate?: number;
   /** Version string from the addon's local manifest (## Version) */
   localVersion: string;
   /** ISO timestamp of first install via YAAM */
@@ -107,6 +109,8 @@ export interface YaamMarker {
   esouid: string;
   /** ESOUI catalog version string at time of install/update */
   catalogVersion: string;
+  /** Catalog date (epoch seconds) at time of install/update */
+  catalogDate?: number;
   /** Catalog name at time of install/update */
   catalogName: string;
   /** ISO timestamp of first install via YAAM */
@@ -593,4 +597,5 @@ export const IPC_CHANNELS = {
   RECONCILE_YAAM_META: 'reconcile-yaam-meta',
   GET_YAAM_DB: 'get-yaam-db',
   CLEANUP_YAAM_MARKERS: 'cleanup-yaam-markers',
+  UPDATE_CATALOG_SNAPSHOT: 'update-catalog-snapshot',
 } as const;

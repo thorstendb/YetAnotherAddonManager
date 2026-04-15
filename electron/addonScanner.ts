@@ -343,6 +343,7 @@ export function scanAddonsFolder(addonsPath: string): AddonInfo[] {
   // If the DB has no entry but a .yaam.json marker exists in the folder,
   // restore the DB entry from it (resilience against DB loss).
   const db = loadDatabase(addonsPath);
+  const minionData = loadMinionData(addonsPath);
   let dbChanged = false;
   for (const addon of addons) {
     let entry = db.addons[addon.folderName];
@@ -359,17 +360,40 @@ export function scanAddonsFolder(addonsPath: string): AddonInfo[] {
         catalogName: marker.catalogName,
         catalogAuthor: '',
         catalogVersion: marker.catalogVersion,
+        catalogDate: marker.catalogDate,
         localVersion: addon.version,
         installedAt: marker.installedAt,
         updatedAt: marker.updatedAt,
       };
       db.addons[addon.folderName] = entry;
       dbChanged = true;
+    } else if (!entry?.esouid && !marker) {
+      // No YAAM tracking at all — check Minion data as a bootstrap source.
+      // Minion's uiVersion is the catalog version string at last Minion install,
+      // equivalent to YAAM's catalogVersion for Tier 2 update detection.
+      const minion = minionData.get(addon.folderName);
+      if (minion) {
+        const now = new Date().toISOString();
+        entry = {
+          esouid: minion.uid,
+          url: '',
+          catalogName: '',
+          catalogAuthor: '',
+          catalogVersion: minion.uiVersion,
+          catalogDate: undefined,
+          localVersion: addon.version,
+          installedAt: now,
+          updatedAt: now,
+        };
+        db.addons[addon.folderName] = entry;
+        dbChanged = true;
+      }
     } else if (entry?.esouid && marker && entry.catalogVersion !== marker.catalogVersion) {
       // Marker differs from DB (e.g. after restoring an older backup).
       // The marker lives inside the addon folder and is the ground truth
       // for what is actually on disk.
       entry.catalogVersion = marker.catalogVersion;
+      entry.catalogDate = marker.catalogDate;
       db.addons[addon.folderName] = entry;
       dbChanged = true;
     } else if (entry?.esouid && entry.catalogVersion && !marker) {
@@ -378,6 +402,7 @@ export function scanAddonsFolder(addonsPath: string): AddonInfo[] {
       // taken before YAAM tracking).  Clear catalogVersion so the addon
       // falls to Tier 3 (best-effort) update detection.
       entry.catalogVersion = '';
+      entry.catalogDate = undefined;
       db.addons[addon.folderName] = entry;
       dbChanged = true;
     }
@@ -396,6 +421,44 @@ export function scanAddonsFolder(addonsPath: string): AddonInfo[] {
   if (dbChanged) saveDatabase(db, addonsPath);
 
   return addons;
+}
+
+/** Entry format used by Minion's tracking file (miniondata.json in AddOns root) */
+interface MinionEntry {
+  uid: string;
+  md5: string;
+  uiVersion: string;
+  dirs: string[];
+}
+
+/**
+ * Try to load Minion's tracking file from the AddOns folder root.
+ * Returns a map from folder name → Minion entry, or an empty map if not found.
+ *
+ * File searched (in order): miniondata.json, minion_data.json
+ * Format: array of { uid, md5, uiVersion, dirs[] }
+ */
+function loadMinionData(addonsPath: string): Map<string, MinionEntry> {
+  const candidates = ['miniondata.json', 'minion_data.json'];
+  for (const name of candidates) {
+    const filePath = path.join(addonsPath, name);
+    if (!fs.existsSync(filePath)) continue;
+    try {
+      const data: MinionEntry[] = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
+      const map = new Map<string, MinionEntry>();
+      for (const entry of data) {
+        if (!entry.uid || !entry.uiVersion) continue;
+        for (const dir of entry.dirs || []) {
+          if (!map.has(dir)) map.set(dir, entry); // first dir wins (primary owner)
+        }
+      }
+      console.log(`[YAAM] Loaded Minion tracking data: ${map.size} directories from ${name}`);
+      return map;
+    } catch (err) {
+      console.warn(`[YAAM] Failed to parse ${name}:`, err);
+    }
+  }
+  return new Map();
 }
 
 /**
@@ -467,6 +530,8 @@ export interface ReconcileMatch {
   author: string;
   version: string;
   url: string;
+  /** Catalog date (epoch seconds) at time of match */
+  catalogDate: number;
   /** Local addon version from ## Version header */
   localVersion: string;
   /** true when the match is by DB entry or catalogId (high confidence) */
@@ -506,6 +571,7 @@ export function reconcileYaamMetadata(
         catalogName: m.name,
         catalogAuthor: m.author,
         catalogVersion: '',
+        catalogDate: undefined,
         localVersion: m.localVersion,
         installedAt: now,
         updatedAt: now,
@@ -540,6 +606,7 @@ export function reconcileYaamMetadata(
         catalogName: m.name,
         catalogAuthor: m.author,
         catalogVersion: existing.catalogVersion,  // preserve install-time value
+        catalogDate: existing.catalogDate,         // preserve install-time value
         localVersion: m.localVersion,
         installedAt: existing.installedAt,
         // Only bump updatedAt when the local addon files actually changed

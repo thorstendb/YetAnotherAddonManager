@@ -572,6 +572,33 @@
   background: rgba(243, 139, 168, 0.12);
 }
 
+.row-btn-info {
+  font-weight: 700;
+  font-style: italic;
+  font-family: Georgia, 'Times New Roman', serif;
+  color: #fff;
+  background: #3b82f6;
+  border-radius: 50%;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.78rem;
+  line-height: 1;
+}
+
+.tree-item-row:hover .row-btn-info,
+.tree-subtree-row:hover .row-btn-info {
+  opacity: 0.85;
+}
+
+.row-btn-info:hover {
+  opacity: 1 !important;
+  background: #2563eb;
+}
+
 .row-btn-install:hover {
   background: rgba(166, 227, 161, 0.2);
 }
@@ -655,6 +682,8 @@
   display: flex;
   flex-direction: column;
   border-top: 1px solid var(--border);
+  user-select: text;
+  cursor: text;
 }
 
 .addon-info-json-panel .catalog-json-content {
@@ -2134,6 +2163,8 @@
   color: var(--text-primary);
   flex: 1 1 auto;
   min-height: 0;
+  user-select: text;
+  cursor: text;
 }
 
 .addon-info-table {

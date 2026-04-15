@@ -8,8 +8,7 @@ import * as path from 'path';
 import AdmZip from 'adm-zip';
 import { CatalogAddon, CatalogCategory } from './shared/types';
 import { scanSpecificAddons } from './addonScanner';
-import { loadDatabase, saveDatabase, writeMarkerFile } from './yaamDatabase';
-import { loadDatabase, saveDatabase } from './yaamDatabase';
+import { loadDatabase, saveDatabase, writeMarkerFile, getYaamDir } from './yaamDatabase';
 
 const API_URL = 'https://api.mmoui.com/v3/game/ESO/filelist.json';
 const CATEGORY_API_URL = 'https://api.mmoui.com/v3/game/ESO/categorylist.json';
@@ -133,6 +132,89 @@ export async function fetchAddonCatalog(forceRefresh = false): Promise<CatalogAd
   const raw: RawCatalogAddon[] = JSON.parse(data);
   cachedList = raw.map(transformAddon);
   return cachedList;
+}
+
+// ─── Catalog Snapshot & Diff ───
+
+const SNAPSHOT_FILE = 'yaam-catalog-snapshot.json';
+
+/** Compact per-UID entry stored in the snapshot */
+interface SnapshotEntry { v: string; d: number }
+
+/** Result of comparing two catalog snapshots */
+export interface CatalogDiff {
+  /** UIDs where version or date changed */
+  changed: Map<string, { oldVersion: string; newVersion: string }>;
+  /** UIDs newly appearing in catalog */
+  added: Set<string>;
+  /** UIDs removed from catalog */
+  removed: Set<string>;
+}
+
+/**
+ * Load the previous catalog snapshot from disk.
+ * Returns null if no snapshot exists.
+ */
+function loadCatalogSnapshot(addonsPath: string): Record<string, SnapshotEntry> | null {
+  try {
+    const snapshotPath = path.join(getYaamDir(addonsPath), SNAPSHOT_FILE);
+    if (!fs.existsSync(snapshotPath)) return null;
+    return JSON.parse(fs.readFileSync(snapshotPath, 'utf-8'));
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Save a catalog snapshot to disk (compact: UID → {version, date}).
+ */
+function saveCatalogSnapshot(addonsPath: string, catalog: CatalogAddon[]): void {
+  const snapshot: Record<string, SnapshotEntry> = {};
+  for (const c of catalog) {
+    snapshot[c.id] = { v: c.version, d: c.date };
+  }
+  try {
+    const snapshotPath = path.join(getYaamDir(addonsPath), SNAPSHOT_FILE);
+    fs.writeFileSync(snapshotPath, JSON.stringify(snapshot), 'utf-8');
+  } catch (err) {
+    console.error('Failed to save catalog snapshot:', err);
+  }
+}
+
+/**
+ * Compare previous snapshot with a fresh catalog and save the new snapshot.
+ * Returns the diff (changed/added/removed UIDs), or null on first run.
+ */
+export function updateCatalogSnapshot(
+  addonsPath: string,
+  catalog: CatalogAddon[]
+): CatalogDiff | null {
+  const oldSnapshot = loadCatalogSnapshot(addonsPath);
+
+  // Always save the new snapshot
+  saveCatalogSnapshot(addonsPath, catalog);
+
+  if (!oldSnapshot) return null;
+
+  const changed = new Map<string, { oldVersion: string; newVersion: string }>();
+  const added = new Set<string>();
+  const removed = new Set<string>();
+
+  for (const c of catalog) {
+    const old = oldSnapshot[c.id];
+    if (!old) {
+      added.add(c.id);
+    } else if (old.v !== c.version || old.d !== c.date) {
+      changed.set(c.id, { oldVersion: old.v, newVersion: c.version });
+    }
+  }
+
+  const newIds = new Set(catalog.map(c => c.id));
+  for (const uid of Object.keys(oldSnapshot)) {
+    if (!newIds.has(uid)) removed.add(uid);
+  }
+
+  return { changed, added, removed };
 }
 
 /**
@@ -330,6 +412,7 @@ export async function installAddon(
           catalogName: catalogEntry.name,
           catalogAuthor: catalogEntry.author,
           catalogVersion: catalogEntry.version,
+          catalogDate: catalogEntry.date,
           localVersion: localVersionByDir.get(dir) || existing?.localVersion || '',
           installedAt: existing?.installedAt || now,
           updatedAt: now,

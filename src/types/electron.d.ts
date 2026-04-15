@@ -134,10 +134,11 @@ declare global {
       writeClipboard: (text: string) => void;
       reconcileYaamMeta: (
         addonsPath: string,
-        matches: { folderName: string; esouid: string; name: string; author: string; version: string; url: string; localVersion: string; confident: boolean }[]
+        matches: { folderName: string; esouid: string; name: string; author: string; version: string; url: string; catalogDate: number; localVersion: string; confident: boolean }[]
       ) => Promise<{ created: number; updated: number; details: string[] }>;
       getYaamDb: (addonsPath: string) => Promise<Record<string, { esouid: string; url: string; catalogName: string; catalogAuthor: string; catalogVersion: string; localVersion: string; installedAt: string; updatedAt: string }>>;
       cleanupYaamMarkers: (addonsPath: string) => Promise<number>;
+      updateCatalogSnapshot: (addonsPath: string) => Promise<{ changed: [string, { oldVersion: string; newVersion: string }][]; added: string[]; removed: string[] } | null>;
     };
   }
 }

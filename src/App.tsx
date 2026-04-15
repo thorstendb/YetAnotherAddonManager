@@ -195,6 +195,15 @@ function App() {
       // Clear recently-updated tracking since we have fresh data
       setRecentlyUpdated(new Set());
 
+      // Update catalog snapshot and compute diff (detects catalog-side changes)
+      if (onlineList.length > 0 && pathToScan) {
+        window.electronAPI.updateCatalogSnapshot(pathToScan).then(diff => {
+          if (diff && diff.changed.length > 0) {
+            addLog(`Catalog diff: ${diff.changed.length} updated, ${diff.added.length} new, ${diff.removed.length} removed`, 'info');
+          }
+        }).catch(() => {});
+      }
+
       // Reconcile central YAAM addon database with catalog matches
       if (onlineList.length > 0) {
         // Build quick lookup maps from the fresh catalog
@@ -219,7 +228,7 @@ function App() {
           }
         }
 
-        const matches: { folderName: string; esouid: string; name: string; author: string; version: string; url: string; localVersion: string; confident: boolean }[] = [];
+        const matches: { folderName: string; esouid: string; name: string; author: string; version: string; url: string; catalogDate: number; localVersion: string; confident: boolean }[] = [];
         for (const addon of results) {
           // Priority: DB entry > catalogId > URL > directory
           const byMeta = addon.yaamMeta?.esouid ? catById.get(addon.yaamMeta.esouid) : undefined;
@@ -239,6 +248,7 @@ function App() {
             author: best.author,
             version: best.version,
             url: best.infoUrl,
+            catalogDate: best.date,
             localVersion: addon.version,
             confident,
           });
@@ -789,9 +799,20 @@ function App() {
       // catalogVersion is set when YAAM installs/updates an addon.
       // If it matches the current catalog version → no update.
       // If it differs → update available.  No version parsing needed.
+      // Also check catalogDate to catch re-publishes (same version, new upload).
       const trackedVersion = addon.yaamMeta?.catalogVersion;
       if (trackedVersion) {
-        return trackedVersion !== catalogAddon.version;
+        if (trackedVersion !== catalogAddon.version) {
+          console.log(`[YAAM] Tier 2 update (version): ${addon.folderName} trackedVersion="${trackedVersion}" catalogVersion="${catalogAddon.version}"`);
+          return true;
+        }
+        // Same version string — check if the catalog date changed (re-publish)
+        const trackedDate = addon.yaamMeta?.catalogDate;
+        if (trackedDate && catalogAddon.date && trackedDate !== catalogAddon.date) {
+          console.log(`[YAAM] Tier 2 update (re-publish): ${addon.folderName} trackedDate=${trackedDate} catalogDate=${catalogAddon.date}`);
+          return true;
+        }
+        return false;
       }
 
       // ── Tier 3: Unknown addon (never installed/updated via YAAM) ──
@@ -802,12 +823,12 @@ function App() {
       const cmp = compareVersionStrings(localVer, catalogAddon.version, catalogAddon.date);
       if (cmp < 0) {
         // Local appears older — double-check with AddOnVersion integer.
-        // Many addons use different formats for ## Version (e.g. "1.05")
-        // vs the ESOUI UIVersion field (e.g. "105").
-        if (addon.addonVersion > 0) {
-          const cmpAV = compareVersionStrings(String(addon.addonVersion), catalogAddon.version, catalogAddon.date);
-          if (cmpAV >= 0) return false;
-        }
+        // Handles the case where ## Version uses a different format than the catalog
+        // (e.g. local ## Version "1.009", ## AddOnVersion 9, catalog version "9").
+        // Only suppress if addonVersion is an exact string match to the catalog version
+        // (avoids false positives from unrelated encoding schemes like pChat's 10007020).
+        if (addon.addonVersion > 0 && String(addon.addonVersion) === catalogAddon.version.trim()) return false;
+        console.log(`[YAAM] Tier 3 update: ${addon.folderName} localVer="${localVer}" catalogVersion="${catalogAddon.version}" cmp=${cmp}`);
         return true;
       }
       if (cmp > 0) return false; // local is newer
@@ -871,25 +892,36 @@ function App() {
   }, [addons, getCatalogAddon, isUpdateAvailable, getEffectiveVersion, updateCount, recentlyUpdated]);
 
   // Set of folder names that have an update available (used for sorting to top)
-  const updatableFolders = useMemo(() => {
-    const set = new Set<string>();
-    const seen = new Set<string>();
+  // Authoritative set of catalog addon IDs that have an update available.
+  // Shared with OnlineBrowser so every surface uses the same matching logic.
+  const updatableCatalogIds = useMemo(() => {
+    const ids = new Set<string>();
     for (const addon of addons) {
       const catalogAddon = getCatalogAddon(addon);
-      if (catalogAddon && !seen.has(catalogAddon.id)) {
+      if (catalogAddon && !ids.has(catalogAddon.id)) {
         if (isUpdateAvailable(addon, catalogAddon)) {
-          seen.add(catalogAddon.id);
-          // Mark all directories belonging to this catalog addon as updatable
-          for (const dir of catalogAddon.directories) set.add(dir);
-          // Also mark the addon's own folder (title-matched addons may not be in directories)
-          set.add(addon.folderName);
+          ids.add(catalogAddon.id);
         }
+      }
+    }
+    return ids;
+  }, [addons, getCatalogAddon, isUpdateAvailable]);
+
+  const updatableFolders = useMemo(() => {
+    const set = new Set<string>();
+    for (const addon of addons) {
+      const catalogAddon = getCatalogAddon(addon);
+      if (catalogAddon && updatableCatalogIds.has(catalogAddon.id)) {
+        // Mark all directories belonging to this catalog addon as updatable
+        for (const dir of catalogAddon.directories) set.add(dir);
+        // Also mark the addon's own folder (title-matched addons may not be in directories)
+        set.add(addon.folderName);
       }
     }
     // Replacement candidates are NOT marked as updatable in the tree —
     // they only appear in the Update All dialog for explicit opt-in.
     return set;
-  }, [addons, getCatalogAddon, isUpdateAvailable, replacementCandidates]);
+  }, [addons, getCatalogAddon, updatableCatalogIds, replacementCandidates]);
 
   // --- Navigation ---
 
@@ -2086,6 +2118,7 @@ function App() {
           installingAddonId={installingAddon}
           installProgress={installProgress}
           checkUpdateAvailable={isUpdateAvailable}
+          updatableCatalogIds={updatableCatalogIds}
         />
       </div>
       <div className="log-resize-handle" onMouseDown={handleLogResizeStart} title="Drag to resize" />

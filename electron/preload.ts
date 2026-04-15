@@ -185,11 +185,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
   writeClipboard: (text: string): void => clipboard.writeText(text),
   reconcileYaamMeta: (
     addonsPath: string,
-    matches: { folderName: string; esouid: string; name: string; author: string; version: string; url: string; localVersion: string; confident: boolean }[]
+    matches: { folderName: string; esouid: string; name: string; author: string; version: string; url: string; catalogDate: number; localVersion: string; confident: boolean }[]
   ): Promise<{ created: number; updated: number; details: string[] }> =>
     ipcRenderer.invoke(IPC_CHANNELS.RECONCILE_YAAM_META, addonsPath, matches),
   getYaamDb: (addonsPath: string): Promise<Record<string, { esouid: string; url: string; catalogName: string; catalogAuthor: string; catalogVersion: string; localVersion: string; installedAt: string; updatedAt: string }>> =>
     ipcRenderer.invoke(IPC_CHANNELS.GET_YAAM_DB, addonsPath),
   cleanupYaamMarkers: (addonsPath: string): Promise<number> =>
     ipcRenderer.invoke(IPC_CHANNELS.CLEANUP_YAAM_MARKERS, addonsPath),
+  updateCatalogSnapshot: (addonsPath: string): Promise<{ changed: [string, { oldVersion: string; newVersion: string }][]; added: string[]; removed: string[] } | null> =>
+    ipcRenderer.invoke(IPC_CHANNELS.UPDATE_CATALOG_SNAPSHOT, addonsPath),
 });

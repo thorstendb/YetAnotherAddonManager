@@ -28,6 +28,8 @@ interface OnlineBrowserProps {
   installProgress?: Record<string, { phase: string; percent?: number; current?: number; total?: number }>;
   /** Central update-availability check shared with Update All */
   checkUpdateAvailable?: (addon: AddonInfo, catalogAddon: CatalogAddon) => boolean;
+  /** Authoritative set of catalog addon IDs with updates (computed in App.tsx) */
+  updatableCatalogIds?: Set<string>;
 }
 
 type SortField = 'name' | 'downloads' | 'monthly' | 'date' | 'favorites';
@@ -49,6 +51,7 @@ const OnlineBrowser: React.FC<OnlineBrowserProps> = ({
   installingAddonId,
   installProgress,
   checkUpdateAvailable,
+  updatableCatalogIds: updatableCatalogIdsProp,
 }) => {
   const [allAddons, setAllAddons] = useState<CatalogAddon[]>([]);
   const [loading, setLoading] = useState(false);
@@ -319,6 +322,11 @@ const OnlineBrowser: React.FC<OnlineBrowserProps> = ({
     [localAddonByDir]
   );
 
+  // Use the authoritative set of updatable catalog IDs from App.tsx.
+  // This ensures the ESOUI tree shows the exact same updates as the
+  // AddOns/Libraries panels (same matching priority chain).
+  const updatableAddonIds = updatableCatalogIdsProp ?? new Set<string>();
+
   // Get combined dependencies for an online addon (from its locally installed dirs)
   const getDepsForOnlineAddon = useCallback(
     (addon: CatalogAddon) => {
@@ -485,17 +493,14 @@ const OnlineBrowser: React.FC<OnlineBrowserProps> = ({
             <div className="icon">🔍</div>
             <p>No matching addons</p>
           </div>
-        ) : (
-          filteredAddons.map((addon) => {
+        ) : (() => {
+          const updatable = filteredAddons.filter(a => updatableAddonIds.has(a.id));
+          const rest = filteredAddons.filter(a => !updatableAddonIds.has(a.id));
+          const renderAddon = (addon: CatalogAddon) => {
             const installed = isInstalled(addon);
             const bundledOnly = !installed && isBundledOnly(addon);
             const localVer = installed ? getLocalVersion(addon) : undefined;
-            // Update check: use central isUpdateAvailable when we have a local addon
-            const localAddon = addon.directories.find(dir => localAddonByDir.has(dir));
-            const localAddonInfo = localAddon ? localAddonByDir.get(localAddon) : undefined;
-            const hasUpdate = installed && localAddonInfo && checkUpdateAvailable
-              ? checkUpdateAvailable(localAddonInfo, addon)
-              : false;
+            const hasUpdate = updatableAddonIds.has(addon.id);
             const isLocalNewer = installed && localVer && addon.version
               ? compareVersionStrings(localVer, addon.version, addon.date) > 0
               : false;
@@ -510,9 +515,9 @@ const OnlineBrowser: React.FC<OnlineBrowserProps> = ({
             const hasChars = charSettings && Object.keys(charSettings).length > 0;
 
             return (
-              <div key={addon.id} className="tree-item" data-catalog-id={addon.id}>
+              <div key={addon.id} className="tree-item" data-catalog-id={addon.id} style={hasUpdate ? { background: 'var(--bg-update)' } : undefined}>
                 <div
-                  className={`tree-item-row ${isExpanded ? 'selected' : ''}`}
+                  className={`tree-item-row ${isExpanded ? 'selected' : ''} ${hasUpdate ? 'has-update' : ''}`}
                   onClick={() => setExpandedIds(prev => {
                     const next = new Set(prev);
                     if (isExpanded) next.delete(addon.id); else next.add(addon.id);
@@ -538,11 +543,11 @@ const OnlineBrowser: React.FC<OnlineBrowserProps> = ({
                   </span>
                   <span className="tree-row-actions">
                     <button
-                      className="row-btn"
+                      className="row-btn row-btn-info"
                       onClick={(e) => { e.stopPropagation(); setInfoAddonId(addon.id); }}
                       title="Show addon details"
                     >
-                      ℹ️
+                      i
                     </button>
                     <button
                       className={`row-btn row-btn-install`}
@@ -893,8 +898,15 @@ const OnlineBrowser: React.FC<OnlineBrowserProps> = ({
                 )}
               </div>
             );
-          })
-        )}
+          };
+          return (
+            <>
+              {updatable.map(renderAddon)}
+              {updatable.length > 0 && rest.length > 0 && <div className="tree-update-spacer" />}
+              {rest.map(renderAddon)}
+            </>
+          );
+        })()}
       </div>
 
       {/* Info popup for ESOUI addon details */}
