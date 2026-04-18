@@ -139,6 +139,7 @@ declare global {
       getYaamDb: (addonsPath: string) => Promise<Record<string, { esouid: string; url: string; catalogName: string; catalogAuthor: string; catalogVersion: string; localVersion: string; installedAt: string; updatedAt: string }>>;
       cleanupYaamMarkers: (addonsPath: string) => Promise<number>;
       updateCatalogSnapshot: (addonsPath: string) => Promise<{ changed: [string, { oldVersion: string; newVersion: string }][]; added: string[]; removed: string[] } | null>;
+      commitCatalogSnapshot: (addonsPath: string) => Promise<boolean>;
     };
   }
 }

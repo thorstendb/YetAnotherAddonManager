@@ -194,4 +194,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.invoke(IPC_CHANNELS.CLEANUP_YAAM_MARKERS, addonsPath),
   updateCatalogSnapshot: (addonsPath: string): Promise<{ changed: [string, { oldVersion: string; newVersion: string }][]; added: string[]; removed: string[] } | null> =>
     ipcRenderer.invoke(IPC_CHANNELS.UPDATE_CATALOG_SNAPSHOT, addonsPath),
+  commitCatalogSnapshot: (addonsPath: string): Promise<boolean> =>
+    ipcRenderer.invoke(IPC_CHANNELS.COMMIT_CATALOG_SNAPSHOT, addonsPath),
 });

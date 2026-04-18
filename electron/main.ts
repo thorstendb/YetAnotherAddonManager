@@ -1,13 +1,13 @@
 // Copyright (c) 2026 thorstendb
 // SPDX-License-Identifier: MIT
-import { app, BrowserWindow, ipcMain, dialog, shell, session } from 'electron';
+import { app, BrowserWindow, ipcMain, dialog, shell, session, screen } from 'electron';
 import * as path from 'path';
 import * as fs from 'fs';
 import * as os from 'os';
 import { IPC_CHANNELS } from './shared/types';
 import { loadConfig, saveConfig } from './configStore';
 import { scanAddonsFolder, cleanupUnusedLibraries, deleteAddon, deleteAddonAndExclusiveRefs, previewUnusedLibraries, cleanupSelectedLibraries, reconcileYaamMetadata, ReconcileMatch } from './addonScanner';
-import { fetchAddonCatalog, fetchAddonDetails, fetchCategories, installAddon, cleanupDownloadsFolder, previewCleanupDownloads, cleanupDownloadsSelected, updateCatalogSnapshot } from './addonCatalogApi';
+import { fetchAddonCatalog, fetchAddonDetails, fetchCategories, installAddon, cleanupDownloadsFolder, previewCleanupDownloads, cleanupDownloadsSelected, updateCatalogSnapshot, commitCatalogSnapshot } from './addonCatalogApi';
 import { parseAddonSettings, setAddonSetting, batchSetAddonSettings, getSavedVarsInfo, deleteSavedVars, cleanupSettings, undoCleanupSettings, listSavedVarsBackups, restoreSavedVarsFile, exportProfile, importProfile, exportProfileAsZip, previewProfileZip, importProfileFromZip, ExportData, previewCleanupSettings, cleanupSettingsSelected } from './settingsManager';
 import { saveSnapshotIfChanged, listSnapshots, listAddonBackups, restoreAddonFromBackup, backupAddonFolder, deleteAddonBackups, SnapshotAddon } from './snapshotManager';
 import { migrateFromFolderFiles, getAllEntries, getYaamDir, cleanupMarkerFiles } from './yaamDatabase';
@@ -43,6 +43,11 @@ app.commandLine.appendSwitch('disable-software-rasterizer');
 
 // Use a temp directory for Electron's required userData (we don't need any of it)
 const userDataDir = path.join(os.tmpdir(), 'YAAM-electron');
+// Clean up stale temp dir from a previous run that couldn't delete on quit
+// (Electron Cache locks on Windows).  Re-create fresh.
+if (fs.existsSync(userDataDir)) {
+  try { fs.rmSync(userDataDir, { recursive: true, force: true }); } catch { /* locked files will be overwritten */ }
+}
 if (!fs.existsSync(userDataDir)) {
   fs.mkdirSync(userDataDir, { recursive: true });
 }
@@ -60,12 +65,13 @@ if (fs.existsSync(legacyTmpDir)) {
   fs.rmSync(legacyTmpDir, { recursive: true, force: true });
 }
 
-// Clean up temp userData on quit
+// Clean up temp userData on quit (best-effort; Electron may still hold locks on
+// Cache files on Windows, so we also retry cleanup at next startup above).
 app.on('will-quit', () => {
   try {
     fs.rmSync(userDataDir, { recursive: true, force: true });
-  } catch (err) {
-    console.error('Failed to clean up temp dir:', err);
+  } catch {
+    // Ignore — stale temp dir will be cleaned on next launch
   }
 });
 
@@ -92,9 +98,37 @@ function createWindow() {
     callback(permission === 'local-fonts');
   });
 
+  // Restore saved window bounds (position, size, maximized state)
+  const config = loadConfig();
+  const saved = config.windowBounds;
+  let x: number | undefined;
+  let y: number | undefined;
+  let width = 1200;
+  let height = 800;
+  let shouldMaximize = false;
+
+  if (saved) {
+    // Validate that the saved position is still on a visible display
+    const displays = screen.getAllDisplays();
+    const visible = displays.some(d => {
+      const b = d.bounds;
+      return saved.x >= b.x - 100 && saved.x < b.x + b.width &&
+             saved.y >= b.y - 100 && saved.y < b.y + b.height;
+    });
+    if (visible) {
+      x = saved.x;
+      y = saved.y;
+    }
+    width = saved.width;
+    height = saved.height;
+    shouldMaximize = !!saved.isMaximized;
+  }
+
   mainWindow = new BrowserWindow({
-    width: 1200,
-    height: 800,
+    x,
+    y,
+    width,
+    height,
     minWidth: 900,
     minHeight: 600,
     title: 'YAAM',
@@ -104,6 +138,28 @@ function createWindow() {
       nodeIntegration: false,
     },
   });
+
+  if (shouldMaximize) mainWindow.maximize();
+
+  // Save window bounds on move/resize (debounced)
+  let boundsTimer: ReturnType<typeof setTimeout> | null = null;
+  const saveBounds = () => {
+    if (!mainWindow || mainWindow.isDestroyed()) return;
+    if (boundsTimer) clearTimeout(boundsTimer);
+    boundsTimer = setTimeout(() => {
+      if (!mainWindow || mainWindow.isDestroyed()) return;
+      const isMax = mainWindow.isMaximized();
+      // When maximized, save the restore bounds (not the maximized bounds)
+      const bounds = isMax ? (mainWindow.getNormalBounds?.() || mainWindow.getBounds()) : mainWindow.getBounds();
+      const cfg = loadConfig();
+      cfg.windowBounds = { x: bounds.x, y: bounds.y, width: bounds.width, height: bounds.height, isMaximized: isMax };
+      saveConfig(cfg);
+    }, 500);
+  };
+  mainWindow.on('resize', saveBounds);
+  mainWindow.on('move', saveBounds);
+  mainWindow.on('maximize', saveBounds);
+  mainWindow.on('unmaximize', saveBounds);
 
   // In dev mode, load from Vite dev server; in production, load built files
   if (process.env.VITE_DEV_SERVER_URL) {
@@ -248,6 +304,17 @@ ipcMain.handle(IPC_CHANNELS.UPDATE_CATALOG_SNAPSHOT, async (_event, addonsPath: 
   } catch (err: unknown) {
     console.error('Update catalog snapshot error:', err);
     return null;
+  }
+});
+
+ipcMain.handle(IPC_CHANNELS.COMMIT_CATALOG_SNAPSHOT, async (_event, addonsPath: string) => {
+  try {
+    const catalog = await fetchAddonCatalog();
+    commitCatalogSnapshot(addonsPath, catalog);
+    return true;
+  } catch (err: unknown) {
+    console.error('Commit catalog snapshot error:', err);
+    return false;
   }
 });
 

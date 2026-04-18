@@ -438,6 +438,8 @@ export interface AppConfig {
   fontFamily?: string;
   /** Skip cleanup confirmation dialogs */
   skipCleanupConfirm?: boolean;
+  /** Saved window bounds for restore on next launch */
+  windowBounds?: { x: number; y: number; width: number; height: number; isMaximized?: boolean };
 }
 
 /** Character → enabled map used for per-addon enable/disable display */
@@ -598,4 +600,5 @@ export const IPC_CHANNELS = {
   GET_YAAM_DB: 'get-yaam-db',
   CLEANUP_YAAM_MARKERS: 'cleanup-yaam-markers',
   UPDATE_CATALOG_SNAPSHOT: 'update-catalog-snapshot',
+  COMMIT_CATALOG_SNAPSHOT: 'commit-catalog-snapshot',
 } as const;

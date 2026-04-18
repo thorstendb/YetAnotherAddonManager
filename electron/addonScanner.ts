@@ -386,6 +386,9 @@ export function scanAddonsFolder(addonsPath: string): AddonInfo[] {
           updatedAt: now,
         };
         db.addons[addon.folderName] = entry;
+        // Write a marker file so subsequent scans don't clear catalogVersion
+        // (the "DB has entry but no marker → clear" branch would otherwise wipe it).
+        writeMarkerFile(addonsPath, addon.folderName, entry);
         dbChanged = true;
       }
     } else if (entry?.esouid && marker && entry.catalogVersion !== marker.catalogVersion) {
@@ -405,6 +408,18 @@ export function scanAddonsFolder(addonsPath: string): AddonInfo[] {
       entry.catalogDate = undefined;
       db.addons[addon.folderName] = entry;
       dbChanged = true;
+    } else if (entry?.esouid && !entry.catalogVersion && !marker) {
+      // DB entry exists (e.g. from reconciliation) but has no catalogVersion
+      // and no marker.  Try to backfill from Minion data so Tier 2 detection
+      // works instead of falling to Tier 3 best-effort.
+      const minion = minionData.get(addon.folderName);
+      if (minion) {
+        console.log(`[YAAM] Backfill catalogVersion from Minion: ${addon.folderName} → "${minion.uiVersion}" (uid=${minion.uid})`);
+        entry.catalogVersion = minion.uiVersion;
+        db.addons[addon.folderName] = entry;
+        writeMarkerFile(addonsPath, addon.folderName, entry);
+        dbChanged = true;
+      }
     }
 
     if (entry?.esouid) {

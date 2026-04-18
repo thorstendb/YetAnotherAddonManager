@@ -95,8 +95,11 @@ const LogPanel: React.FC<LogPanelProps> = ({ logs, height, knownNames, onNavigat
             className="log-action-btn"
             title="Copy selected text or all log entries"
             onClick={() => {
-              const sel = window.getSelection()?.toString();
-              const text = sel || logs
+              const sel = window.getSelection();
+              // Only use selection if it's within the log scroll area
+              const selText = sel && scrollRef.current && scrollRef.current.contains(sel.anchorNode)
+                ? sel.toString() : '';
+              const text = selText || logs
                 .map((e) => `[${e.timestamp.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}] ${e.message}`)
                 .join('\n');
               if (text) window.electronAPI.writeClipboard(text);
@@ -111,7 +114,24 @@ const LogPanel: React.FC<LogPanelProps> = ({ logs, height, knownNames, onNavigat
           )}
         </div>
       </div>
-      <div className="log-scroll" ref={scrollRef}>
+      <div
+        className="log-scroll"
+        ref={scrollRef}
+        tabIndex={0}
+        onKeyDown={(e) => {
+          // Ctrl+A: select only log content, not the whole page
+          if ((e.ctrlKey || e.metaKey) && e.key === 'a') {
+            e.preventDefault();
+            const sel = window.getSelection();
+            if (sel && scrollRef.current) {
+              const range = document.createRange();
+              range.selectNodeContents(scrollRef.current);
+              sel.removeAllRanges();
+              sel.addRange(range);
+            }
+          }
+        }}
+      >
         {logs.length === 0 ? (
           <div className="log-empty">No log entries</div>
         ) : (

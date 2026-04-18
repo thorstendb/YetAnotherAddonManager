@@ -51,6 +51,8 @@ function App() {
   const [addonSettings, setAddonSettings] = useState<AddonSettingsData | null>(null);
   const [savedVarsInfo, setSavedVarsInfo] = useState<SavedVarsInfo>({ addonFiles: {} });
   const [catalogAddons, setCatalogAddons] = useState<CatalogAddon[]>([]);
+  /** Catalog IDs that changed since last session (Tier 0 update detection) */
+  const [catalogChangedIds, setCatalogChangedIds] = useState<Set<string>>(new Set());
   const [logHeight, setLogHeight] = useState(240);
   const [installingAddon, setInstallingAddon] = useState<string | null>(null);
   const [panelWidths, setPanelWidths] = useState<number[]>([1, 1, 1]);
@@ -198,8 +200,18 @@ function App() {
       // Update catalog snapshot and compute diff (detects catalog-side changes)
       if (onlineList.length > 0 && pathToScan) {
         window.electronAPI.updateCatalogSnapshot(pathToScan).then(diff => {
-          if (diff && diff.changed.length > 0) {
-            addLog(`Catalog diff: ${diff.changed.length} updated, ${diff.added.length} new, ${diff.removed.length} removed`, 'info');
+          if (diff) {
+            // Store changed IDs for Tier 0 update detection
+            const changedIds = new Set(diff.changed.map(([id]) => id));
+            setCatalogChangedIds(prev => {
+              // Merge with existing diff (accumulate across rescans within a session)
+              const merged = new Set(prev);
+              for (const id of changedIds) merged.add(id);
+              return merged;
+            });
+            if (diff.changed.length > 0) {
+              addLog(`Catalog changes since last session: ${diff.changed.length} updated, ${diff.added.length} new`, 'info');
+            }
           }
         }).catch(() => {});
       }
@@ -784,7 +796,8 @@ function App() {
    * Central update-availability check used by updateCount, Update All, and
    * passed to OnlineBrowser so every surface uses identical logic.
    *
-   * 3-tier hierarchy:
+   * 4-tier hierarchy:
+   *   0. Catalog diff: catalog entry changed since last session → update
    *   1. Session guard: recently installed in this session → skip
    *   2. YAAM-tracked (catalogVersion non-empty): simple string !== → update
    *   3. Unknown addon (no/empty catalogVersion): compareVersionStrings best-effort
@@ -795,6 +808,31 @@ function App() {
       // Skip addons installed/updated in this session (not rescanned yet)
       if (recentlyUpdated.has(catalogAddon.id)) return false;
 
+      // ── Tier 0: Catalog diff (most reliable) ──
+      // If the catalog entry changed since last session AND the local addon
+      // doesn't already match the new catalog version → definitely an update.
+      if (catalogChangedIds.has(catalogAddon.id)) {
+        const trackedVersion = addon.yaamMeta?.catalogVersion;
+        // If YAAM-tracked and catalogVersion already matches new catalog → no update
+        if (trackedVersion && trackedVersion === catalogAddon.version) {
+          const trackedDate = addon.yaamMeta?.catalogDate;
+          if (!trackedDate || !catalogAddon.date || trackedDate === catalogAddon.date) {
+            return false; // version + date match → already on latest
+          }
+        }
+        // Cross-check: local manifest version matches catalog → updated externally
+        const localVer = getEffectiveVersion(addon, catalogAddon);
+        if (localVer.trim() === catalogAddon.version.trim()) {
+          // Only skip if the addon has some tracking (avoid false negatives for untracked)
+          if (trackedVersion || addon.yaamMeta?.esouid) {
+            console.log(`[YAAM] Tier 0 skip (local matches new catalog): ${addon.folderName} localVer="${localVer}" catalogVersion="${catalogAddon.version}"`);
+            return false;
+          }
+        }
+        console.log(`[YAAM] Tier 0 update (catalog changed): ${addon.folderName} catalogVersion="${catalogAddon.version}" tracked="${trackedVersion || ''}" local="${localVer}"`);
+        return true;
+      }
+
       // ── Tier 2: YAAM-tracked addon (deterministic string comparison) ──
       // catalogVersion is set when YAAM installs/updates an addon.
       // If it matches the current catalog version → no update.
@@ -803,6 +841,14 @@ function App() {
       const trackedVersion = addon.yaamMeta?.catalogVersion;
       if (trackedVersion) {
         if (trackedVersion !== catalogAddon.version) {
+          // Cross-check: if the local manifest version already matches the
+          // catalog version, the addon was updated outside YAAM (e.g. Minion,
+          // manual download).  Don't flag as update.
+          const localVer = getEffectiveVersion(addon, catalogAddon);
+          if (localVer.trim() === catalogAddon.version.trim()) {
+            console.log(`[YAAM] Tier 2 skip (local matches catalog): ${addon.folderName} trackedVersion="${trackedVersion}" localVer="${localVer}" catalogVersion="${catalogAddon.version}"`);
+            return false;
+          }
           console.log(`[YAAM] Tier 2 update (version): ${addon.folderName} trackedVersion="${trackedVersion}" catalogVersion="${catalogAddon.version}"`);
           return true;
         }
@@ -823,10 +869,6 @@ function App() {
       const cmp = compareVersionStrings(localVer, catalogAddon.version, catalogAddon.date);
       if (cmp < 0) {
         // Local appears older — double-check with AddOnVersion integer.
-        // Handles the case where ## Version uses a different format than the catalog
-        // (e.g. local ## Version "1.009", ## AddOnVersion 9, catalog version "9").
-        // Only suppress if addonVersion is an exact string match to the catalog version
-        // (avoids false positives from unrelated encoding schemes like pChat's 10007020).
         if (addon.addonVersion > 0 && String(addon.addonVersion) === catalogAddon.version.trim()) return false;
         console.log(`[YAAM] Tier 3 update: ${addon.folderName} localVer="${localVer}" catalogVersion="${catalogAddon.version}" cmp=${cmp}`);
         return true;
@@ -835,11 +877,14 @@ function App() {
       // cmp === 0: inconclusive (scheme mismatch) — fall back to catalog date
       if (catalogAddon.date && addon.yaamMeta?.updatedAt) {
         const localEpoch = Math.floor(new Date(addon.yaamMeta.updatedAt).getTime() / 1000);
-        if (catalogAddon.date > localEpoch) return true;
+        if (catalogAddon.date > localEpoch) {
+          console.log(`[YAAM] Tier 3 update (date fallback): ${addon.folderName} localVer="${localVer}" catalogVersion="${catalogAddon.version}" cmp=${cmp} catalogDate=${catalogAddon.date} localEpoch=${localEpoch}`);
+          return true;
+        }
       }
       return false;
     },
-    [recentlyUpdated, getEffectiveVersion]
+    [recentlyUpdated, catalogChangedIds, getEffectiveVersion]
   );
 
   // Count of addons that have a newer version in the catalog (for Update All button)
@@ -896,13 +941,18 @@ function App() {
   // Shared with OnlineBrowser so every surface uses the same matching logic.
   const updatableCatalogIds = useMemo(() => {
     const ids = new Set<string>();
+    const details: string[] = [];
     for (const addon of addons) {
       const catalogAddon = getCatalogAddon(addon);
       if (catalogAddon && !ids.has(catalogAddon.id)) {
         if (isUpdateAvailable(addon, catalogAddon)) {
           ids.add(catalogAddon.id);
+          details.push(`${addon.folderName} → #${catalogAddon.id} "${catalogAddon.name}" v${catalogAddon.version} (local="${addon.version}" tracked="${addon.yaamMeta?.catalogVersion ?? ''}" trackedDate=${addon.yaamMeta?.catalogDate ?? 'none'})`);
         }
       }
+    }
+    if (details.length > 0) {
+      console.log(`[YAAM] updatableCatalogIds (${ids.size}):`, details);
     }
     return ids;
   }, [addons, getCatalogAddon, isUpdateAvailable]);
@@ -1353,6 +1403,13 @@ function App() {
               } else {
                 addLog(`Updated "${addon.folderName}" (${result.installed.join(', ')})`, 'success');
                 setRecentlyUpdated((prev) => new Set(prev).add(catalogAddon.id));
+                // Remove from catalog diff — this addon is now up to date
+                setCatalogChangedIds(prev => {
+                  if (!prev.has(catalogAddon.id)) return prev;
+                  const next = new Set(prev);
+                  next.delete(catalogAddon.id);
+                  return next;
+                });
                 newVersions[catalogAddon.id] = catalogAddon.version;
                 return true;
               }
@@ -1381,6 +1438,10 @@ function App() {
       if (cancelled > 0) summaryParts.push(`${cancelled} cancelled`);
       addLog(`Update All complete: ${summaryParts.join(', ')}`, success > 0 ? 'success' : 'warn');
       await scanPath(addonPath);
+      // Commit the catalog snapshot so next session sees a fresh baseline
+      if (success > 0) {
+        window.electronAPI.commitCatalogSnapshot(addonPath).catch(() => {});
+      }
     }
   }, [addons, addonPath, catalogById, getCatalogAddon, addLog, scanPath, replacementCandidates]);
 
@@ -1686,7 +1747,16 @@ function App() {
           if (result.missingDeps.length > 0) {
             addLog(`Missing dependencies: ${result.missingDeps.join(', ')}`, 'warn');
           }
+          // Remove from catalog diff — this addon is now up to date
+          setCatalogChangedIds(prev => {
+            if (!prev.has(catalogAddon.id)) return prev;
+            const next = new Set(prev);
+            next.delete(catalogAddon.id);
+            return next;
+          });
           scanPath(addonPath);
+          // Commit snapshot so this addon is no longer flagged next session
+          window.electronAPI.commitCatalogSnapshot(addonPath).catch(() => {});
           // Log with Revert button if this was an update (backup exists)
           const revertAction = backupPath && backupFolder ? {
             label: '↩ Undo',

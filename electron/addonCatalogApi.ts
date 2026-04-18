@@ -191,10 +191,15 @@ export function updateCatalogSnapshot(
 ): CatalogDiff | null {
   const oldSnapshot = loadCatalogSnapshot(addonsPath);
 
-  // Always save the new snapshot
-  saveCatalogSnapshot(addonsPath, catalog);
+  // Do NOT save the new snapshot here — the renderer calls commitCatalogSnapshot()
+  // after the user has had a chance to see and act on the diff.
+  // This ensures that addons the user did not update stay in the diff next session.
 
-  if (!oldSnapshot) return null;
+  if (!oldSnapshot) {
+    // First run: save initial snapshot so we have a baseline for next session
+    saveCatalogSnapshot(addonsPath, catalog);
+    return null;
+  }
 
   const changed = new Map<string, { oldVersion: string; newVersion: string }>();
   const added = new Set<string>();
@@ -215,6 +220,16 @@ export function updateCatalogSnapshot(
   }
 
   return { changed, added, removed };
+}
+
+/**
+ * Commit (save) the current catalog as the new snapshot baseline.
+ * Called after updates are applied so that updated addons are removed from
+ * the diff on next launch.  Also called on app quit so newly changed catalog
+ * entries that the user chose NOT to update are remembered for next session.
+ */
+export function commitCatalogSnapshot(addonsPath: string, catalog: CatalogAddon[]): void {
+  saveCatalogSnapshot(addonsPath, catalog);
 }
 
 /**
