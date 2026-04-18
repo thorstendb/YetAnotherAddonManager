@@ -36,8 +36,17 @@ jobs:
           node-version: 22
           cache: yarn
 
+      - name: Cache Electron binary
+        uses: actions/cache@v4
+        with:
+          path: .electron-cache
+          key: electron-${{ runner.os }}-${{ hashFiles('yarn.lock') }}
+
       - name: Install dependencies
         run: yarn install --frozen-lockfile
+        env:
+          YARN_NETWORK_TIMEOUT: 300000
+          ELECTRON_CACHE: .electron-cache
 
       - name: Set version from tag or input
         run: |
