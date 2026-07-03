@@ -113,6 +113,11 @@ export interface YaamMarker {
   catalogDate?: number;
   /** Catalog name at time of install/update */
   catalogName: string;
+  /** Manifest version scanned right after extraction — anchor for detecting
+   *  external file changes.  If the current manifest version still equals this,
+   *  the files on disk are exactly what YAAM installed and catalogVersion is
+   *  authoritative (even when the author never bumps the manifest header). */
+  localVersion?: string;
   /** ISO timestamp of first install via YAAM */
   installedAt: string;
   /** ISO timestamp of last update via YAAM */
@@ -256,6 +261,42 @@ export function parseVersionParts(raw: string): {
 }
 
 /**
+ * Test whether two version strings denote the SAME release despite different
+ * formatting schemes. Authors freely reformat between releases and platforms:
+ *   "U50.0.0"  ≡ "50.0.0"     (UI-update prefix)
+ *   "1.0 r47"  ≡ "1.0.47"     (revision suffix vs. dot segment)
+ *   "1.03"     ≡ "1.0.3"      (zero-padding vs. extra segment)
+ *   "112"      ≡ "1.12"       (AddOnVersion integer vs. dotted)
+ *   "1.0 rev3" ≡ "1.0 r3"     (equivalent suffix keywords)
+ *
+ * Strategy: strip decoration (prefixes, separators, keywords) and compare the
+ * remaining digit sequences. Deliberately strict: the FULL digit sequence must
+ * match, so "2.0" vs "2.0 r41" and "2.0 r41" vs "2.0 r42" stay different and
+ * are ordered by compareVersionStrings as before.
+ * Only an EQUALITY test — ordering still goes through compareVersionStrings.
+ */
+export function versionsDigitEqual(a: string, b: string): boolean {
+  const sa = (a || '').trim();
+  const sb = (b || '').trim();
+  if (!sa || !sb) return false;
+  if (sa === sb) return true;
+
+  const va = parseVersionParts(sa);
+  const vb = parseVersionParts(sb);
+  // Different pre-release tags are never the same release (1.0-beta ≠ 1.0).
+  if (va.preRelease !== vb.preRelease || va.preReleaseNum !== vb.preReleaseNum) return false;
+  // Date-based versions compare reliably as parts; digit concatenation would
+  // equate e.g. "2026.1.10" with "2026.11.0" — never shortcut when either side
+  // looks like a date.
+  if (va.isDate || vb.isDate) return false;
+
+  const rawDigits = (s: string): string => (s.match(/\d+/g) || []).join('');
+  const da = rawDigits(sa);
+  const db = rawDigits(sb);
+  return da !== '' && da === db;
+}
+
+/**
  * Convert a Unix timestamp (seconds) to a date-based version string YYYY.MM.DD.
  * Useful as a fallback "version" when an addon has no Version header
  * but the catalog provides a last-updated date.
@@ -289,6 +330,10 @@ export function compareVersionStrings(a: string, b: string, catalogDateEpoch?: n
   if (!sa && !sb) return 0;
   if (!sa) return -1;
   if (!sb) return 1;
+
+  // Same release in a different formatting scheme (U-prefix, r-suffix vs. dot
+  // segment, zero-padding, …) — settle as equal before any ordering heuristics.
+  if (versionsDigitEqual(sa, sb)) return 0;
 
   const va = parseVersionParts(sa);
   const vb = parseVersionParts(sb);

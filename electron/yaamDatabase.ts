@@ -142,6 +142,7 @@ export function writeMarkerFile(addonsPath: string, folderName: string, entry: Y
     catalogVersion: entry.catalogVersion,
     catalogDate: entry.catalogDate,
     catalogName: entry.catalogName,
+    localVersion: entry.localVersion || undefined,
     installedAt: entry.installedAt,
     updatedAt: entry.updatedAt,
   };
@@ -168,6 +169,7 @@ export function readMarkerFile(addonsPath: string, folderName: string): YaamMark
       catalogVersion: data.catalogVersion || data.version || '',
       catalogDate: typeof data.catalogDate === 'number' ? data.catalogDate : undefined,
       catalogName: data.catalogName || data.name || '',
+      localVersion: typeof data.localVersion === 'string' ? data.localVersion : undefined,
       installedAt: data.installedAt || '',
       updatedAt: data.updatedAt || '',
     };

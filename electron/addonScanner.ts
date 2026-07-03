@@ -57,10 +57,25 @@ export function parseColorCodes(raw: string): { plain: string; segments: ColorSe
 /**
  * Try to extract a download URL from the manifest content.
  */
-function extractDownloadUrl(content: string, _folderName: string): string {
-  const urlMatch = content.match(/https?:\/\/(?:www\.)?esoui\.com\/downloads\/info\d+-[^\s"'<>]+\.html/i);
-  if (urlMatch) return urlMatch[0];
-  return '';
+function extractDownloadUrl(content: string, folderName: string, title?: string): string {
+  const urls = content.match(/https?:\/\/(?:www\.)?esoui\.com\/downloads\/info\d+-[^\s"'<>]+\.html/gi);
+  if (!urls || urls.length === 0) return '';
+
+  // Manifests often list their DEPENDENCIES' ESOUI URLs (e.g. WritWorthy links
+  // LibAddonMenu, LibPrice, …).  Blindly taking the first URL would match the
+  // addon to the wrong catalog entry.  Prefer a URL whose slug resembles this
+  // addon's own folder name or title.
+  const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, '');
+  const targets = [norm(folderName), title ? norm(title) : ''].filter(Boolean);
+  for (const url of urls) {
+    const slug = url.match(/\/info\d+-([^\s"'<>]+)\.html/i)?.[1] ?? '';
+    const ns = norm(slug);
+    if (ns && targets.some((t) => ns.includes(t) || t.includes(ns))) return url;
+  }
+  // No slug matches: a single URL is most likely still a self-link with a
+  // renamed slug — keep it.  Multiple non-matching URLs are almost certainly
+  // a dependency list — trusting any of them would be wrong.
+  return urls.length === 1 ? urls[0] : '';
 }
 
 /**
@@ -175,7 +190,7 @@ function parseManifest(
   const { plain: description, segments: descriptionSegments } = parseColorCodes(rawDescription);
   const rawContributors = headers['Contributors'] || '';
   const { plain: contributors, segments: contributorsSegments } = parseColorCodes(rawContributors);
-  const downloadUrl = extractDownloadUrl(content, folderName);
+  const downloadUrl = extractDownloadUrl(content, folderName, title);
   // Extract ESOUI catalog UID from URL like "info1346-Name.html"
   const uidMatch = downloadUrl.match(/\/info(\d+)-/);
   const catalogId = uidMatch ? uidMatch[1] : '';
@@ -239,6 +254,43 @@ function parseManifest(
 }
 
 /**
+ * Locate the manifest file for an addon folder.
+ *
+ * Both .addon and .txt are valid.  When BOTH exist, the folder usually went
+ * through a packaging change (author switched .addon ↔ .txt between releases)
+ * and extraction left the OLD manifest behind — blindly preferring one
+ * extension would then read a stale version forever (seen with StaggerTracker:
+ * leftover .addon said 1.2 while the shipped .txt was 1.3).
+ * Rule: the manifest with the higher AddOnVersion wins; tie → newer file.
+ */
+function resolveManifestPath(folderPath: string, name: string): string | null {
+  const addonPath = path.join(folderPath, `${name}.addon`);
+  const txtPath = path.join(folderPath, `${name}.txt`);
+  const hasAddon = fs.existsSync(addonPath);
+  const hasTxt = fs.existsSync(txtPath);
+  if (hasAddon && !hasTxt) return addonPath;
+  if (!hasAddon && hasTxt) return txtPath;
+  if (!hasAddon && !hasTxt) return null;
+
+  const readAddOnVersion = (p: string): number => {
+    try {
+      const m = fs.readFileSync(p, 'utf-8').match(/^##\s*AddOnVersion\s*:\s*(\d+)/im);
+      return m ? parseInt(m[1], 10) : 0;
+    } catch {
+      return 0;
+    }
+  };
+  const av = readAddOnVersion(addonPath);
+  const tv = readAddOnVersion(txtPath);
+  if (av !== tv) return av > tv ? addonPath : txtPath;
+  try {
+    return fs.statSync(addonPath).mtimeMs >= fs.statSync(txtPath).mtimeMs ? addonPath : txtPath;
+  } catch {
+    return addonPath;
+  }
+}
+
+/**
  * Recursively scan a directory for sub-addon manifests.
  *
  * A sub-addon is any subfolder (at any depth) that contains
@@ -274,12 +326,7 @@ function collectSubAddons(
     const subDir = path.join(dir, subName);
 
     // Check for manifest matching the subfolder name
-    const addonManifest = path.join(subDir, `${subName}.addon`);
-    const txtManifest = path.join(subDir, `${subName}.txt`);
-    let manifestPath: string | null = null;
-
-    if (fs.existsSync(addonManifest)) manifestPath = addonManifest;
-    else if (fs.existsSync(txtManifest)) manifestPath = txtManifest;
+    const manifestPath = resolveManifestPath(subDir, subName);
 
     if (manifestPath && !foundNames.has(subName)) {
       try {
@@ -323,12 +370,7 @@ export function scanAddonsFolder(addonsPath: string): AddonInfo[] {
     const folderPath = path.join(addonsPath, folderName);
 
     // Look for manifest: FolderName.addon or FolderName.txt
-    const addonManifest = path.join(folderPath, `${folderName}.addon`);
-    const txtManifest = path.join(folderPath, `${folderName}.txt`);
-
-    let manifestPath: string | null = null;
-    if (fs.existsSync(addonManifest)) manifestPath = addonManifest;
-    else if (fs.existsSync(txtManifest)) manifestPath = txtManifest;
+    const manifestPath = resolveManifestPath(folderPath, folderName);
 
     if (manifestPath) {
       try {
@@ -361,7 +403,7 @@ export function scanAddonsFolder(addonsPath: string): AddonInfo[] {
         catalogAuthor: '',
         catalogVersion: marker.catalogVersion,
         catalogDate: marker.catalogDate,
-        localVersion: addon.version,
+        localVersion: marker.localVersion ?? addon.version,
         installedAt: marker.installedAt,
         updatedAt: marker.updatedAt,
       };
@@ -397,6 +439,7 @@ export function scanAddonsFolder(addonsPath: string): AddonInfo[] {
       // for what is actually on disk.
       entry.catalogVersion = marker.catalogVersion;
       entry.catalogDate = marker.catalogDate;
+      if (marker.localVersion) entry.localVersion = marker.localVersion;
       db.addons[addon.folderName] = entry;
       dbChanged = true;
     } else if (entry?.esouid && entry.catalogVersion && !marker) {
@@ -420,6 +463,19 @@ export function scanAddonsFolder(addonsPath: string): AddonInfo[] {
         writeMarkerFile(addonsPath, addon.folderName, entry);
         dbChanged = true;
       }
+    }
+
+    // Migration: installs from before localVersion tracking have no anchor.
+    // Backfill once with the current manifest version — from then on the
+    // "files unchanged since install" check works for this addon.
+    if (entry?.esouid && !entry.localVersion && addon.version) {
+      entry.localVersion = addon.version;
+      db.addons[addon.folderName] = entry;
+      dbChanged = true;
+    }
+    // Upgrade marker files written before localVersion existed (one-time).
+    if (entry?.esouid && marker && marker.localVersion === undefined && entry.localVersion) {
+      writeMarkerFile(addonsPath, addon.folderName, entry);
     }
 
     if (entry?.esouid) {
@@ -516,11 +572,7 @@ export function scanSpecificAddons(addonsPath: string, folderNames: string[]): A
   for (const folderName of folderNames) {
     const folderPath = path.join(addonsPath, folderName);
     if (!fs.existsSync(folderPath)) continue;
-    const addonManifest = path.join(folderPath, `${folderName}.addon`);
-    const txtManifest = path.join(folderPath, `${folderName}.txt`);
-    let manifestPath: string | null = null;
-    if (fs.existsSync(addonManifest)) manifestPath = addonManifest;
-    else if (fs.existsSync(txtManifest)) manifestPath = txtManifest;
+    const manifestPath = resolveManifestPath(folderPath, folderName);
     if (manifestPath) {
       try {
         addons.push(parseManifest(manifestPath, folderName, undefined, addonsPath));

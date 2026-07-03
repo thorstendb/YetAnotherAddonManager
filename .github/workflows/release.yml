@@ -43,7 +43,11 @@ jobs:
           key: electron-${{ runner.os }}-${{ hashFiles('yarn.lock') }}
 
       - name: Install dependencies
-        run: yarn install --frozen-lockfile
+        uses: nick-invision/retry@v3
+        with:
+          timeout_minutes: 10
+          max_attempts: 3
+          command: yarn install --frozen-lockfile
         env:
           YARN_NETWORK_TIMEOUT: 300000
           ELECTRON_CACHE: .electron-cache

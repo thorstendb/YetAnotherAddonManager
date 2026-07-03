@@ -489,6 +489,17 @@
   font-weight: 400;
 }
 
+/* Addon has no version header and no YAAM tracking — update detection is blind */
+.tree-version-unknown {
+  color: var(--yellow);
+  font-style: italic;
+}
+
+/* Actual release version when the manifest header trails it (author-lag) */
+.tree-version-release {
+  color: var(--text-muted);
+}
+
 /* ---- Row-level action buttons (right-aligned) ---- */
 .tree-row-actions {
   display: flex;

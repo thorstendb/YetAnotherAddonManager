@@ -1,7 +1,7 @@
 // Copyright (c) 2026 thorstendb
 // SPDX-License-Identifier: MIT
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import { AddonInfo, AddonSettingsData, CatalogAddon, SavedVarsInfo, compareVersionStrings, dateToVersion } from '../electron/shared/types';
+import { AddonInfo, AddonSettingsData, CatalogAddon, SavedVarsInfo, compareVersionStrings, versionsDigitEqual, dateToVersion } from '../electron/shared/types';
 import PathBar from './components/PathBar';
 import StatusBar from './components/StatusBar';
 import TreePanel from './components/TreePanel';
@@ -576,6 +576,18 @@ function App() {
   // Set of all known addon names (folder names + titles) for dependency checking
   const knownAddonNames = useMemo(() => new Set(addonMap.keys()), [addonMap]);
 
+  // Installed AddOnVersion by folder name — lets the dependency check enforce
+  // "Name>=NN" minimums (an installed-but-too-old library counts as unmet, just
+  // like the game treats it).
+  const installedVersions = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const a of addons) {
+      map.set(a.folderName, a.addonVersion);
+      for (const sub of a.subAddons) map.set(sub.folderName, sub.addonVersion);
+    }
+    return map;
+  }, [addons]);
+
   // Get character settings for a specific addon - always returns ALL characters
   // Merges base settings with any pending (unsaved) changes
   const getCharacterSettingsForAddon = useCallback(
@@ -822,7 +834,7 @@ function App() {
         }
         // Cross-check: local manifest version matches catalog → updated externally
         const localVer = getEffectiveVersion(addon, catalogAddon);
-        if (localVer.trim() === catalogAddon.version.trim()) {
+        if (localVer.trim() === catalogAddon.version.trim() || versionsDigitEqual(localVer, catalogAddon.version)) {
           // Only skip if the addon has some tracking (avoid false negatives for untracked)
           if (trackedVersion || addon.yaamMeta?.esouid) {
             console.log(`[YAAM] Tier 0 skip (local matches new catalog): ${addon.folderName} localVer="${localVer}" catalogVersion="${catalogAddon.version}"`);
@@ -835,20 +847,20 @@ function App() {
 
       // ── Tier 2: YAAM-tracked addon (deterministic string comparison) ──
       // catalogVersion is set when YAAM installs/updates an addon.
-      // If it matches the current catalog version → no update.
-      // If it differs → update available.  No version parsing needed.
-      // Also check catalogDate to catch re-publishes (same version, new upload).
+      // BUT the marker is only trustworthy while the files on disk are still
+      // the ones YAAM extracted.  localVersion is the anchor for that: it holds
+      // the manifest version scanned right after extraction.
+      //   manifest == localVersion → files unchanged since install → the marker
+      //     decides (authors often never bump the manifest header, e.g. a
+      //     "## Version: 1.0" inside the 1.0.8 release — that is NOT an update).
+      //   manifest != localVersion → folder was modified outside YAAM (Minion,
+      //     manual copy, partial restore) → distrust the marker, fall through
+      //     to Tier 3 with the real manifest version.
       const trackedVersion = addon.yaamMeta?.catalogVersion;
-      if (trackedVersion) {
-        if (trackedVersion !== catalogAddon.version) {
-          // Cross-check: if the local manifest version already matches the
-          // catalog version, the addon was updated outside YAAM (e.g. Minion,
-          // manual download).  Don't flag as update.
-          const localVer = getEffectiveVersion(addon, catalogAddon);
-          if (localVer.trim() === catalogAddon.version.trim()) {
-            console.log(`[YAAM] Tier 2 skip (local matches catalog): ${addon.folderName} trackedVersion="${trackedVersion}" localVer="${localVer}" catalogVersion="${catalogAddon.version}"`);
-            return false;
-          }
+      const anchor = addon.yaamMeta?.localVersion;
+      const filesUnchanged = !anchor || addon.version === anchor;
+      if (trackedVersion && filesUnchanged) {
+        if (trackedVersion !== catalogAddon.version && !versionsDigitEqual(trackedVersion, catalogAddon.version)) {
           console.log(`[YAAM] Tier 2 update (version): ${addon.folderName} trackedVersion="${trackedVersion}" catalogVersion="${catalogAddon.version}"`);
           return true;
         }
@@ -860,16 +872,21 @@ function App() {
         }
         return false;
       }
+      if (trackedVersion && !filesUnchanged) {
+        console.log(`[YAAM] Tier 2 → 3 (externally modified): ${addon.folderName} manifest="${addon.version}" anchor="${anchor}"`);
+      }
 
-      // ── Tier 3: Unknown addon (never installed/updated via YAAM) ──
+      // ── Tier 3: Unknown addon (never installed/updated via YAAM),
+      //    or tracked addon whose files were modified outside YAAM ──
       // Best-effort comparison using local manifest version vs catalog version.
       const localVer = getEffectiveVersion(addon, catalogAddon);
-      // Identical strings → no update
+      // Identical version (also across formatting schemes) → no update
       if (localVer.trim() === catalogAddon.version.trim()) return false;
+      if (versionsDigitEqual(localVer, catalogAddon.version)) return false;
       const cmp = compareVersionStrings(localVer, catalogAddon.version, catalogAddon.date);
       if (cmp < 0) {
         // Local appears older — double-check with AddOnVersion integer.
-        if (addon.addonVersion > 0 && String(addon.addonVersion) === catalogAddon.version.trim()) return false;
+        if (addon.addonVersion > 0 && versionsDigitEqual(String(addon.addonVersion), catalogAddon.version)) return false;
         console.log(`[YAAM] Tier 3 update: ${addon.folderName} localVer="${localVer}" catalogVersion="${catalogAddon.version}" cmp=${cmp}`);
         return true;
       }
@@ -2092,6 +2109,7 @@ function App() {
                   catalogAddon={getCatalogAddon(addon)}
                   isInstalling={installingAddon === getCatalogAddon(addon)?.id}
                   knownAddonNames={knownAddonNames}
+                  installedVersions={installedVersions}
                   catalogByDir={catalogLookup}
                   installingAddonId={installingAddon}
                   onNavigate={handleNavigate}
@@ -2144,6 +2162,7 @@ function App() {
                   catalogAddon={getCatalogAddon(lib)}
                   isInstalling={installingAddon === getCatalogAddon(lib)?.id}
                   knownAddonNames={knownAddonNames}
+                  installedVersions={installedVersions}
                   catalogByDir={catalogLookup}
                   installingAddonId={installingAddon}
                   onNavigate={handleNavigate}

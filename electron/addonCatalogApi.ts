@@ -308,6 +308,11 @@ async function resolveDownloadUrl(addonId: string): Promise<string> {
   throw new Error(`Could not find CDN download link on ${pageUrl}`);
 }
 
+/** MD5 hex digest of a file on disk. */
+function md5OfFile(filePath: string): string {
+  return crypto.createHash('md5').update(fs.readFileSync(filePath)).digest('hex');
+}
+
 /**
  * Download and install an addon from the online catalog.
  * Downloads the zip to AddOns/Downloads/, then extracts to AddOns/.
@@ -333,23 +338,34 @@ export async function installAddon(
   }
   const zipPath = path.join(downloadsDir, zipName);
 
-  // Skip download if the exact same versioned ZIP already exists (reinstall case)
-  if (!fs.existsSync(zipPath)) {
-    // Try direct CDN URL from filedetails first, fall back to page scraping
-    onProgress?.('resolving');
-    let downloadUrl: string;
-    let expectedMd5 = '';
-    try {
-      const details = await fetchAddonDetails(addonId);
-      if (details.downloadUrl) {
-        downloadUrl = details.downloadUrl;
-        expectedMd5 = details.md5;
-      } else {
-        downloadUrl = await resolveDownloadUrl(addonId);
-      }
-    } catch {
-      downloadUrl = await resolveDownloadUrl(addonId);
+  // Resolve the download URL and the catalog's current checksum up front.
+  // We need the checksum to decide whether a cached ZIP is still valid — a ZIP
+  // is named "<Name>-<version>.zip", but the filename alone is not trustworthy:
+  // a stale/mislabeled archive (e.g. an r41 zip sitting under an "…r43.zip"
+  // name) would otherwise be silently reinstalled while the marker records r43.
+  onProgress?.('resolving');
+  let downloadUrl = '';
+  let expectedMd5 = '';
+  try {
+    const details = await fetchAddonDetails(addonId);
+    expectedMd5 = details.md5 || '';
+    downloadUrl = details.downloadUrl || '';
+  } catch {
+    // Offline or lookup failed — handled below (cached ZIP is trusted as a fallback).
+  }
+
+  // A cached ZIP is reused only when its MD5 matches the catalog checksum.
+  // If we have no checksum (offline / lookup failed), fall back to trusting the
+  // cached file so offline reinstalls still work.
+  const cachedZipValid = fs.existsSync(zipPath)
+    && (expectedMd5 ? md5OfFile(zipPath) === expectedMd5 : true);
+
+  if (!cachedZipValid) {
+    if (fs.existsSync(zipPath)) {
+      // Stale/corrupt cache — drop it before re-downloading.
+      try { fs.unlinkSync(zipPath); } catch { /* ignore cleanup errors */ }
     }
+    if (!downloadUrl) downloadUrl = await resolveDownloadUrl(addonId);
     onProgress?.('downloading', 0);
 
     // Download with one retry on MD5 mismatch (transient CDN corruption)
@@ -361,8 +377,7 @@ export async function installAddon(
 
       // Verify MD5 if available
       if (expectedMd5) {
-        const fileBuffer = fs.readFileSync(zipPath);
-        const actualMd5 = crypto.createHash('md5').update(fileBuffer).digest('hex');
+        const actualMd5 = md5OfFile(zipPath);
         if (actualMd5 !== expectedMd5) {
           try { fs.unlinkSync(zipPath); } catch { /* ignore cleanup errors */ }
           lastMd5Error = `MD5 mismatch: expected ${expectedMd5}, got ${actualMd5}`;
@@ -398,6 +413,23 @@ export async function installAddon(
   zip.extractAllTo(addonsPath, true);
   onProgress?.('extracting', 100);
 
+  // Remove stale manifests of the OTHER extension left behind by packaging
+  // changes (author switched .addon ↔ .txt between releases — extraction never
+  // deletes files, so the old manifest would shadow the new one forever).
+  // The freshly extracted ZIP is authoritative for the manifest flavor.
+  for (const [dir, files] of zipFilesByDir) {
+    const shipsAddon = files.includes(`${dir}.addon`);
+    const shipsTxt = files.includes(`${dir}.txt`);
+    if (shipsAddon === shipsTxt) continue; // ships both or neither — leave as is
+    const stale = path.join(addonsPath, dir, shipsAddon ? `${dir}.txt` : `${dir}.addon`);
+    if (fs.existsSync(stale)) {
+      try {
+        fs.unlinkSync(stale);
+        console.log(`[YAAM] Removed stale manifest ${path.basename(stale)} in ${dir} (ZIP ships ${shipsAddon ? '.addon' : '.txt'})`);
+      } catch { /* non-fatal — the scanner's dual-manifest rule still picks the newer one */ }
+    }
+  }
+
   // Directories shipped in the ZIP (works for both fresh installs and updates)
   const shippedDirs = Array.from(zipFilesByDir.keys());
 
@@ -417,6 +449,14 @@ export async function installAddon(
       const now = new Date().toISOString();
       const localVersionByDir = new Map<string, string>();
       for (const a of installedAddons) localVersionByDir.set(a.folderName, a.version);
+      // Sanity check: after an MD5-verified download the extracted manifest should
+      // report the catalog version. If it doesn't, the archive shipped a different
+      // version than the catalog advertises — surface it rather than silently
+      // recording a version we didn't actually install.
+      const primaryLocal = localVersionByDir.get(catalogEntry.name);
+      if (primaryLocal && catalogEntry.version && primaryLocal.trim() !== catalogEntry.version.trim()) {
+        console.warn(`[YAAM] Version divergence after install of ${catalogEntry.name}: manifest="${primaryLocal}" catalog="${catalogEntry.version}"`);
+      }
       const db = loadDatabase(addonsPath);
       let changed = false;
       for (const dir of shippedDirs) {

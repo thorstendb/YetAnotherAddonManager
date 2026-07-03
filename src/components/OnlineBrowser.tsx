@@ -310,6 +310,30 @@ const OnlineBrowser: React.FC<OnlineBrowserProps> = ({
     return map;
   }, [localAddons]);
 
+  // Installed AddOnVersion by folder name — used to check dependency minimums
+  // (same rule as the AddOns/Libraries panels: "Name>=NN" must be satisfied
+  // by the installed AddOnVersion, not just by folder presence).
+  const installedVersions = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const a of localAddons) {
+      map.set(a.folderName, a.addonVersion);
+      for (const sub of a.subAddons) map.set(sub.folderName, sub.addonVersion);
+    }
+    return map;
+  }, [localAddons]);
+
+  /** Dependency satisfied only if installed AND the AddOnVersion meets "Name>=NN". */
+  const getDepStatus = useCallback(
+    (dep: { name: string; minVersion?: number }): { installed: boolean; outdated: boolean } => {
+      const installed = knownAddonNames.has(dep.name);
+      if (!installed) return { installed: false, outdated: false };
+      if (dep.minVersion === undefined) return { installed: true, outdated: false };
+      const ver = installedVersions.get(dep.name);
+      return { installed: true, outdated: ver !== undefined && ver < dep.minVersion };
+    },
+    [knownAddonNames, installedVersions]
+  );
+
   /** Get the local installed version string for an online addon (first matching dir) */
   const getLocalVersion = useCallback(
     (addon: CatalogAddon): string | undefined => {
@@ -706,12 +730,12 @@ const OnlineBrowser: React.FC<OnlineBrowserProps> = ({
                         {depsExpandedIds.has(addon.id) && (
                           <div className="tree-children">
                             {deps.map((dep, i) => {
-                              const isDepInstalled = knownAddonNames.has(dep.name);
+                              const { installed: isDepInstalled, outdated: isDepOutdated } = getDepStatus(dep);
                               const depCatalog = catalogByDir?.get(dep.name);
                               const isDepInstalling = depCatalog && (installing === depCatalog.id || installingAddonId === depCatalog.id);
                               return (
-                              <div key={i} className={`tree-subtree-leaf ${!isDepInstalled ? 'dep-missing' : ''}`}>
-                                <span className="tree-leaf-icon">{!isDepInstalled ? '❌' : '📎'}</span>
+                              <div key={i} className={`tree-subtree-leaf ${!isDepInstalled || isDepOutdated ? 'dep-missing' : ''}`}>
+                                <span className="tree-leaf-icon">{!isDepInstalled ? '❌' : isDepOutdated ? '⚠️' : '📎'}</span>
                                 <span
                                   className="dep-link"
                                   onClick={(e) => { e.stopPropagation(); onNavigate(dep.name); }}
@@ -775,12 +799,12 @@ const OnlineBrowser: React.FC<OnlineBrowserProps> = ({
                         {optDepsExpandedIds.has(addon.id) && (
                           <div className="tree-children">
                             {optDeps.map((dep, i) => {
-                              const isDepInstalled = knownAddonNames.has(dep.name);
+                              const { installed: isDepInstalled, outdated: isDepOutdated } = getDepStatus(dep);
                               const depCatalog = catalogByDir?.get(dep.name);
                               const isDepInstalling = depCatalog && (installing === depCatalog.id || installingAddonId === depCatalog.id);
                               return (
-                              <div key={i} className={`tree-subtree-leaf ${!isDepInstalled ? 'dep-missing' : ''}`}>
-                                <span className="tree-leaf-icon">{!isDepInstalled ? '❌' : '📎'}</span>
+                              <div key={i} className={`tree-subtree-leaf ${!isDepInstalled || isDepOutdated ? 'dep-missing' : ''}`}>
+                                <span className="tree-leaf-icon">{!isDepInstalled ? '❌' : isDepOutdated ? '⚠️' : '📎'}</span>
                                 <span
                                   className="dep-link"
                                   onClick={(e) => { e.stopPropagation(); onNavigate(dep.name); }}

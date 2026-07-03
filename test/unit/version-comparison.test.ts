@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { parseVersionParts, compareVersionStrings } from '../../electron/shared/types';
+import { parseVersionParts, compareVersionStrings, versionsDigitEqual } from '../../electron/shared/types';
 
 describe('parseVersionParts', () => {
   it('returns fallback [0] for empty string', () => {
@@ -366,8 +366,10 @@ describe('compareVersionStrings', () => {
     expect(compareVersionStrings('2.0 r41', '2.0 build 5', 1774828800)).toBeLessThan(0);
   });
 
-  it('suffix mismatch: "1.0 rev3" vs "1.0 r3" with catalogDate → catalog wins', () => {
-    expect(compareVersionStrings('1.0 rev3', '1.0 r3', 1774828800)).toBeLessThan(0);
+  it('suffix keyword synonyms: "1.0 rev3" vs "1.0 r3" → same release (digit-equal)', () => {
+    // "rev" and "r" both mean revision — identical digit sequence, same release.
+    // Previously this was treated as a scheme mismatch and flagged as an update.
+    expect(compareVersionStrings('1.0 rev3', '1.0 r3', 1774828800)).toBe(0);
   });
 
   it('same suffix: "2.0 r41" vs "2.0 r42" (both r → normal compare)', () => {
@@ -376,5 +378,65 @@ describe('compareVersionStrings', () => {
 
   it('same suffix: "2.3.22 build 1442" vs "2.3.22 build 1500" (both build → normal compare)', () => {
     expect(compareVersionStrings('2.3.22 build 1442', '2.3.22 build 1500', 1774828800)).toBeLessThan(0);
+  });
+});
+
+describe('versionsDigitEqual', () => {
+  // Real-world scheme mismatches observed in a live AddOns folder (2026-07):
+  // same release, different formatting — must be treated as EQUAL.
+  it('UI-update prefix: "50.0.0" ≡ "U50.0.0" (LeadList)', () => {
+    expect(versionsDigitEqual('50.0.0', 'U50.0.0')).toBe(true);
+    expect(compareVersionStrings('50.0.0', 'U50.0.0', 1774828800)).toBe(0);
+  });
+
+  it('revision suffix vs dot segment: "1.0.47" ≡ "1.0 r47" (LibMapPins)', () => {
+    expect(versionsDigitEqual('1.0.47', '1.0 r47')).toBe(true);
+    expect(compareVersionStrings('1.0.47', '1.0 r47', 1774828800)).toBe(0);
+  });
+
+  it('zero-padding vs extra segment: "1.03" ≡ "1.0.3" (LibUnits2)', () => {
+    expect(versionsDigitEqual('1.03', '1.0.3')).toBe(true);
+    expect(compareVersionStrings('1.03', '1.0.3', 1774828800)).toBe(0);
+  });
+
+  it('AddOnVersion integer vs dotted: "112" ≡ "1.12" (LibRecipe)', () => {
+    expect(versionsDigitEqual('112', '1.12')).toBe(true);
+  });
+
+  it('suffix keyword synonyms: "1.0 rev3" ≡ "1.0 r3"', () => {
+    expect(versionsDigitEqual('1.0 rev3', '1.0 r3')).toBe(true);
+  });
+
+  it('v-prefix: "v2.31" ≡ "2.31"', () => {
+    expect(versionsDigitEqual('v2.31', '2.31')).toBe(true);
+  });
+
+  // Different releases must NOT be equal — ordering stays with compareVersionStrings.
+  it('revision bump is not equal: "2.0 r41" ≠ "2.0 r42"', () => {
+    expect(versionsDigitEqual('2.0 r41', '2.0 r42')).toBe(false);
+    expect(compareVersionStrings('2.0 r41', '2.0 r42', 1774828800)).toBeLessThan(0);
+  });
+
+  it('base vs revision is not equal: "2.0" ≠ "2.0 r41"', () => {
+    expect(versionsDigitEqual('2.0', '2.0 r41')).toBe(false);
+    expect(compareVersionStrings('2.0', '2.0 r41', 1774828800)).toBeLessThan(0);
+  });
+
+  it('stale manifest header is not equal: "1.0" ≠ "1.0.8" (LibQRCode)', () => {
+    expect(versionsDigitEqual('1.0', '1.0.8')).toBe(false);
+  });
+
+  it('pre-release differs from release: "1.0-beta" ≠ "1.0"', () => {
+    expect(versionsDigitEqual('1.0-beta', '1.0')).toBe(false);
+  });
+
+  it('two date-based versions defer to part comparison: "2026.1.10" ≠ "2026.11.0"', () => {
+    expect(versionsDigitEqual('2026.1.10', '2026.11.0')).toBe(false);
+  });
+
+  it('empty strings are never equal', () => {
+    expect(versionsDigitEqual('', '')).toBe(false);
+    expect(versionsDigitEqual('1.0', '')).toBe(false);
+    expect(versionsDigitEqual('beta', 'beta2')).toBe(false);
   });
 });

@@ -1,7 +1,7 @@
 // Copyright (c) 2026 thorstendb
 // SPDX-License-Identifier: MIT
 import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { AddonInfo, CatalogAddon, CharacterSettings, ADDON_CATEGORIES, getCategoryIconUrl } from '../../electron/shared/types';
+import { AddonInfo, CatalogAddon, CharacterSettings, ADDON_CATEGORIES, getCategoryIconUrl, versionsDigitEqual } from '../../electron/shared/types';
 import ColoredText from './ColoredText';
 import RichText, { stripBBCode } from './RichText';
 import ImagePreview from './ImagePreview';
@@ -20,6 +20,8 @@ interface AddonTreeItemProps {
   catalogAddon?: CatalogAddon;
   isInstalling?: boolean;
   knownAddonNames?: Set<string>;
+  /** Installed AddOnVersion by folder name — used to check dependency minimums (Name>=NN). */
+  installedVersions?: Map<string, number>;
   catalogByDir?: Map<string, CatalogAddon>;
   installingAddonId?: string | null;
   onNavigate: (folderName: string) => void;
@@ -49,6 +51,7 @@ const AddonTreeItem: React.FC<AddonTreeItemProps> = ({
   catalogAddon,
   isInstalling = false,
   knownAddonNames,
+  installedVersions,
   catalogByDir,
   installingAddonId,
   onNavigate,
@@ -87,6 +90,18 @@ const AddonTreeItem: React.FC<AddonTreeItemProps> = ({
   const [subDescExpanded, setSubDescExpanded] = useState<Set<string>>(new Set());
   const [infoPopup, setInfoPopup] = useState(false);
   const infoPopupRef = useRef<HTMLDivElement>(null);
+
+  // A dependency is satisfied only if the named addon is installed AND — when the
+  // manifest specifies "Name>=NN" — its AddOnVersion meets that minimum. The game
+  // enforces the minimum, so an installed-but-too-old library still counts as unmet
+  // (this is exactly how LibAddonMenu-2.0 r41 showed as "missing" for addons wanting >=43).
+  const getDepStatus = (dep: { name: string; minVersion?: number }): { installed: boolean; outdated: boolean } => {
+    const installed = !!knownAddonNames && knownAddonNames.has(dep.name);
+    if (!installed) return { installed: false, outdated: false };
+    if (dep.minVersion === undefined) return { installed: true, outdated: false };
+    const ver = installedVersions?.get(dep.name);
+    return { installed: true, outdated: ver !== undefined && ver < dep.minVersion };
+  };
 
   // Collapse all when counter changes (triggered by parent's collapse-all button)
   useEffect(() => {
@@ -315,7 +330,28 @@ const AddonTreeItem: React.FC<AddonTreeItemProps> = ({
         )}
         <span className={`tree-label ${isUnreferenced ? 'unreferenced' : ''} ${isNotInCatalog ? 'not-in-catalog' : ''}`}>
           <ColoredText segments={addon.titleSegments} />
-          {addon.version && <span className="tree-version"> v{addon.version}</span>}
+          {addon.version ? (
+            (() => {
+              // Author-lag: the anchor confirms the files are exactly what YAAM
+              // installed, but the manifest header trails the actual release
+              // (e.g. "## Version: 1.6.0" inside the 1.6.1 zip).  Show both.
+              const meta = addon.yaamMeta;
+              const authorLag = !!meta?.catalogVersion
+                && !!meta.localVersion && addon.version === meta.localVersion
+                && addon.version !== meta.catalogVersion
+                && !versionsDigitEqual(addon.version, meta.catalogVersion);
+              return authorLag ? (
+                <span className="tree-version" title={`Manifest says v${addon.version}, but the files are the ${meta!.catalogVersion} release — the author didn't bump the manifest header`}> v{addon.version} <span className="tree-version-release">(= {meta!.catalogVersion})</span></span>
+              ) : (
+                <span className="tree-version"> v{addon.version}</span>
+              );
+            })()
+          ) : addon.yaamMeta?.catalogVersion ? (
+            // Manifest declares no version at all — fall back to what YAAM installed
+            <span className="tree-version" title="Manifest has no version header — showing the installed catalog version"> v{addon.yaamMeta.catalogVersion}</span>
+          ) : (
+            <span className="tree-version tree-version-unknown" title="Manifest has no version header and the addon is not tracked by YAAM — reinstall once to enable update detection"> v?</span>
+          )}
           {isUnreferenced && <span className="unreferenced-marker">{' \u26A0\uFE0E (unused)'}</span>}
           {isNotInCatalog && <span className="catalog-missing" title="Not found in catalog and no download URL">{' \u26A0\uFE0E'}</span>}
           {isCatalogMismatch && <span className="catalog-mismatch" title={`Folder "${addon.folderName}" does not match catalog directory — matched by title`}>{' \u26A0\uFE0E'}</span>}
@@ -494,11 +530,11 @@ const AddonTreeItem: React.FC<AddonTreeItemProps> = ({
                               {expandedSubDeps.has(sub.folderName) && (
                                 <div className="tree-children">
                                   {sub.dependsOn.map((dep, i) => {
-                                    const isDepInstalled = knownAddonNames && knownAddonNames.has(dep.name);
+                                    const { installed: isDepInstalled, outdated: isDepOutdated } = getDepStatus(dep);
                                     const depCatalog = catalogByDir?.get(dep.name);
                                     return (
-                                      <div key={i} className={`tree-subtree-leaf ${!isDepInstalled ? 'dep-missing' : ''}`}>
-                                        <span className="tree-leaf-icon">{!isDepInstalled ? '❌' : '📎'}</span>
+                                      <div key={i} className={`tree-subtree-leaf ${!isDepInstalled || isDepOutdated ? 'dep-missing' : ''}`}>
+                                        <span className="tree-leaf-icon">{!isDepInstalled ? '❌' : isDepOutdated ? '⚠️' : '📎'}</span>
                                         <span className="dep-link" onClick={(e) => { e.stopPropagation(); onNavigate(dep.name); }}>
                                           {dep.name}
                                         </span>
@@ -546,11 +582,11 @@ const AddonTreeItem: React.FC<AddonTreeItemProps> = ({
                               {expandedSubOptDeps.has(sub.folderName) && (
                                 <div className="tree-children">
                                   {sub.optionalDependsOn.map((dep, i) => {
-                                    const isDepInstalled = knownAddonNames && knownAddonNames.has(dep.name);
+                                    const { installed: isDepInstalled, outdated: isDepOutdated } = getDepStatus(dep);
                                     const depCatalog = catalogByDir?.get(dep.name);
                                     return (
-                                      <div key={i} className={`tree-subtree-leaf ${!isDepInstalled ? 'dep-missing' : ''}`}>
-                                        <span className="tree-leaf-icon">{!isDepInstalled ? '❌' : '📎'}</span>
+                                      <div key={i} className={`tree-subtree-leaf ${!isDepInstalled || isDepOutdated ? 'dep-missing' : ''}`}>
+                                        <span className="tree-leaf-icon">{!isDepInstalled ? '❌' : isDepOutdated ? '⚠️' : '📎'}</span>
                                         <span className="dep-link" onClick={(e) => { e.stopPropagation(); onNavigate(dep.name); }}>
                                           {dep.name}
                                         </span>
@@ -730,11 +766,11 @@ const AddonTreeItem: React.FC<AddonTreeItemProps> = ({
               {depsExpanded && (
                 <div className="tree-children">
                   {addon.dependsOn.map((dep, i) => {
-                    const isDepInstalled = knownAddonNames && knownAddonNames.has(dep.name);
+                    const { installed: isDepInstalled, outdated: isDepOutdated } = getDepStatus(dep);
                     const depCatalog = catalogByDir?.get(dep.name);
                     return (
-                    <div key={i} className={`tree-subtree-leaf ${!isDepInstalled ? 'dep-missing' : ''}`}>
-                      <span className="tree-leaf-icon">{!isDepInstalled ? '❌' : '📎'}</span>
+                    <div key={i} className={`tree-subtree-leaf ${!isDepInstalled || isDepOutdated ? 'dep-missing' : ''}`}>
+                      <span className="tree-leaf-icon">{!isDepInstalled ? '❌' : isDepOutdated ? '⚠️' : '📎'}</span>
                       <span
                         className="dep-link"
                         onClick={(e) => { e.stopPropagation(); onNavigate(dep.name); }}
@@ -790,11 +826,11 @@ const AddonTreeItem: React.FC<AddonTreeItemProps> = ({
               {optDepsExpanded && (
                 <div className="tree-children">
                   {addon.optionalDependsOn.map((dep, i) => {
-                    const isDepInstalled = knownAddonNames && knownAddonNames.has(dep.name);
+                    const { installed: isDepInstalled, outdated: isDepOutdated } = getDepStatus(dep);
                     const depCatalog = catalogByDir?.get(dep.name);
                     return (
-                    <div key={i} className={`tree-subtree-leaf ${!isDepInstalled ? 'dep-missing' : ''}`}>
-                      <span className="tree-leaf-icon">{!isDepInstalled ? '❌' : '📎'}</span>
+                    <div key={i} className={`tree-subtree-leaf ${!isDepInstalled || isDepOutdated ? 'dep-missing' : ''}`}>
+                      <span className="tree-leaf-icon">{!isDepInstalled ? '❌' : isDepOutdated ? '⚠️' : '📎'}</span>
                       <span
                         className="dep-link"
                         onClick={(e) => { e.stopPropagation(); onNavigate(dep.name); }}
