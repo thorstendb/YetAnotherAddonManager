@@ -88,6 +88,35 @@ describe('parseVersionParts', () => {
     expect(parseVersionParts('2025.08.08').suffixParts).toEqual([]);
     expect(parseVersionParts('v2.31').suffixParts).toEqual([]);
   });
+
+  it('extracts hotfix letter suffix (letterRank)', () => {
+    expect(parseVersionParts('3.16.7b').parts).toEqual([3, 16, 7]);
+    expect(parseVersionParts('3.16.7b').letterRank).toBe(2);
+    expect(parseVersionParts('1.4.2a').letterRank).toBe(1);
+    expect(parseVersionParts('3.16.7').letterRank).toBe(0);
+  });
+
+  it('letterRank stays 0 for r-suffix, multi-letter tails and v-prefix', () => {
+    expect(parseVersionParts('2.0 r41').letterRank).toBe(0);
+    expect(parseVersionParts('36.23PL').letterRank).toBe(0);
+    expect(parseVersionParts('1.02-custom').letterRank).toBe(0);
+    expect(parseVersionParts('v2.31').letterRank).toBe(0);
+    // Detached letter is NOT a hotfix marker (more likely an abbreviation)
+    expect(parseVersionParts('1.0 b').letterRank).toBe(0);
+  });
+
+  it('splits compact 8-digit datestamps into [Y, M, D]', () => {
+    const r = parseVersionParts('20240310');
+    expect(r.parts).toEqual([2024, 3, 10]);
+    expect(r.isDate).toBe(true);
+  });
+
+  it('does not split non-date 8-digit numbers', () => {
+    // month 99 is implausible → keep as plain integer
+    expect(parseVersionParts('20999999').parts).toEqual([20999999]);
+    // large build numbers stay untouched
+    expect(parseVersionParts('4.26.832.28195').parts).toEqual([4, 26, 832, 28195]);
+  });
 });
 
 describe('compareVersionStrings', () => {
@@ -432,6 +461,25 @@ describe('versionsDigitEqual', () => {
 
   it('two date-based versions defer to part comparison: "2026.1.10" ≠ "2026.11.0"', () => {
     expect(versionsDigitEqual('2026.1.10', '2026.11.0')).toBe(false);
+  });
+
+  it('same date in different formats IS equal: "20260620" ≡ "2026.06.20" ≡ "2026-06-20"', () => {
+    expect(versionsDigitEqual('20260620', '2026.06.20')).toBe(true);
+    expect(versionsDigitEqual('2026-06-20', '2026.06.20')).toBe(true);
+    expect(versionsDigitEqual('20260620', '2026-06-20')).toBe(true);
+  });
+
+  it('date on only one side is never equal (scheme change)', () => {
+    expect(versionsDigitEqual('2026.06.20', '2.6.20')).toBe(false);
+  });
+
+  it('hotfix letter marks a new release: "3.16.7" ≠ "3.16.7b"', () => {
+    expect(versionsDigitEqual('3.16.7', '3.16.7b')).toBe(false);
+    expect(compareVersionStrings('3.16.7', '3.16.7b', 1774828800)).toBeLessThan(0);
+  });
+
+  it('same hotfix letter is equal: "3.16.7b" ≡ "3.16.7b"', () => {
+    expect(versionsDigitEqual('3.16.7b', '3.16.7b')).toBe(true);
   });
 
   it('empty strings are never equal', () => {

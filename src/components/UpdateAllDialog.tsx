@@ -18,6 +18,14 @@ export interface UpdatableAddon {
   mightUpdate?: boolean;
   /** Reason for mightUpdate classification */
   mightUpdateReason?: 'not-tracked' | 'version-changed' | 'date-newer';
+  /** True when this row is a language patch / fix pack layered into another addon's folder */
+  overlay?: boolean;
+  /** Title of the addon this overlay (or hijacking patch) belongs to */
+  overlayOf?: string;
+  /** Overlay was overwritten by a main-addon update and needs re-applying */
+  needsReapply?: boolean;
+  /** Folder manifest hijacked by an untracked patch — original state unknown */
+  layered?: boolean;
 }
 
 interface UpdateAllDialogProps {
@@ -29,16 +37,20 @@ interface UpdateAllDialogProps {
 const UpdateAllDialog: React.FC<UpdateAllDialogProps> = ({ addons, onConfirm, onCancel }) => {
   const closeRef = useRef<HTMLButtonElement>(null);
 
-  const sure = addons.filter(a => !a.ambiguous && !a.replacement && !a.mightUpdate);
-  const ambiguous = addons.filter(a => a.ambiguous && !a.replacement && !a.mightUpdate);
-  const replacements = addons.filter(a => a.replacement);
-  const notTracked = addons.filter(a => a.mightUpdate && a.mightUpdateReason === 'not-tracked');
-  const versionChanged = addons.filter(a => a.mightUpdate && a.mightUpdateReason === 'version-changed');
-  const dateNewer = addons.filter(a => a.mightUpdate && a.mightUpdateReason === 'date-newer');
+  const plain = addons.filter(a => !a.overlay && !a.layered);
+  const sure = plain.filter(a => !a.ambiguous && !a.replacement && !a.mightUpdate);
+  const ambiguous = plain.filter(a => a.ambiguous && !a.replacement && !a.mightUpdate);
+  const replacements = plain.filter(a => a.replacement);
+  const notTracked = plain.filter(a => a.mightUpdate && a.mightUpdateReason === 'not-tracked');
+  const versionChanged = plain.filter(a => a.mightUpdate && a.mightUpdateReason === 'version-changed');
+  const dateNewer = plain.filter(a => a.mightUpdate && a.mightUpdateReason === 'date-newer');
+  const overlays = addons.filter(a => a.overlay);
+  const layered = addons.filter(a => a.layered);
 
-  // Default: all sure addons selected, replacements/ambiguous/mightUpdate deselected
+  // Default: sure addons and overlay updates selected;
+  // replacements/ambiguous/mightUpdate/layered require explicit opt-in
   const [selected, setSelected] = useState<Set<string>>(
-    () => new Set(sure.map(a => a.catalogId))
+    () => new Set([...sure, ...overlays].map(a => a.catalogId))
   );
 
   useEffect(() => {
@@ -95,6 +107,15 @@ const UpdateAllDialog: React.FC<UpdateAllDialogProps> = ({ addons, onConfirm, on
           ? <>{addon.folderName} <span style={{ opacity: 0.7 }}>→</span> <strong>{addon.replacementName}</strong></>
           : (addon.title || addon.folderName)
         }
+        {addon.overlay && addon.overlayOf && (
+          <span style={{ opacity: 0.6, marginLeft: '6px' }}>in {addon.overlayOf}</span>
+        )}
+        {addon.layered && (
+          <span style={{ opacity: 0.6, marginLeft: '6px' }}>folder: {addon.folderName}</span>
+        )}
+        {addon.needsReapply && (
+          <span style={{ marginLeft: '6px' }} title="Overwritten by a main-addon update — re-apply to restore the patch">⚠️ re-apply</span>
+        )}
         <span style={{ opacity: 0.7, marginLeft: '8px' }}>
           {addon.localVersion || '?'} → {addon.catalogVersion}
         </span>
@@ -202,9 +223,49 @@ const UpdateAllDialog: React.FC<UpdateAllDialogProps> = ({ addons, onConfirm, on
                       opacity: 0.7,
                     }}>
                       <SectionCheckbox section={dateNewer} />
-                      <span>📅 Catalog date is newer than local install ({dateNewer.length})</span>
+                      <span>📅 Catalog published after the files on disk — version strings contradict ({dateNewer.length})</span>
                     </label>
                     {dateNewer.map(renderRow)}
+                  </>
+                )}
+                {overlays.length > 0 && (
+                  <>
+                    <label style={{
+                      display: 'flex', alignItems: 'center', cursor: 'pointer',
+                      borderTop: '1px solid var(--border-color, #555)',
+                      margin: '8px 0 4px',
+                      paddingTop: '6px',
+                      fontSize: '0.82em',
+                      opacity: 0.7,
+                    }}>
+                      <SectionCheckbox section={overlays} />
+                      <span>🧩 Language patches & fix packs — layered into another addon's folder ({overlays.length})</span>
+                    </label>
+                    {overlays.map(renderRow)}
+                  </>
+                )}
+                {layered.length > 0 && (
+                  <>
+                    <label style={{
+                      display: 'flex', alignItems: 'center', cursor: 'pointer',
+                      borderTop: '1px solid var(--border-color, #555)',
+                      margin: '8px 0 4px',
+                      paddingTop: '6px',
+                      fontSize: '0.82em',
+                      opacity: 0.7,
+                    }}>
+                      <SectionCheckbox section={layered} />
+                      <span>🎭 Patched folders — original version unknown ({layered.length})</span>
+                    </label>
+                    <div style={{ fontSize: '0.78em', opacity: 0.6, margin: '0 0 4px 22px' }}>
+                      A language patch replaced this folder's manifest, so YAAM cannot tell which
+                      version of the ORIGINAL addon is underneath. Selecting reinstalls the original
+                      from the catalog (overwriting the patch — reinstall it afterwards, or select it
+                      above if listed). Alternatively, if you trust that everything is current, use
+                      ⚓ Baseline once: it anchors original AND patch at their current catalog
+                      versions, and this section disappears.
+                    </div>
+                    {layered.map(renderRow)}
                   </>
                 )}
               </div>

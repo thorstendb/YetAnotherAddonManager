@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: MIT
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { AddonInfo, AddonSettingsData, CatalogAddon, SavedVarsInfo, compareVersionStrings, versionsDigitEqual, dateToVersion } from '../electron/shared/types';
+import { classifyDirOwnership, findHijackedManifestOverlay } from '../electron/shared/overlays';
 import PathBar from './components/PathBar';
 import StatusBar from './components/StatusBar';
 import TreePanel from './components/TreePanel';
@@ -19,11 +20,33 @@ import SettingsDialog from './components/SettingsDialog';
 import CleanupDialog, { CleanupType } from './components/CleanupDialog';
 import BackupCleanupDialog from './components/BackupCleanupDialog';
 import UpdateAllDialog, { UpdatableAddon } from './components/UpdateAllDialog';
+import HygieneDialog, { HygieneStray, HygieneDup } from './components/HygieneDialog';
 import './styles/App.css';
 
 function errMsg(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
+
+/**
+ * Slack for the stateless mtime update hint.  The manifest's mtime approximates
+ * the install time, but Finder extraction preserves ZIP-internal times which
+ * predate the catalog publish by up to the author's pack-to-upload delay —
+ * only a catalog date clearly AFTER the manifest mtime counts as a hint.
+ */
+const MTIME_UPDATE_SLACK_SECONDS = 48 * 3600;
+
+/** Entry sent to the main process by the baseline commit (mirrors BaselineEntry). */
+type BaselineEntryUI = {
+  folderName: string;
+  esouid: string;
+  url: string;
+  name: string;
+  author: string;
+  catalogVersion: string;
+  catalogDate?: number;
+  localVersion: string;
+  overlays?: { esouid: string; catalogName: string; catalogVersion: string; catalogDate?: number }[];
+};
 
 /** Shorten "EU Megaserver-Alandhur" → "EU Alandhur" for display. */
 export function shortenCharName(name: string): string {
@@ -69,6 +92,7 @@ function App() {
   const [restoreSnapshots, setRestoreSnapshots] = useState<{ timestamp: string; addons: { folderName: string; version: string }[] }[]>([]);
   const [restoreBackups, setRestoreBackups] = useState<{ folderName: string; version: string; backupPath: string; mtimeMs: number }[]>([]);
   const [restoreSvBackups, setRestoreSvBackups] = useState<{ fileName: string; backupDirName: string; backupFilePath: string; type: 'backup' | 'cleanup'; timestamp: string }[]>([]);
+  const [restoreRemoved, setRestoreRemoved] = useState<{ name: string; relPath: string; fromHygiene: boolean; isDirectory: boolean; sizeBytes: number; mtimeMs: number }[]>([]);
   const [updateTotal, setUpdateTotal] = useState(0);
   const updateCancelRef = useRef(false);
   const [showImportExport, setShowImportExport] = useState(false);
@@ -91,6 +115,17 @@ function App() {
     action: () => void;
   } | null>(null);
   const [updateAllList, setUpdateAllList] = useState<UpdatableAddon[] | null>(null);
+  const [baselineConfirm, setBaselineConfirm] = useState<{
+    entries: BaselineEntryUI[];
+    alreadyTracked: number;
+    skippedUpdate: number;
+    skippedAmbiguous: number;
+  } | null>(null);
+  const [hygienePreview, setHygienePreview] = useState<{
+    strayManifests: HygieneStray[];
+    duplicates: HygieneDup[];
+    unclaimedRootFiles: string[];
+  } | null>(null);
 
   // Theme state: persisted in localStorage
   const [theme, setTheme] = useState<'dark' | 'light'>(() => {
@@ -243,10 +278,17 @@ function App() {
         const matches: { folderName: string; esouid: string; name: string; author: string; version: string; url: string; catalogDate: number; localVersion: string; confident: boolean }[] = [];
         for (const addon of results) {
           // Priority: DB entry > catalogId > URL > directory
-          const byMeta = addon.yaamMeta?.esouid ? catById.get(addon.yaamMeta.esouid) : undefined;
+          let byMeta = addon.yaamMeta?.esouid ? catById.get(addon.yaamMeta.esouid) : undefined;
           const byId = addon.catalogId ? catById.get(addon.catalogId) : undefined;
           const byUrl = addon.downloadUrl ? catByUrl.get(addon.downloadUrl.toLowerCase()) : undefined;
           const byDir = catByDir.get(addon.folderName);
+          // Same poisoned-entry validation as getCatalogMatch: a DB entry that
+          // does not own this folder loses against the folder's primary owner,
+          // so reconciliation rewrites the DB with the correct esouid (self-heal).
+          if (byMeta && !byMeta.directories.includes(addon.folderName)
+            && byDir && byDir.id !== byMeta.id && byDir.directories[0] === addon.folderName) {
+            byMeta = undefined;
+          }
 
           const best = byMeta ?? byId ?? byUrl ?? byDir;
           if (!best) continue;
@@ -296,13 +338,24 @@ function App() {
                   };
                 }
                 // Reconciliation only updates localVersion (not catalogVersion).
-                // Only re-inject if localVersion changed.
-                if (a.yaamMeta.localVersion === m.localVersion) return a;
+                // Only re-inject if localVersion or the healed identity changed.
+                if (a.yaamMeta.localVersion === m.localVersion && a.yaamMeta.esouid === m.esouid) return a;
+                const healed = a.yaamMeta.esouid !== m.esouid;
                 return {
                   ...a,
                   yaamMeta: {
                     ...a.yaamMeta,
                     localVersion: m.localVersion,
+                    esouid: m.esouid,
+                    // Healed identity: the old anchors described the wrong
+                    // catalog entry — mirror the DB reset done by reconcile.
+                    ...(healed ? {
+                      url: m.url,
+                      catalogName: m.name,
+                      catalogAuthor: m.author,
+                      catalogVersion: '',
+                      catalogDate: undefined,
+                    } : {}),
                   },
                 };
               }));
@@ -457,14 +510,50 @@ function App() {
     return s;
   }, [catalogAddons]);
 
+  // Per-directory ownership: which catalog entry is the folder's ORIGINAL and
+  // which entries are overlays (language patches / fix packs) writing into it.
+  const dirOwnership = useMemo(() => classifyDirOwnership(catalogAddons), [catalogAddons]);
+
+  // Overlay catalog entries → name of the original they patch (ESOUI tree badge)
+  const overlayTargetNames = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const [dir, o] of dirOwnership) {
+      for (const ov of o.overlays) {
+        if (!m.has(ov.id)) m.set(ov.id, o.original?.name ?? dir);
+      }
+    }
+    return m;
+  }, [dirOwnership]);
+
   /** Look up the catalog entry for an installed addon.
    *  Priority:  0. YAAM database entry  1. UID  2. URL  3. Title  4. Directory name
-   *  Returns { catalogAddon, ambiguous } where ambiguous is true when the
-   *  match method is uncertain or different methods point to different entries. */
+   *  Returns { catalogAddon, ambiguous, installedOverlays, layered }:
+   *  catalogAddon is always the folder's MAIN identity (the original — never a
+   *  language patch), installedOverlays lists patches detected in the folder,
+   *  and layered=true means the manifest was hijacked by an untracked patch so
+   *  the original's on-disk version is unknown. */
   const getCatalogMatch = useCallback(
-    (addon: AddonInfo): { catalogAddon: CatalogAddon; ambiguous: boolean } | undefined => {
-      // 0. YAAM database entry (written by YAAM on install — most reliable)
-      const byMeta = addon.yaamMeta?.esouid ? catalogById.get(addon.yaamMeta.esouid) : undefined;
+    (addon: AddonInfo): {
+      catalogAddon: CatalogAddon;
+      ambiguous: boolean;
+      installedOverlays: { catalogAddon: CatalogAddon; trackedVersion?: string; trackedDate?: number; needsReapply?: boolean; evidence: 'db' | 'manifest' }[];
+      layered: boolean;
+    } | undefined => {
+      // 0. YAAM database entry (written by YAAM on install — most reliable).
+      //    BUT: validate it.  Old DB entries can be poisoned (e.g. WritWorthy
+      //    recorded as LibAddonMenu because its manifest lists dependency URLs).
+      //    Distrust the entry when the recorded catalog addon does NOT own this
+      //    folder while a different catalog entry claims the folder as its
+      //    PRIMARY directory — then fall through to the other match methods,
+      //    which lets the next reconciliation heal the database.
+      let byMeta = addon.yaamMeta?.esouid ? catalogById.get(addon.yaamMeta.esouid) : undefined;
+      if (byMeta && !byMeta.directories.includes(addon.folderName)) {
+        const dirOwner = catalogByDir.get(addon.folderName);
+        if (dirOwner && dirOwner.id !== byMeta.id && dirOwner.directories[0] === addon.folderName) {
+          console.warn(`[YAAM] Distrusting DB match for ${addon.folderName}: DB says #${byMeta.id} "${byMeta.name}" (dirs: ${byMeta.directories.join(', ')}), but #${dirOwner.id} "${dirOwner.name}" owns the folder`);
+          byMeta = undefined;
+        }
+      }
       // 1. UID from manifest URL (always unique in the catalog)
       const byId = addon.catalogId ? catalogById.get(addon.catalogId) : undefined;
       // 2. Full URL match (normalized comparison)
@@ -491,13 +580,51 @@ function App() {
       const matchedByMeta = !!byMeta;
       const matchedById = !!byId;
       const matchedByUrl = !!byUrl;
-      const ambiguous = !allAgree
+      let ambiguous = !allAgree
         || (!matchedByMeta && !matchedById && !matchedByUrl && byName && catalogNameConflicts.has(best.name))
         || (!matchedByMeta && !matchedById && !matchedByUrl && !byName && byDir && catalogDirConflicts.has(addon.folderName));
 
-      return { catalogAddon: best, ambiguous: !!ambiguous };
+      // ── Overlay resolution (the LangPatch problem) ──
+      // Language patches write INTO another addon's folder and usually replace
+      // its manifest, hijacking title/version.  The folder's main identity must
+      // stay the ORIGINAL; detected patches are reported as installed overlays.
+      let main = best;
+      let layered = false;
+      const installedOverlays: { catalogAddon: CatalogAddon; trackedVersion?: string; trackedDate?: number; needsReapply?: boolean; evidence: 'db' | 'manifest' }[] = [];
+      const ownership = dirOwnership.get(addon.folderName);
+      if (ownership) {
+        // Overlays tracked in the YAAM database are installed by definition
+        for (const ov of addon.yaamMeta?.overlays ?? []) {
+          const ca = catalogById.get(ov.esouid);
+          if (ca) {
+            installedOverlays.push({ catalogAddon: ca, trackedVersion: ov.catalogVersion, trackedDate: ov.catalogDate, needsReapply: ov.needsReapply, evidence: 'db' });
+          }
+        }
+        const overlayIds = new Set(ownership.overlays.map((o) => o.id));
+        if (overlayIds.has(main.id) && ownership.original) {
+          // The best match IS a patch (hijacked manifest, dependency URL or a
+          // legacy DB entry pointing at the patch) → redirect to the original.
+          if (!installedOverlays.some((o) => o.catalogAddon.id === main.id)) {
+            installedOverlays.push({ catalogAddon: main, evidence: 'manifest' });
+            layered = true; // manifest identity belongs to the patch, original untracked
+          }
+          main = ownership.original;
+          // The dir conflict is explained by the overlay split — not ambiguous.
+          if (allAgree) ambiguous = false;
+        } else if (ownership.original && main.id === ownership.original.id) {
+          // Main match is already the original — the manifest title may still
+          // reveal a hijacking patch that was installed outside YAAM.
+          const hijacked = findHijackedManifestOverlay(addon.title, ownership.overlays);
+          if (hijacked && !installedOverlays.some((o) => o.catalogAddon.id === hijacked.id)) {
+            installedOverlays.push({ catalogAddon: hijacked, evidence: 'manifest' });
+            layered = true;
+          }
+        }
+      }
+
+      return { catalogAddon: main, ambiguous: !!ambiguous, installedOverlays, layered };
     },
-    [catalogById, catalogByUrl, catalogByName, catalogByDir, catalogNameConflicts, catalogDirConflicts]
+    [catalogById, catalogByUrl, catalogByName, catalogByDir, catalogNameConflicts, catalogDirConflicts, dirOwnership]
   );
 
   /** Convenience: just the CatalogAddon (for call sites that don't need ambiguity info) */
@@ -555,6 +682,11 @@ function App() {
       // Prefer the one with higher downloads (more likely the maintained fork)
       for (const ca of candidates) {
         if (ca.id === currentId) continue;
+        // Overlays (language patches / fix packs) are NOT replacements: they
+        // layer INTO the folder with an independent version history — a patch
+        // version being "higher" than the original's says nothing.  They are
+        // handled by the overlay flow (install/update as overlay) instead.
+        if (overlayTargetNames.has(ca.id)) continue;
         // Skip entries where the shared dir is only a bundled secondary
         // (not directories[0]) — this addon just bundles a lib, not a real replacement
         if (ca.directories[0] !== addon.folderName) continue;
@@ -571,7 +703,7 @@ function App() {
       }
     }
     return map;
-  }, [addons, catalogAddons, getCatalogAddon]);
+  }, [addons, catalogAddons, getCatalogAddon, overlayTargetNames]);
 
   // Set of all known addon names (folder names + titles) for dependency checking
   const knownAddonNames = useMemo(() => new Set(addonMap.keys()), [addonMap]);
@@ -820,6 +952,15 @@ function App() {
       // Skip addons installed/updated in this session (not rescanned yet)
       if (recentlyUpdated.has(catalogAddon.id)) return false;
 
+      // ── Layered guard (LangPatch hijacked the manifest) ──
+      // The local manifest version belongs to the PATCH, not the original —
+      // any comparison against the original's catalog version is meaningless.
+      // Without a deterministic Tier-2 anchor these folders are reported in
+      // the dedicated "layered" section of the Update-All dialog instead.
+      if (!addon.yaamMeta?.catalogVersion && getCatalogMatch(addon)?.layered) {
+        return false;
+      }
+
       // ── Tier 0: Catalog diff (most reliable) ──
       // If the catalog entry changed since last session AND the local addon
       // doesn't already match the new catalog version → definitely an update.
@@ -901,7 +1042,7 @@ function App() {
       }
       return false;
     },
-    [recentlyUpdated, catalogChangedIds, getEffectiveVersion]
+    [recentlyUpdated, catalogChangedIds, getEffectiveVersion, getCatalogMatch]
   );
 
   // Count of addons that have a newer version in the catalog (for Update All button)
@@ -930,20 +1071,32 @@ function App() {
     const seen = new Set<string>();
     let count = 0;
     for (const addon of addons) {
-      const catalogAddon = getCatalogAddon(addon);
-      if (!catalogAddon || seen.has(catalogAddon.id)) continue;
+      const match = getCatalogMatch(addon);
+      if (!match || seen.has(match.catalogAddon.id)) continue;
+      const catalogAddon = match.catalogAddon;
       if (isUpdateAvailable(addon, catalogAddon)) {
         seen.add(catalogAddon.id); // already counted in updateCount
         continue;
       }
       if (recentlyUpdated.has(catalogAddon.id)) continue;
+      // Layered folders have their own dialog section — not "might update"
+      if (match.layered) continue;
       // Only untracked addons (no/empty catalogVersion) can be "might update"
       if (addon.yaamMeta?.catalogVersion) continue;
       const localVer = getEffectiveVersion(addon, catalogAddon);
       if (localVer.trim() === catalogAddon.version.trim()) continue;
+      if (versionsDigitEqual(localVer, catalogAddon.version)) continue;
       const cmp = compareVersionStrings(localVer, catalogAddon.version, catalogAddon.date);
       // cmp === 0 means inconclusive (scheme mismatch) — count as "might update"
       if (cmp === 0) {
+        seen.add(catalogAddon.id);
+        count++;
+      } else if (cmp > 0 && addon.manifestMtime
+        && catalogAddon.date > addon.manifestMtime + MTIME_UPDATE_SLACK_SECONDS) {
+        // Stateless mtime hint: version strings say "local is newer", but the
+        // catalog published well AFTER the manifest landed on disk — the
+        // "newer" verdict is likely a scheme artifact (e.g. "2.3.22 build
+        // 1442" vs "2.3.22").  Surface it for review.
         seen.add(catalogAddon.id);
         count++;
       }
@@ -951,7 +1104,204 @@ function App() {
     console.log('[YAAM] updateCount', updateCount, 'mightUpdateCount', count,
       'addons', addons.length, 'catalog', addons.filter(a => getCatalogAddon(a)).length);
     return count;
-  }, [addons, getCatalogAddon, isUpdateAvailable, getEffectiveVersion, updateCount, recentlyUpdated]);
+  }, [addons, getCatalogAddon, getCatalogMatch, isUpdateAvailable, getEffectiveVersion, updateCount, recentlyUpdated]);
+
+  // ── Baseline commit ──
+  // Candidates: addons with an unambiguous catalog match, no pending update,
+  // and no deterministic Tier-2 anchor yet.  Committing writes the CURRENT
+  // catalog version/date as install-time anchor (DB + marker), so every future
+  // catalog change becomes a reliably detected update — the honest way out of
+  // heuristic version comparison for chaotic version schemes.
+  const baselineCandidates = useMemo(() => {
+    const entries: BaselineEntryUI[] = [];
+    let alreadyTracked = 0;
+    let skippedUpdate = 0;
+    let skippedAmbiguous = 0;
+    for (const addon of addons) {
+      const match = getCatalogMatch(addon);
+      if (!match) continue;
+      const ca = match.catalogAddon;
+      if (match.ambiguous) { skippedAmbiguous++; continue; }
+      if (isUpdateAvailable(addon, ca)) { skippedUpdate++; continue; }
+      // Detected-but-untracked overlays get anchored alongside the original —
+      // afterwards patch updates are detected deterministically too.
+      const untrackedOverlays = match.installedOverlays
+        .filter((o) => o.evidence === 'manifest')
+        .map((o) => ({
+          esouid: o.catalogAddon.id,
+          catalogName: o.catalogAddon.name,
+          catalogVersion: o.catalogAddon.version,
+          catalogDate: o.catalogAddon.date || undefined,
+        }));
+      // Already deterministically tracked at the current catalog version+date
+      const meta = addon.yaamMeta;
+      if (meta?.catalogVersion === ca.version && (!ca.date || meta?.catalogDate === ca.date)
+        && meta?.localVersion === addon.version && untrackedOverlays.length === 0) {
+        alreadyTracked++;
+        continue;
+      }
+      entries.push({
+        folderName: addon.folderName,
+        esouid: ca.id,
+        url: ca.infoUrl,
+        name: ca.name,
+        author: ca.author,
+        catalogVersion: ca.version,
+        catalogDate: ca.date || undefined,
+        localVersion: addon.version,
+        overlays: untrackedOverlays.length > 0 ? untrackedOverlays : undefined,
+      });
+    }
+    return { entries, alreadyTracked, skippedUpdate, skippedAmbiguous };
+  }, [addons, getCatalogMatch, isUpdateAvailable]);
+
+  // ── Overlay updates (language patches / fix packs) ──
+  // Each installed overlay has its own catalog identity and version history,
+  // independent of the folder's main addon.  needsReapply overlays (overwritten
+  // by a main-addon update) always count as actionable.
+  const overlayUpdates = useMemo(() => {
+    const items: { folderName: string; addonTitle: string; overlay: CatalogAddon; installedVersion: string; needsReapply: boolean; evidence: 'db' | 'manifest' }[] = [];
+    const seen = new Set<string>();
+    for (const addon of addons) {
+      const match = getCatalogMatch(addon);
+      if (!match || match.installedOverlays.length === 0) continue;
+      for (const ov of match.installedOverlays) {
+        if (seen.has(ov.catalogAddon.id) || recentlyUpdated.has(ov.catalogAddon.id)) continue;
+        const installedVersion = ov.trackedVersion ?? addon.version;
+        let hasUpdate = false;
+        if (ov.needsReapply) {
+          hasUpdate = true;
+        } else if (ov.evidence === 'db') {
+          hasUpdate = (!!ov.trackedVersion
+            && ov.trackedVersion !== ov.catalogAddon.version
+            && !versionsDigitEqual(ov.trackedVersion, ov.catalogAddon.version))
+            || (!!ov.trackedDate && !!ov.catalogAddon.date && ov.trackedDate !== ov.catalogAddon.date);
+        } else {
+          // Manifest evidence: the local manifest version IS the patch version
+          const lv = addon.version;
+          if (lv && lv.trim() !== ov.catalogAddon.version.trim() && !versionsDigitEqual(lv, ov.catalogAddon.version)) {
+            hasUpdate = compareVersionStrings(lv, ov.catalogAddon.version, ov.catalogAddon.date) <= 0;
+          }
+        }
+        if (hasUpdate) {
+          seen.add(ov.catalogAddon.id);
+          items.push({ folderName: addon.folderName, addonTitle: addon.title, overlay: ov.catalogAddon, installedVersion, needsReapply: !!ov.needsReapply, evidence: ov.evidence });
+        }
+      }
+    }
+    return items;
+  }, [addons, getCatalogMatch, recentlyUpdated]);
+
+  // Folders whose manifest is hijacked by an untracked patch: the original's
+  // on-disk state is unknown.  Offered as explicit reinstall in the dialog.
+  const layeredItems = useMemo(() => {
+    const items: { folderName: string; title: string; original: CatalogAddon; patchName: string }[] = [];
+    for (const addon of addons) {
+      const match = getCatalogMatch(addon);
+      if (!match?.layered) continue;
+      const patch = match.installedOverlays.find((o) => o.evidence === 'manifest');
+      items.push({
+        folderName: addon.folderName,
+        title: addon.title,
+        original: match.catalogAddon,
+        patchName: patch?.catalogAddon.name ?? 'unknown patch',
+      });
+    }
+    return items;
+  }, [addons, getCatalogMatch]);
+
+  const handleCommitBaselineClick = useCallback(() => {
+    if (!addonPath || baselineCandidates.entries.length === 0) return;
+    setBaselineConfirm(baselineCandidates);
+  }, [addonPath, baselineCandidates]);
+
+  const handleCommitBaselineConfirm = useCallback(async () => {
+    if (!addonPath || !baselineConfirm) return;
+    const { entries } = baselineConfirm;
+    setBaselineConfirm(null);
+    setLoading(true);
+    try {
+      const res = await window.electronAPI.commitBaseline(addonPath, entries);
+      for (const d of res.details) addLog(`  ${d}`, 'info');
+      const undoAction = res.trackingBackupDir ? {
+        label: '↩ Undo',
+        onClick: async () => {
+          try {
+            const undo = await window.electronAPI.restoreTrackingState(addonPath, res.trackingBackupDir);
+            if (undo.restored) {
+              addLog(`Baseline undone: tracking state restored (${undo.markers} marker(s))`, 'success');
+              scanPath(addonPath);
+            } else {
+              addLog(`Baseline undo failed: ${undo.error ?? 'unknown error'}`, 'error');
+            }
+          } catch (e: unknown) { addLog(`Baseline undo failed: ${errMsg(e)}`, 'error'); }
+        },
+      } : undefined;
+      setLogs((prev) => [...prev, { timestamp: new Date(), message: `Baseline committed: ${res.anchored} addon(s) anchored as up-to-date (deterministic tracking active)`, level: 'success' as const, action: undoAction }]);
+      await scanPath(addonPath);
+    } catch (err: unknown) {
+      addLog(`Baseline commit failed: ${errMsg(err)}`, 'error');
+    } finally {
+      setLoading(false);
+    }
+  }, [addonPath, baselineConfirm, addLog, scanPath]);
+
+  // ── Folder hygiene ──
+  const handleFolderHygiene = useCallback(async () => {
+    if (!addonPath) return;
+    setLoading(true);
+    try {
+      const preview = await window.electronAPI.previewFolderHygiene(addonPath);
+      const total = preview.strayManifests.length + preview.duplicates.length + preview.unclaimedRootFiles.length;
+      if (total === 0) {
+        addLog('Folder hygiene: no problems found — the AddOns folder is clean', 'success');
+        return;
+      }
+      setHygienePreview(preview);
+    } catch (err: unknown) {
+      addLog(`Folder hygiene scan failed: ${errMsg(err)}`, 'error');
+    } finally {
+      setLoading(false);
+    }
+  }, [addonPath, addLog]);
+
+  const handleHygieneConfirm = useCallback(async (actions: { repairs: string[]; removals: string[] }) => {
+    setHygienePreview(null);
+    if (!addonPath) return;
+    setLoading(true);
+    try {
+      const res = await window.electronAPI.applyFolderHygiene(addonPath, actions);
+      for (const e of res.errors) addLog(`Hygiene: ${e}`, 'warn');
+      const totalChanged = res.repaired.length + res.removed.length;
+      if (totalChanged > 0) {
+        const parts: string[] = [];
+        if (res.repaired.length > 0) parts.push(`repaired ${res.repaired.length} broken install(s): ${res.repaired.join(', ')}`);
+        if (res.removed.length > 0) parts.push(`moved ${res.removed.length} item(s) to Removed/_hygiene/`);
+        const undoInfo = res.undo;
+        setLogs((prev) => [...prev, {
+          timestamp: new Date(),
+          message: `Folder hygiene: ${parts.join('; ')} (nothing deleted)`,
+          level: 'success' as const,
+          action: {
+            label: '↩ Undo',
+            onClick: async () => {
+              try {
+                const undo = await window.electronAPI.undoFolderHygiene(addonPath, undoInfo);
+                for (const e of undo.errors) addLog(`Hygiene undo: ${e}`, 'warn');
+                addLog(`Hygiene undone: ${undo.restored} item(s) moved back`, undo.restored > 0 ? 'success' : 'warn');
+                if (undo.restored > 0) scanPath(addonPath);
+              } catch (e: unknown) { addLog(`Hygiene undo failed: ${errMsg(e)}`, 'error'); }
+            },
+          },
+        }]);
+      }
+      await scanPath(addonPath);
+    } catch (err: unknown) {
+      addLog(`Folder hygiene failed: ${errMsg(err)}`, 'error');
+    } finally {
+      setLoading(false);
+    }
+  }, [addonPath, addLog, scanPath]);
 
   // Set of folder names that have an update available (used for sorting to top)
   // Authoritative set of catalog addon IDs that have an update available.
@@ -1033,12 +1383,15 @@ function App() {
       if (!addonPath) return;
       addLog(`Deleting "${folderName}"...`, 'warn');
       try {
-        // Backup addon before deletion so it appears in Go Back
+        // Backup addon before deletion so it appears in Go Back.
+        // Versionless manifests get backed up too (as "-unknown").
         const addon = addons.find(a => a.folderName === folderName);
         let backupPath = '';
-        if (addon && addon.version) {
+        if (addon) {
           backupPath = await window.electronAPI.backupAddonFolder(addonPath, folderName, addon.version);
         }
+        // Collect SavedVars backups so Undo can restore them alongside the folder
+        const svBackups: { dir: string; files: string[] }[] = [];
         if (alsoDeleteSavedVars) {
           // Delete SavedVars for parent + all sub-addon names
           const names = [folderName, ...(addon?.subAddons.map(s => s.folderName) || [])];
@@ -1046,6 +1399,9 @@ function App() {
           for (const name of names) {
             const svResult = await window.electronAPI.deleteSavedVars(addonPath, name);
             allDeleted.push(...svResult.deleted);
+            if (svResult.deleted.length > 0 && svResult.backupDir) {
+              svBackups.push({ dir: svResult.backupDir, files: svResult.deleted });
+            }
           }
           if (allDeleted.length > 0) {
             addLog(`Removed SavedVariables: ${allDeleted.join(', ')} (backed up)`, 'info');
@@ -1059,8 +1415,16 @@ function App() {
           onClick: async () => {
             try {
               const ok = await window.electronAPI.restoreAddonBackup(addonPath, folderName, backupPath);
+              // Restore SavedVars deleted in the same operation
+              let svRestored = 0;
+              for (const { dir, files } of svBackups) {
+                for (const file of files) {
+                  const res = await window.electronAPI.restoreSvFile(addonPath, `${dir}/${file}`);
+                  if (res.restored) svRestored++;
+                }
+              }
               if (ok) {
-                addLog(`Restored "${folderName}" from backup`, 'success');
+                addLog(`Restored "${folderName}" from backup${svRestored > 0 ? ` + ${svRestored} SavedVariables file(s)` : ''}`, 'success');
                 scanPath(addonPath);
               } else {
                 addLog(`Restore failed: backup not found`, 'error');
@@ -1081,10 +1445,11 @@ function App() {
       if (!addonPath) return;
       addLog(`Deleting "${folderName}" with exclusive refs...`, 'warn');
       try {
-        // Backup addon (and its exclusive libs) before deletion so they appear in Go Back
+        // Backup addon (and its exclusive libs) before deletion so they appear
+        // in Go Back — versionless manifests included (backed up as "-unknown").
         const addon = addons.find(a => a.folderName === folderName);
         const backupPaths: { folder: string; path: string }[] = [];
-        if (addon && addon.version) {
+        if (addon) {
           const bp = await window.electronAPI.backupAddonFolder(addonPath, folderName, addon.version);
           if (bp) backupPaths.push({ folder: folderName, path: bp });
         }
@@ -1097,12 +1462,14 @@ function App() {
           ]);
           for (const depName of depNames) {
             const depAddon = addons.find(a => a.folderName === depName || a.title === depName);
-            if (depAddon && depAddon.version) {
+            if (depAddon) {
               const bp = await window.electronAPI.backupAddonFolder(addonPath, depAddon.folderName, depAddon.version);
               if (bp) backupPaths.push({ folder: depAddon.folderName, path: bp });
             }
           }
         }
+        // Collect SavedVars backups so Undo can restore them alongside the folders
+        const svBackups: { dir: string; files: string[] }[] = [];
         if (alsoDeleteSavedVars) {
           // Delete SavedVars for parent + all sub-addon names
           const names = [folderName, ...(addon?.subAddons.map(s => s.folderName) || [])];
@@ -1110,6 +1477,9 @@ function App() {
           for (const name of names) {
             const svResult = await window.electronAPI.deleteSavedVars(addonPath, name);
             allDeleted.push(...svResult.deleted);
+            if (svResult.deleted.length > 0 && svResult.backupDir) {
+              svBackups.push({ dir: svResult.backupDir, files: svResult.deleted });
+            }
           }
           if (allDeleted.length > 0) {
             addLog(`Removed SavedVariables: ${allDeleted.join(', ')} (backed up)`, 'info');
@@ -1133,8 +1503,16 @@ function App() {
                   if (ok) restored++;
                 }
               }
+              // Restore SavedVars deleted in the same operation
+              let svRestored = 0;
+              for (const { dir, files } of svBackups) {
+                for (const file of files) {
+                  const res = await window.electronAPI.restoreSvFile(addonPath, `${dir}/${file}`);
+                  if (res.restored) svRestored++;
+                }
+              }
               if (restored > 0) {
-                addLog(`Restored ${restored} addon(s) from backup`, 'success');
+                addLog(`Restored ${restored} addon(s) from backup${svRestored > 0 ? ` + ${svRestored} SavedVariables file(s)` : ''}`, 'success');
                 scanPath(addonPath);
               } else {
                 addLog('Restore failed: no backups found', 'error');
@@ -1159,7 +1537,7 @@ function App() {
       try {
         const backupPaths: { folder: string; path: string }[] = [];
         for (const lib of libraries) {
-          if (unreferencedLibs.has(lib.folderName) && lib.version) {
+          if (unreferencedLibs.has(lib.folderName)) {
             const bp = await window.electronAPI.backupAddonFolder(addonPath, lib.folderName, lib.version);
             if (bp) backupPaths.push({ folder: lib.folderName, path: bp });
           }
@@ -1219,7 +1597,7 @@ function App() {
       const backupPaths: { folder: string; path: string }[] = [];
       for (const folderName of all) {
         const lib = libraries.find(l => l.folderName === folderName);
-        if (lib && lib.version) {
+        if (lib) {
           const bp = await window.electronAPI.backupAddonFolder(addonPath, folderName, lib.version);
           if (bp) backupPaths.push({ folder: folderName, path: bp });
         }
@@ -1302,16 +1680,19 @@ function App() {
     }
 
     // Add "might update" addons: untracked addons where version comparison
-    // is inconclusive (format mismatch).
+    // is inconclusive (format mismatch).  Layered folders are excluded — their
+    // manifest version belongs to a patch and gets a dedicated section below.
     for (const addon of addons) {
       const match = getCatalogMatch(addon);
       if (!match || seen.has(match.catalogAddon.id)) continue;
+      if (match.layered) continue;
       const ca = match.catalogAddon;
       if (recentlyUpdated.has(ca.id)) continue;
       // Only untracked addons (no/empty catalogVersion) can be "might update"
       if (addon.yaamMeta?.catalogVersion) continue;
       const localVer = getEffectiveVersion(addon, ca);
-      const cmp = localVer.trim() === ca.version.trim() ? 1 : compareVersionStrings(localVer, ca.version, ca.date);
+      if (localVer.trim() === ca.version.trim() || versionsDigitEqual(localVer, ca.version)) continue;
+      const cmp = compareVersionStrings(localVer, ca.version, ca.date);
       if (cmp === 0) {
         seen.add(ca.id);
         updatable.push({
@@ -1324,7 +1705,57 @@ function App() {
           mightUpdate: true,
           mightUpdateReason: 'not-tracked',
         });
+      } else if (cmp > 0 && addon.manifestMtime
+        && ca.date > addon.manifestMtime + MTIME_UPDATE_SLACK_SECONDS) {
+        // Stateless mtime hint (see mightUpdateCount): "local newer" verdict
+        // contradicted by a catalog publish well after the files hit disk.
+        seen.add(ca.id);
+        updatable.push({
+          folderName: addon.folderName,
+          title: addon.title,
+          localVersion: getEffectiveVersion(addon, ca),
+          catalogVersion: ca.version,
+          catalogId: ca.id,
+          ambiguous: match.ambiguous,
+          mightUpdate: true,
+          mightUpdateReason: 'date-newer',
+        });
       }
+    }
+
+    // Overlay updates: language patches / fix packs with their own identity.
+    // Installed as overlays (overlayFor) so they never hijack the folder's
+    // main identity in the database.
+    for (const item of overlayUpdates) {
+      if (seen.has(item.overlay.id)) continue;
+      seen.add(item.overlay.id);
+      updatable.push({
+        folderName: item.folderName,
+        title: item.overlay.name,
+        localVersion: item.installedVersion || '?',
+        catalogVersion: item.overlay.version,
+        catalogId: item.overlay.id,
+        overlay: true,
+        overlayOf: item.addonTitle || item.folderName,
+        needsReapply: item.needsReapply,
+      });
+    }
+
+    // Layered folders: an untracked patch hijacked the manifest — the
+    // original's on-disk version is unknown.  Reinstalling the original
+    // overwrites the patch (which is offered above / in the browser).
+    for (const li of layeredItems) {
+      if (seen.has(li.original.id)) continue;
+      seen.add(li.original.id);
+      updatable.push({
+        folderName: li.folderName,
+        title: li.original.name,
+        localVersion: `unknown (patched: ${li.patchName})`,
+        catalogVersion: li.original.version,
+        catalogId: li.original.id,
+        layered: true,
+        overlayOf: li.patchName,
+      });
     }
 
     if (updatable.length === 0) {
@@ -1334,14 +1765,15 @@ function App() {
 
     // Show selection dialog
     setUpdateAllList(updatable);
-  }, [addons, addonPath, getCatalogMatch, addLog, updatingAll, isUpdateAvailable, getEffectiveVersion, replacementCandidates, recentlyUpdated]);
+  }, [addons, addonPath, getCatalogMatch, addLog, updatingAll, isUpdateAvailable, getEffectiveVersion, replacementCandidates, recentlyUpdated, overlayUpdates, layeredItems]);
 
   const handleUpdateAllConfirm = useCallback(async (selectedCatalogIds: string[]) => {
     setUpdateAllList(null);
     if (!addonPath || selectedCatalogIds.length === 0) return;
 
+    type UpdateTask = { addon: AddonInfo; catalogAddon: CatalogAddon; isReplacement?: boolean; overlayFor?: string; isReapply?: boolean };
     const selectedSet = new Set(selectedCatalogIds);
-    const updatable: { addon: AddonInfo; catalogAddon: CatalogAddon; isReplacement?: boolean }[] = [];
+    const updatable: UpdateTask[] = [];
     const seen = new Set<string>();
 
     // Build folderName → addon map for fast lookup
@@ -1351,6 +1783,9 @@ function App() {
     // Collect replacement catalog IDs so we can flag them
     const replacementIds = new Set<string>();
     for (const [, replacement] of replacementCandidates) replacementIds.add(replacement.id);
+
+    // Overlay UID → target folder (installs must preserve the main identity)
+    const overlayIdToFolder = new Map(overlayUpdates.map(i => [i.overlay.id, i.folderName]));
 
     // Resolve each selected catalog ID directly (avoids fragile reverse-lookup)
     for (const id of selectedCatalogIds) {
@@ -1368,7 +1803,7 @@ function App() {
       }
       if (addon) {
         seen.add(id);
-        updatable.push({ addon, catalogAddon, isReplacement: replacementIds.has(id) });
+        updatable.push({ addon, catalogAddon, isReplacement: replacementIds.has(id), overlayFor: overlayIdToFolder.get(id) });
       }
     }
 
@@ -1377,48 +1812,80 @@ function App() {
       return;
     }
 
+    // ── Phase split ──
+    // Main addons install first, overlays afterwards, so a patch always ends
+    // up layered ON TOP of the freshly updated original.
+    const mainPhase = updatable.filter(t => !t.overlayFor);
+    const overlayPhase = updatable.filter(t => t.overlayFor);
+
+    // Auto re-apply: an updated original overwrites its tracked overlays —
+    // queue every tracked overlay that isn't already selected for update.
+    for (const task of mainPhase) {
+      if (task.isReplacement) continue; // replacement = different addon, overlays don't apply
+      for (const ov of task.addon.yaamMeta?.overlays ?? []) {
+        if (selectedSet.has(ov.esouid) || seen.has(ov.esouid)) continue;
+        const ca = catalogById.get(ov.esouid);
+        if (!ca) continue;
+        seen.add(ov.esouid);
+        overlayPhase.push({ addon: task.addon, catalogAddon: ca, overlayFor: task.addon.folderName, isReapply: true });
+        addLog(`Queued re-apply of "${ov.catalogName}" on top of ${task.addon.folderName} after its update`);
+      }
+    }
+
+    const totalTasks = mainPhase.length + overlayPhase.length;
     setUpdatingAll(true);
-    setUpdateRemaining(updatable.length);
-    setUpdateTotal(updatable.length);
+    setUpdateRemaining(totalTasks);
+    setUpdateTotal(totalTasks);
     updateCancelRef.current = false;
     setLoading(true);
-    addLog(`Updating ${updatable.length} addon(s) from catalog in parallel...`);
+    addLog(`Updating ${totalTasks} item(s) from catalog (${mainPhase.length} addon(s), ${overlayPhase.length} overlay(s))...`);
 
     let success = 0;
     let failed = 0;
     let cancelled = 0;
+    let done = 0;
     const newVersions: Record<string, string> = {};
+    // Folders whose main addon updated successfully — re-applies run only for those
+    const updatedFolders = new Set<string>();
+    // All backups taken during this run — powers the "Undo all" log action
+    const runBackups: { folder: string; path: string }[] = [];
 
-    try {
-      // Process in parallel batches of 4
-      const BATCH_SIZE = 4;
-      for (let i = 0; i < updatable.length; i += BATCH_SIZE) {
+    // Process one phase in parallel batches of 4
+    const BATCH_SIZE = 4;
+    const runPhase = async (tasks: UpdateTask[]): Promise<void> => {
+      for (let i = 0; i < tasks.length; i += BATCH_SIZE) {
         if (updateCancelRef.current) {
-          cancelled = updatable.length - i;
-          break;
+          cancelled += tasks.length - i;
+          return;
         }
-        const batch = updatable.slice(i, i + BATCH_SIZE);
+        const batch = tasks.slice(i, i + BATCH_SIZE);
         const results = await Promise.allSettled(
-          batch.map(async ({ addon, catalogAddon, isReplacement }) => {
+          batch.map(async ({ addon, catalogAddon, isReplacement, overlayFor, isReapply }) => {
             if (updateCancelRef.current) throw new Error('cancelled');
-            // Backup current version before updating
-            if (addon.version) {
-              await window.electronAPI.backupAddonFolder(addonPath, addon.folderName, addon.version);
+            // Backup current version before updating (skip for re-applies — the
+            // folder was already backed up before its main update this run)
+            if (!isReapply) {
+              const bp = await window.electronAPI.backupAddonFolder(addonPath, addon.folderName, addon.version);
+              if (bp && !runBackups.some(b => b.folder === addon.folderName)) {
+                runBackups.push({ folder: addon.folderName, path: bp });
+              }
             }
             // For replacements: delete old folder so stale files don't linger
             if (isReplacement) {
               addLog(`Replacing "${addon.folderName}" with "${catalogAddon.name}"...`);
               await window.electronAPI.deleteAddon(addonPath, addon.folderName);
+            } else if (overlayFor) {
+              addLog(`${isReapply ? 'Re-applying' : 'Updating'} overlay "${catalogAddon.name}" → v${catalogAddon.version} in ${overlayFor}...`);
             } else {
               addLog(`Updating "${addon.folderName}" ${addon.version} → ${catalogAddon.version}...`);
             }
             try {
-              const result = await window.electronAPI.installAddon(catalogAddon.id, addonPath);
+              const result = await window.electronAPI.installAddon(catalogAddon.id, addonPath, overlayFor ? { overlayFor } : undefined);
               if (result.error) {
-                addLog(`Failed to update "${addon.folderName}": ${result.error}`, 'error');
+                addLog(`Failed to update "${overlayFor ? catalogAddon.name : addon.folderName}": ${result.error}`, 'error');
                 return false;
               } else {
-                addLog(`Updated "${addon.folderName}" (${result.installed.join(', ')})`, 'success');
+                addLog(`${overlayFor ? `Applied overlay "${catalogAddon.name}"` : `Updated "${addon.folderName}"`} (${result.installed.join(', ')})`, 'success');
                 setRecentlyUpdated((prev) => new Set(prev).add(catalogAddon.id));
                 // Remove from catalog diff — this addon is now up to date
                 setCatalogChangedIds(prev => {
@@ -1428,10 +1895,11 @@ function App() {
                   return next;
                 });
                 newVersions[catalogAddon.id] = catalogAddon.version;
+                if (!overlayFor) updatedFolders.add(addon.folderName);
                 return true;
               }
             } catch (err: unknown) {
-              addLog(`Error updating "${addon.folderName}": ${errMsg(err)}`, 'error');
+              addLog(`Error updating "${overlayFor ? catalogAddon.name : addon.folderName}": ${errMsg(err)}`, 'error');
               return false;
             }
           })
@@ -1440,8 +1908,21 @@ function App() {
           if (r.status === 'fulfilled' && r.value) success++;
           else failed++;
         }
-        setUpdateRemaining(Math.max(0, updatable.length - i - batch.length));
+        done += batch.length;
+        setUpdateRemaining(Math.max(0, totalTasks - done));
       }
+    };
+
+    try {
+      await runPhase(mainPhase);
+      // Re-applies only make sense when their original actually updated;
+      // directly selected overlay updates always run.
+      const overlayTasks = overlayPhase.filter(t => !t.isReapply || updatedFolders.has(t.addon.folderName));
+      const skippedReapplies = overlayPhase.length - overlayTasks.length;
+      if (skippedReapplies > 0) {
+        addLog(`Skipped ${skippedReapplies} overlay re-appl${skippedReapplies === 1 ? 'y' : 'ies'} (original update did not succeed)`, 'warn');
+      }
+      await runPhase(overlayTasks);
     } catch (err: unknown) {
       addLog(`Update All encountered an error: ${errMsg(err)}`, 'error');
     } finally {
@@ -1453,14 +1934,28 @@ function App() {
       updateCancelRef.current = false;
       const summaryParts = [`${success} updated`, `${failed} failed`];
       if (cancelled > 0) summaryParts.push(`${cancelled} cancelled`);
-      addLog(`Update All complete: ${summaryParts.join(', ')}`, success > 0 ? 'success' : 'warn');
+      const undoAllAction = success > 0 && runBackups.length > 0 ? {
+        label: '↩ Undo all',
+        onClick: async () => {
+          try {
+            let restored = 0;
+            for (const { folder, path: bp } of runBackups) {
+              const ok = await window.electronAPI.restoreAddonBackup(addonPath, folder, bp);
+              if (ok) restored++;
+            }
+            addLog(`Undo Update All: restored ${restored} of ${runBackups.length} addon(s) to their pre-update versions`, restored > 0 ? 'success' : 'error');
+            if (restored > 0) scanPath(addonPath);
+          } catch (e: unknown) { addLog(`Undo failed: ${errMsg(e)}`, 'error'); }
+        },
+      } : undefined;
+      setLogs((prev) => [...prev, { timestamp: new Date(), message: `Update All complete: ${summaryParts.join(', ')}`, level: success > 0 ? 'success' as const : 'warn' as const, action: undoAllAction }]);
       await scanPath(addonPath);
       // Commit the catalog snapshot so next session sees a fresh baseline
       if (success > 0) {
         window.electronAPI.commitCatalogSnapshot(addonPath).catch(() => {});
       }
     }
-  }, [addons, addonPath, catalogById, getCatalogAddon, addLog, scanPath, replacementCandidates]);
+  }, [addons, addonPath, catalogById, getCatalogAddon, addLog, scanPath, replacementCandidates, overlayUpdates]);
 
   const handleCleanupSettings = useCallback(async () => {
     if (!addonPath || addons.length === 0) return;
@@ -1573,37 +2068,47 @@ function App() {
     }
   }, [addonPath, addons, addLog, addCleanupUndoEntry]);
 
-  // Handle install from online browser - refresh local scan
-  const handleOnlineInstall = useCallback(
-    (addon: CatalogAddon) => {
-      if (addonPath) {
-        scanPath(addonPath);
-      }
-    },
-    [addonPath, scanPath]
-  );
-
-  // Move .zip archives from AddOns root to Downloads/ subfolder
   const handleClearLogs = useCallback(() => setLogs([]), []);
 
-  // Open the restore dialog with snapshot and backup data
+  // Open the restore dialog with snapshot, backup, SavedVars and Removed/ data
   const handleGoBack = useCallback(async () => {
     if (!addonPath) return;
     try {
-      const [snaps, bks, svBks] = await Promise.all([
+      const [snaps, bks, svBks, removed] = await Promise.all([
         window.electronAPI.listSnapshots(addonPath),
         window.electronAPI.listAddonBackups(addonPath),
         window.electronAPI.listSvBackups(addonPath),
+        window.electronAPI.listRemoved(addonPath),
       ]);
       setRestoreSnapshots(snaps);
       setRestoreBackups(bks);
       setRestoreSvBackups(svBks);
+      setRestoreRemoved(removed);
       setShowRestoreDialog(true);
       addLog('Opened restore dialog');
     } catch (err: unknown) {
       addLog(`Failed to load restore data: ${errMsg(err)}`, 'error');
     }
   }, [addonPath, addLog]);
+
+  // Restore an entry from Removed/ (deletes, cleanups and hygiene runs all
+  // move folders there — this is their global recovery path)
+  const handleRestoreRemoved = useCallback(async (relPath: string) => {
+    if (!addonPath) return;
+    try {
+      const res = await window.electronAPI.restoreRemoved(addonPath, relPath);
+      if (res.restored) {
+        addLog(`Restored "${res.target}" from Removed/`, 'success');
+        const removed = await window.electronAPI.listRemoved(addonPath);
+        setRestoreRemoved(removed);
+        scanPath(addonPath);
+      } else {
+        addLog(`Restore failed: ${res.error ?? 'unknown error'}`, 'error');
+      }
+    } catch (err: unknown) {
+      addLog(`Restore failed: ${errMsg(err)}`, 'error');
+    }
+  }, [addonPath, addLog, scanPath]);
 
   // Restore an addon from a backup
   const handleRestoreBackup = useCallback(
@@ -1668,6 +2173,25 @@ function App() {
     [addonPath, addLog]
   );
 
+  // Log a "moved archives" entry with an Undo action that moves them back
+  const addDownloadsMoveLog = useCallback((moved: string[]) => {
+    setLogs((prev) => [...prev, {
+      timestamp: new Date(),
+      message: `Moved ${moved.length} archive(s) to Downloads/: ${moved.join(', ')}`,
+      level: 'success' as const,
+      action: {
+        label: '↩ Undo',
+        onClick: async () => {
+          try {
+            const res = await window.electronAPI.moveDownloadsBack(addonPath, moved);
+            for (const e of res.errors) addLog(`Undo: ${e}`, 'warn');
+            addLog(`Moved ${res.restored.length} archive(s) back to AddOns/`, res.restored.length > 0 ? 'success' : 'warn');
+          } catch (e: unknown) { addLog(`Undo failed: ${errMsg(e)}`, 'error'); }
+        },
+      },
+    }]);
+  }, [addonPath, addLog]);
+
   const handleCleanupDownloads = useCallback(async () => {
     if (!addonPath) return;
     if (skipCleanupConfirm) {
@@ -1679,7 +2203,7 @@ function App() {
         if (result.error) {
           addLog(`Cleanup archives error: ${result.error}`, 'error');
         } else if (result.moved.length > 0) {
-          addLog(`Moved ${result.moved.length} archive(s) to Downloads/: ${result.moved.join(', ')}`, 'success');
+          addDownloadsMoveLog(result.moved);
         } else {
           addLog('No .zip archives found in AddOns folder', 'info');
         }
@@ -1701,7 +2225,7 @@ function App() {
     } catch (err: unknown) {
       addLog(`Cleanup preview failed: ${errMsg(err)}`, 'error');
     }
-  }, [addonPath, addLog, skipCleanupConfirm]);
+  }, [addonPath, addLog, skipCleanupConfirm, addDownloadsMoveLog]);
 
   const handleCleanupDownloadsConfirm = useCallback(async (selectedItems: string[]) => {
     setCleanupDialog(null);
@@ -1711,14 +2235,14 @@ function App() {
     try {
       const result = await window.electronAPI.cleanupDownloadsSelected(addonPath, selectedItems);
       if (result.moved.length > 0) {
-        addLog(`Moved ${result.moved.length} archive(s) to Downloads/: ${result.moved.join(', ')}`, 'success');
+        addDownloadsMoveLog(result.moved);
       }
     } catch (err: unknown) {
       addLog(`Cleanup archives failed: ${errMsg(err)}`, 'error');
     } finally {
       setLoading(false);
     }
-  }, [addonPath, addLog]);
+  }, [addonPath, addLog, addDownloadsMoveLog]);
 
   const handleCleanupBackups = useCallback(async () => {
     if (!addonPath) return;
@@ -1744,7 +2268,10 @@ function App() {
   // Install/reinstall an addon from the catalog (used by tree items)
   const handleInstallAddon = useCallback(
     async (catalogAddon: CatalogAddon) => {
-      if (!addonPath) return;
+      if (!addonPath) {
+        addLog('Set an AddOns path before installing', 'warn');
+        return;
+      }
       setInstallingAddon(catalogAddon.id);
       addLog(`Installing "${catalogAddon.name}" from catalog...`);
       try {
@@ -1754,10 +2281,24 @@ function App() {
         );
         let backupPath = '';
         const backupFolder = existingAddon?.folderName || '';
-        if (existingAddon && existingAddon.version) {
+        if (existingAddon) {
           backupPath = await window.electronAPI.backupAddonFolder(addonPath, existingAddon.folderName, existingAddon.version);
         }
-        const result = await window.electronAPI.installAddon(catalogAddon.id, addonPath);
+        // If this catalog entry is a language patch / fix pack targeting an
+        // installed folder, install it as an OVERLAY so it never hijacks the
+        // folder's main identity in the tracking database.
+        let overlayFor: string | undefined;
+        for (const dir of catalogAddon.directories) {
+          const ownership = dirOwnership.get(dir);
+          if (ownership?.overlays.some((o) => o.id === catalogAddon.id) && installedDirNames.has(dir)) {
+            overlayFor = dir;
+            break;
+          }
+        }
+        if (overlayFor) {
+          addLog(`"${catalogAddon.name}" is a patch for ${overlayFor} — installing as overlay (main identity preserved)`);
+        }
+        const result = await window.electronAPI.installAddon(catalogAddon.id, addonPath, overlayFor ? { overlayFor } : undefined);
         if (result.error) {
           addLog(`Failed to install "${catalogAddon.name}": ${result.error}`, 'error');
         } else {
@@ -1797,7 +2338,7 @@ function App() {
         setInstallingAddon(null);
       }
     },
-    [addonPath, addons, addLog, scanPath]
+    [addonPath, addons, addLog, scanPath, dirOwnership, installedDirNames]
   );
 
   // Simple delete (no savedvars) for inline delete button
@@ -2058,7 +2599,9 @@ function App() {
         onCleanupSettings={handleCleanupSettings}
         onCleanupDownloads={handleCleanupDownloads}
         onCleanupBackups={handleCleanupBackups}
+        onFolderHygiene={handleFolderHygiene}
         onUpdateAll={handleUpdateAll}
+        onCommitBaseline={handleCommitBaselineClick}
         onGoBack={handleGoBack}
         onImportExport={() => setShowImportExport(true)}
         onAbout={() => setShowAbout(true)}
@@ -2069,6 +2612,9 @@ function App() {
         updateCount={updateCount}
         mightUpdateCount={mightUpdateCount}
         replacementCount={replacementCandidates.size}
+        overlayUpdateCount={overlayUpdates.length}
+        layeredCount={layeredItems.length}
+        baselineCount={baselineCandidates.entries.length}
         updatingAll={updatingAll}
         updateRemaining={updateRemaining}
         theme={theme}
@@ -2123,7 +2669,20 @@ function App() {
                   onNavigateCatalog={handleNavigateCatalog}
                   installProgress={installProgress}
                   collapseAllCounter={addonCollapseAll}
-                  hasUpdate={(() => { const ca = getCatalogAddon(addon); return !!ca && isUpdateAvailable(addon, ca); })()}
+                  {...(() => {
+                    const match = getCatalogMatch(addon);
+                    const ca = match?.catalogAddon;
+                    const hasUpd = !!ca && isUpdateAvailable(addon, ca);
+                    return {
+                      hasUpdate: hasUpd,
+                      updateTargetVersion: hasUpd ? ca!.version : undefined,
+                      overlayInfo: match && (match.installedOverlays.length > 0 || match.layered) ? {
+                        count: match.installedOverlays.length,
+                        needsReapply: match.installedOverlays.some(o => o.needsReapply),
+                        layered: match.layered,
+                      } : undefined,
+                    };
+                  })()}
                 />
               </div>
             );
@@ -2176,7 +2735,20 @@ function App() {
                   onNavigateCatalog={handleNavigateCatalog}
                   installProgress={installProgress}
                   collapseAllCounter={libCollapseAll}
-                  hasUpdate={(() => { const ca = getCatalogAddon(lib); return !!ca && isUpdateAvailable(lib, ca); })()}
+                  {...(() => {
+                    const match = getCatalogMatch(lib);
+                    const ca = match?.catalogAddon;
+                    const hasUpd = !!ca && isUpdateAvailable(lib, ca);
+                    return {
+                      hasUpdate: hasUpd,
+                      updateTargetVersion: hasUpd ? ca!.version : undefined,
+                      overlayInfo: match && (match.installedOverlays.length > 0 || match.layered) ? {
+                        count: match.installedOverlays.length,
+                        needsReapply: match.installedOverlays.some(o => o.needsReapply),
+                        layered: match.layered,
+                      } : undefined,
+                    };
+                  })()}
                 />
               </div>
             );
@@ -2194,9 +2766,8 @@ function App() {
           flex={panelWidths[2]}
           installedDirNames={installedDirNames}
           localAddons={addons}
-          addonPath={addonPath}
           knownAddonNames={knownAddonNames}
-          onInstall={handleOnlineInstall}
+          onInstall={handleInstallAddon}
           onLog={addLog}
           onNavigate={handleNavigate}
           onDelete={handleSimpleDelete}
@@ -2208,6 +2779,7 @@ function App() {
           installProgress={installProgress}
           checkUpdateAvailable={isUpdateAvailable}
           updatableCatalogIds={updatableCatalogIds}
+          overlayTargets={overlayTargetNames}
         />
       </div>
       <div className="log-resize-handle" onMouseDown={handleLogResizeStart} title="Drag to resize" />
@@ -2241,9 +2813,11 @@ function App() {
           snapshots={restoreSnapshots}
           backups={restoreBackups}
           svBackups={restoreSvBackups}
+          removedEntries={restoreRemoved}
           currentAddons={addons.map((a) => ({ folderName: a.folderName, version: a.version }))}
           onRestoreBackup={handleRestoreBackup}
           onRestoreSvFile={handleRestoreSvFile}
+          onRestoreRemoved={handleRestoreRemoved}
           onClose={() => setShowRestoreDialog(false)}
         />
       )}
@@ -2270,8 +2844,22 @@ function App() {
             window.electronAPI.saveUiSettings({ fontScale: s.fontScale, fontFamily: s.fontFamily, skipCleanupConfirm: s.skipCleanupConfirm });
           }}
           onCleanupMarkers={addonPath ? async () => {
-            const count = await window.electronAPI.cleanupYaamMarkers(addonPath);
-            addLog(`Removed ${count} .yaam.json marker file${count !== 1 ? 's' : ''} and reset version tracking`, count > 0 ? 'success' : 'warn');
+            const res = await window.electronAPI.cleanupYaamMarkers(addonPath);
+            const undoAction = res.backupDir ? {
+              label: '↩ Undo',
+              onClick: async () => {
+                try {
+                  const undo = await window.electronAPI.restoreTrackingState(addonPath, res.backupDir);
+                  if (undo.restored) {
+                    addLog(`Marker cleanup undone: tracking state restored (${undo.markers} marker(s))`, 'success');
+                    scanPath(addonPath);
+                  } else {
+                    addLog(`Undo failed: ${undo.error ?? 'unknown error'}`, 'error');
+                  }
+                } catch (e: unknown) { addLog(`Undo failed: ${errMsg(e)}`, 'error'); }
+              },
+            } : undefined;
+            setLogs((prev) => [...prev, { timestamp: new Date(), message: `Removed ${res.count} .yaam.json marker file${res.count !== 1 ? 's' : ''} and reset version tracking`, level: res.count > 0 ? 'success' as const : 'warn' as const, action: undoAction }]);
             setShowSettings(false);
             await scanPath(addonPath);
           } : undefined}
@@ -2304,6 +2892,56 @@ function App() {
           onConfirm={handleUpdateAllConfirm}
           onCancel={() => setUpdateAllList(null)}
         />
+      )}
+      {hygienePreview && (
+        <HygieneDialog
+          strayManifests={hygienePreview.strayManifests}
+          duplicates={hygienePreview.duplicates}
+          unclaimedRootFiles={hygienePreview.unclaimedRootFiles}
+          onConfirm={handleHygieneConfirm}
+          onCancel={() => setHygienePreview(null)}
+        />
+      )}
+      {baselineConfirm && (
+        <div className="unsaved-overlay">
+          <div className="restore-dialog" style={{ width: 'min(520px, 90vw)' }} onClick={(e) => e.stopPropagation()}>
+            <div className="restore-header">
+              <div className="restore-title">⚓ Commit Baseline</div>
+            </div>
+            <div className="restore-content" style={{ padding: '16px 20px' }}>
+              <p>
+                Anchor <strong>{baselineConfirm.entries.length}</strong> addon(s) at their current
+                catalog version as <strong>up-to-date</strong>.
+              </p>
+              <p style={{ fontSize: '0.857rem', opacity: 0.8 }}>
+                This switches them from best-effort version guessing to deterministic tracking:
+                any future catalog change is then reliably detected as an update — even when the
+                author changes the version format. No files are modified.
+              </p>
+              <p style={{ fontSize: '0.857rem', opacity: 0.7 }}>
+                Skipped: {baselineConfirm.skippedUpdate} with pending updates (install those first),{' '}
+                {baselineConfirm.skippedAmbiguous} with ambiguous catalog match,{' '}
+                {baselineConfirm.alreadyTracked} already tracked.
+              </p>
+              <div style={{ maxHeight: '200px', overflowY: 'auto', fontSize: '0.8rem', opacity: 0.75, marginTop: '8px' }}>
+                {baselineConfirm.entries.map(e => (
+                  <div key={e.folderName}>
+                    {e.folderName} → "{e.catalogVersion}"
+                    {e.overlays?.map(o => (
+                      <span key={o.esouid} style={{ opacity: 0.8 }}> + 🧩 {o.catalogName} "{o.catalogVersion}"</span>
+                    ))}
+                  </div>
+                ))}
+              </div>
+            </div>
+            <div className="settings-actions" style={{ padding: '12px 16px' }}>
+              <button className="restore-btn" onClick={() => setBaselineConfirm(null)}>Cancel</button>
+              <button className="restore-btn ie-action-btn" onClick={handleCommitBaselineConfirm}>
+                ⚓ Anchor {baselineConfirm.entries.length} addon(s)
+              </button>
+            </div>
+          </div>
+        </div>
       )}
       {deleteConfirm && (
         <div className="unsaved-overlay">

@@ -152,6 +152,45 @@
       "expectedSubParts": [],
       "expectedPreRelease": "rc",
       "expectedPreReleaseNum": 2
+    },
+    {
+      "pattern": "hotfix letter suffix",
+      "input": "3.16.7b",
+      "addon": "HarvestMap (catalog)",
+      "expectedParts": [3, 16, 7],
+      "expectedSubParts": [],
+      "expectedLetterRank": 2
+    },
+    {
+      "pattern": "hotfix letter suffix on LangPatch version",
+      "input": "2.1.5b",
+      "addon": "AsylumTracker.LangPatch (catalog)",
+      "expectedParts": [2, 1, 5],
+      "expectedSubParts": [],
+      "expectedLetterRank": 2
+    },
+    {
+      "pattern": "compact datestamp (YYYYMMDD)",
+      "input": "20240310",
+      "addon": "HodorReflexes (AddOnVersion)",
+      "expectedParts": [2024, 3, 10],
+      "expectedSubParts": []
+    },
+    {
+      "pattern": "multi-letter tail is ignored (language tag, not hotfix)",
+      "input": "36.23PL",
+      "addon": "PL Patch for Dolgubon's (catalog)",
+      "expectedParts": [36, 23],
+      "expectedSubParts": [],
+      "expectedLetterRank": 0
+    },
+    {
+      "pattern": "word tail is ignored",
+      "input": "1.02-custom",
+      "addon": "Dryzler's Taunt Helper Tank Only (catalog)",
+      "expectedParts": [1, 2],
+      "expectedSubParts": [],
+      "expectedLetterRank": 0
     }
   ],
   "compareTests": [
@@ -479,6 +518,83 @@
       "catalogDate": 1774828800,
       "expected": "a<b",
       "_note": "Same suffix 'build' → compare build numbers normally"
+    },
+    {
+      "description": "hotfix letter: plain < lettered (HarvestMap 3.16.7 → 3.16.7b)",
+      "a": "3.16.7",
+      "b": "3.16.7b",
+      "expected": "a<b",
+      "_note": "Letter re-release must be detected as an update, not digit-equal"
+    },
+    {
+      "description": "hotfix letter ordering: a < b",
+      "a": "3.16.7a",
+      "b": "3.16.7b",
+      "expected": "a<b"
+    },
+    {
+      "description": "hotfix letter: lettered > plain (reverse)",
+      "a": "2.1.5b",
+      "b": "2.1.5",
+      "expected": "a>b",
+      "_note": "AsylumTracker.LangPatch catalog style"
+    },
+    {
+      "description": "scheme change: concatenated int vs lettered semver (HarvestMap 315999 vs 3.16.7b)",
+      "a": "315999",
+      "b": "3.16.7b",
+      "catalogDate": 1762720907,
+      "expected": "a==b",
+      "_note": "Real local manifest vs catalog. Scheme mismatch → 0; Tier-2 tracking resolves it"
+    },
+    {
+      "description": "compact datestamp ≡ dotted date (HodorReflexes 20240310 = 2024.03.10)",
+      "a": "20240310",
+      "b": "2024.03.10",
+      "expected": "a=b"
+    },
+    {
+      "description": "compact datestamp: day bump",
+      "a": "20240310",
+      "b": "2024.03.11",
+      "expected": "a<b"
+    },
+    {
+      "description": "scheme change: compact datestamp → semver with catalogDate (user example 20260620 → 2.7.1)",
+      "a": "20260620",
+      "b": "2.7.1",
+      "catalogDate": 1782950400,
+      "expected": "a<b",
+      "_note": "catalogDate = 2026-07-01; local datestamp 2026-06-20 is older than catalog upload"
+    },
+    {
+      "description": "scheme change: compact datestamp → semver, local datestamp newer",
+      "a": "20260620",
+      "b": "2.7.1",
+      "catalogDate": 1767225600,
+      "expected": "a>b",
+      "_note": "catalogDate = 2026-01-01; local datestamp is newer — no update"
+    },
+    {
+      "description": "manifest more detailed than catalog field (GuildHallButton)",
+      "a": "2.3.22 build 1442",
+      "b": "2.3.22",
+      "expected": "a>b",
+      "_note": "Real case: author writes build number only into the manifest — not an update"
+    },
+    {
+      "description": "stale manifest vs counted-up catalog (LibQRCode 1.0 vs 1.0.8)",
+      "a": "1.0",
+      "b": "1.0.8",
+      "catalogDate": 1751476805,
+      "expected": "a==b",
+      "_note": "Real case: author never bumps ## Version. Inconclusive → Tier-2 tracking decides"
+    },
+    {
+      "description": "plain short bump (displayleads 42.0 → 42.1)",
+      "a": "42.0",
+      "b": "42.1",
+      "expected": "a<b"
     }
   ]
 }

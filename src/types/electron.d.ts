@@ -37,7 +37,8 @@ declare global {
       fetchAddonCatalog: (forceRefresh?: boolean) => Promise<CatalogAddon[]>;
       installAddon: (
         addonId: string,
-        addonsPath: string
+        addonsPath: string,
+        opts?: { overlayFor?: string }
       ) => Promise<{ installed: string[]; missingDeps: string[]; error?: string }>;
       getAddonSettings: (addonsPath: string) => Promise<AddonSettingsData>;
       setAddonSetting: (
@@ -137,9 +138,30 @@ declare global {
         matches: { folderName: string; esouid: string; name: string; author: string; version: string; url: string; catalogDate: number; localVersion: string; confident: boolean }[]
       ) => Promise<{ created: number; updated: number; details: string[] }>;
       getYaamDb: (addonsPath: string) => Promise<Record<string, { esouid: string; url: string; catalogName: string; catalogAuthor: string; catalogVersion: string; localVersion: string; installedAt: string; updatedAt: string }>>;
-      cleanupYaamMarkers: (addonsPath: string) => Promise<number>;
+      cleanupYaamMarkers: (addonsPath: string) => Promise<{ count: number; backupDir: string }>;
+      restoreTrackingState: (addonsPath: string, backupDir: string) => Promise<{ restored: boolean; markers: number; error?: string }>;
+      listRemoved: (addonsPath: string) => Promise<{ name: string; relPath: string; fromHygiene: boolean; isDirectory: boolean; sizeBytes: number; mtimeMs: number }[]>;
+      restoreRemoved: (addonsPath: string, relPath: string) => Promise<{ restored: boolean; target: string; error?: string }>;
+      moveDownloadsBack: (addonsPath: string, fileNames: string[]) => Promise<{ restored: string[]; errors: string[] }>;
       updateCatalogSnapshot: (addonsPath: string) => Promise<{ changed: [string, { oldVersion: string; newVersion: string }][]; added: string[]; removed: string[] } | null>;
       commitCatalogSnapshot: (addonsPath: string) => Promise<boolean>;
+      commitBaseline: (
+        addonsPath: string,
+        entries: { folderName: string; esouid: string; url: string; name: string; author: string; catalogVersion: string; catalogDate?: number; localVersion: string; overlays?: { esouid: string; catalogName: string; catalogVersion: string; catalogDate?: number }[] }[]
+      ) => Promise<{ anchored: number; details: string[]; trackingBackupDir: string }>;
+      previewFolderHygiene: (addonsPath: string) => Promise<{
+        strayManifests: { file: string; addonName: string; title: string; version: string; addonVersion: number; relatedFiles: string[]; folderExists: boolean; folderVersion: string; rootIsStale: boolean }[];
+        duplicates: { relPath: string; originalRelPath: string; isDirectory: boolean }[];
+        unclaimedRootFiles: string[];
+      }>;
+      applyFolderHygiene: (
+        addonsPath: string,
+        actions: { repairs: string[]; removals: string[] }
+      ) => Promise<{ repaired: string[]; removed: string[]; errors: string[]; undo: { hygieneDir: string; removals: string[]; repairs: { addonName: string; movedItems: string[] }[] } }>;
+      undoFolderHygiene: (
+        addonsPath: string,
+        undo: { hygieneDir: string; removals: string[]; repairs: { addonName: string; movedItems: string[] }[] }
+      ) => Promise<{ restored: number; errors: string[] }>;
     };
   }
 }

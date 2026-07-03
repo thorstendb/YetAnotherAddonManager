@@ -13,7 +13,9 @@ interface PathBarProps {
   onCleanupSettings: () => void;
   onCleanupDownloads: () => void;
   onCleanupBackups: () => void;
+  onFolderHygiene: () => void;
   onUpdateAll: () => void;
+  onCommitBaseline: () => void;
   onGoBack: () => void;
   onImportExport: () => void;
   onAbout: () => void;
@@ -24,6 +26,12 @@ interface PathBarProps {
   updateCount: number;
   mightUpdateCount?: number;
   replacementCount?: number;
+  /** Language-patch overlays with pending updates or re-applies */
+  overlayUpdateCount?: number;
+  /** Folders hijacked by an untracked patch (original state unknown) */
+  layeredCount?: number;
+  /** Addons that would switch to deterministic Tier-2 tracking on baseline commit */
+  baselineCount?: number;
   updatingAll?: boolean;
   updateRemaining?: number;
   theme: 'dark' | 'light';
@@ -41,7 +49,9 @@ const PathBar: React.FC<PathBarProps> = ({
   onCleanupSettings,
   onCleanupDownloads,
   onCleanupBackups,
+  onFolderHygiene,
   onUpdateAll,
+  onCommitBaseline,
   onGoBack,
   onImportExport,
   onAbout,
@@ -52,6 +62,9 @@ const PathBar: React.FC<PathBarProps> = ({
   updateCount,
   mightUpdateCount = 0,
   replacementCount = 0,
+  overlayUpdateCount = 0,
+  layeredCount = 0,
+  baselineCount = 0,
   updatingAll,
   updateRemaining,
   theme,
@@ -128,16 +141,41 @@ const PathBar: React.FC<PathBarProps> = ({
         >
           🗄️
         </button>
+        <button
+          onClick={onFolderHygiene}
+          disabled={!path || loading}
+          title={`Folder hygiene — Find broken installs & Finder duplicates\nDetects addons extracted into the AddOns root (invisible to the game),\nstale root copies and macOS " 2" duplicate files/folders`}
+          aria-label="Folder hygiene scan"
+          className="btn-warning"
+        >
+          🩺
+        </button>
       </fieldset>
       <fieldset className="toolbar-group">
         <legend>Updates</legend>
         <button
           onClick={onUpdateAll}
-          disabled={!updatingAll && (!hasAddons || loading || (updateCount === 0 && mightUpdateCount === 0 && replacementCount === 0))}
-          title={updatingAll ? 'Cancel update' : updateCount > 0 ? `Update ${updateCount} addon(s) with newer versions from catalog` : mightUpdateCount > 0 ? `${mightUpdateCount} addon(s) might have updates` : replacementCount > 0 ? `${replacementCount} addon(s) have replacements available` : 'All addons are up-to-date'}
+          disabled={!updatingAll && (!hasAddons || loading || (updateCount === 0 && mightUpdateCount === 0 && replacementCount === 0 && overlayUpdateCount === 0 && layeredCount === 0))}
+          title={updatingAll ? 'Cancel update'
+            : updateCount > 0 ? `Update ${updateCount} addon(s) with newer versions from catalog${overlayUpdateCount > 0 ? ` + ${overlayUpdateCount} language patch(es)` : ''}`
+            : overlayUpdateCount > 0 ? `${overlayUpdateCount} language patch(es) / overlay(s) have updates`
+            : mightUpdateCount > 0 ? `${mightUpdateCount} addon(s) might have updates`
+            : replacementCount > 0 ? `${replacementCount} addon(s) have replacements available`
+            : layeredCount > 0 ? `${layeredCount} folder(s) are patched — original state unknown`
+            : 'All addons are up-to-date'}
           className={updatingAll ? 'btn-warning' : 'btn-secondary'}
         >
-          {updatingAll ? `❌ Cancel Update${updateRemaining ? ` (${updateRemaining} left)` : ''}` : `⬆ Update All${updateCount > 0 ? ` (${updateCount})` : mightUpdateCount > 0 ? ` (${mightUpdateCount}?)` : ''}`}
+          {updatingAll ? `❌ Cancel Update${updateRemaining ? ` (${updateRemaining} left)` : ''}` : `⬆ Update All${(updateCount + overlayUpdateCount) > 0 ? ` (${updateCount + overlayUpdateCount})` : mightUpdateCount > 0 ? ` (${mightUpdateCount}?)` : ''}`}
+        </button>
+        <button
+          onClick={onCommitBaseline}
+          disabled={!hasAddons || loading || updatingAll || baselineCount === 0}
+          title={baselineCount > 0
+            ? `Anchor the current state of ${baselineCount} addon(s) as up-to-date.\nSwitches them to deterministic update tracking — any future catalog\nchange is then reliably detected, regardless of version-string chaos.`
+            : 'Baseline — all matched addons are already tracked deterministically'}
+          className="btn-secondary"
+        >
+          ⚓ Baseline{baselineCount > 0 ? ` (${baselineCount})` : ''}
         </button>
         <button
           onClick={onGoBack}

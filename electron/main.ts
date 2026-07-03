@@ -6,11 +6,11 @@ import * as fs from 'fs';
 import * as os from 'os';
 import { IPC_CHANNELS } from './shared/types';
 import { loadConfig, saveConfig } from './configStore';
-import { scanAddonsFolder, cleanupUnusedLibraries, deleteAddon, deleteAddonAndExclusiveRefs, previewUnusedLibraries, cleanupSelectedLibraries, reconcileYaamMetadata, ReconcileMatch } from './addonScanner';
-import { fetchAddonCatalog, fetchAddonDetails, fetchCategories, installAddon, cleanupDownloadsFolder, previewCleanupDownloads, cleanupDownloadsSelected, updateCatalogSnapshot, commitCatalogSnapshot } from './addonCatalogApi';
+import { scanAddonsFolder, cleanupUnusedLibraries, deleteAddon, deleteAddonAndExclusiveRefs, previewUnusedLibraries, cleanupSelectedLibraries, reconcileYaamMetadata, ReconcileMatch, commitBaseline, BaselineEntry, previewFolderHygiene, applyFolderHygiene, undoFolderHygiene, HygieneUndoInfo, listRemovedEntries, restoreRemovedEntry } from './addonScanner';
+import { fetchAddonCatalog, fetchAddonDetails, fetchCategories, installAddon, cleanupDownloadsFolder, previewCleanupDownloads, cleanupDownloadsSelected, moveDownloadsBack, updateCatalogSnapshot, commitCatalogSnapshot } from './addonCatalogApi';
 import { parseAddonSettings, setAddonSetting, batchSetAddonSettings, getSavedVarsInfo, deleteSavedVars, cleanupSettings, undoCleanupSettings, listSavedVarsBackups, restoreSavedVarsFile, exportProfile, importProfile, exportProfileAsZip, previewProfileZip, importProfileFromZip, ExportData, previewCleanupSettings, cleanupSettingsSelected } from './settingsManager';
 import { saveSnapshotIfChanged, listSnapshots, listAddonBackups, restoreAddonFromBackup, backupAddonFolder, deleteAddonBackups, SnapshotAddon } from './snapshotManager';
-import { migrateFromFolderFiles, getAllEntries, getYaamDir, cleanupMarkerFiles } from './yaamDatabase';
+import { migrateFromFolderFiles, getAllEntries, getYaamDir, cleanupMarkerFiles, restoreTrackingState } from './yaamDatabase';
 
 /** Extract error message from unknown catch value */
 function errMsg(err: unknown): string {
@@ -223,6 +223,78 @@ ipcMain.handle(IPC_CHANNELS.RECONCILE_YAAM_META, async (_event, addonsPath: stri
   }
 });
 
+ipcMain.handle(IPC_CHANNELS.COMMIT_BASELINE, async (_event, addonsPath: string, entries: BaselineEntry[]) => {
+  try {
+    return commitBaseline(addonsPath, entries);
+  } catch (err: unknown) {
+    console.error('Commit baseline error:', err);
+    return { anchored: 0, details: [] };
+  }
+});
+
+ipcMain.handle(IPC_CHANNELS.PREVIEW_FOLDER_HYGIENE, async (_event, addonsPath: string) => {
+  try {
+    return previewFolderHygiene(addonsPath);
+  } catch (err: unknown) {
+    console.error('Preview folder hygiene error:', err);
+    return { strayManifests: [], duplicates: [], unclaimedRootFiles: [] };
+  }
+});
+
+ipcMain.handle(IPC_CHANNELS.APPLY_FOLDER_HYGIENE, async (_event, addonsPath: string, actions: { repairs: string[]; removals: string[] }) => {
+  try {
+    return applyFolderHygiene(addonsPath, actions);
+  } catch (err: unknown) {
+    console.error('Apply folder hygiene error:', err);
+    return { repaired: [], removed: [], errors: [String(err)], undo: { hygieneDir: '', removals: [], repairs: [] } };
+  }
+});
+
+ipcMain.handle(IPC_CHANNELS.UNDO_FOLDER_HYGIENE, async (_event, addonsPath: string, undo: HygieneUndoInfo) => {
+  try {
+    return undoFolderHygiene(addonsPath, undo);
+  } catch (err: unknown) {
+    console.error('Undo folder hygiene error:', err);
+    return { restored: 0, errors: [String(err)] };
+  }
+});
+
+ipcMain.handle(IPC_CHANNELS.RESTORE_TRACKING_STATE, async (_event, addonsPath: string, backupDir: string) => {
+  try {
+    return restoreTrackingState(addonsPath, backupDir);
+  } catch (err: unknown) {
+    console.error('Restore tracking state error:', err);
+    return { restored: false, markers: 0, error: String(err) };
+  }
+});
+
+ipcMain.handle(IPC_CHANNELS.LIST_REMOVED, async (_event, addonsPath: string) => {
+  try {
+    return listRemovedEntries(addonsPath);
+  } catch (err: unknown) {
+    console.error('List removed error:', err);
+    return [];
+  }
+});
+
+ipcMain.handle(IPC_CHANNELS.RESTORE_REMOVED, async (_event, addonsPath: string, relPath: string) => {
+  try {
+    return restoreRemovedEntry(addonsPath, relPath);
+  } catch (err: unknown) {
+    console.error('Restore removed error:', err);
+    return { restored: false, target: '', error: String(err) };
+  }
+});
+
+ipcMain.handle(IPC_CHANNELS.MOVE_DOWNLOADS_BACK, async (_event, addonsPath: string, fileNames: string[]) => {
+  try {
+    return moveDownloadsBack(addonsPath, fileNames);
+  } catch (err: unknown) {
+    console.error('Move downloads back error:', err);
+    return { restored: [], errors: [String(err)] };
+  }
+});
+
 ipcMain.handle(IPC_CHANNELS.GET_YAAM_DB, async (_event, addonsPath: string) => {
   try {
     return getAllEntries(addonsPath);
@@ -336,7 +408,7 @@ ipcMain.handle(IPC_CHANNELS.FETCH_CATEGORIES, async () => {
   }
 });
 
-ipcMain.handle(IPC_CHANNELS.INSTALL_ADDON, async (_event, addonId: string, addonsPath: string) => {
+ipcMain.handle(IPC_CHANNELS.INSTALL_ADDON, async (_event, addonId: string, addonsPath: string, opts?: { overlayFor?: string }) => {
   const allResults: { installed: string[]; missingDeps: string[] } = { installed: [], missingDeps: [] };
   const processedIds = new Set<string>();
   const idsToProcess = [addonId];
@@ -356,9 +428,10 @@ ipcMain.handle(IPC_CHANNELS.INSTALL_ADDON, async (_event, addonId: string, addon
     sendProgress('resolving');
 
     try {
+      // overlayFor applies only to the requested addon, never to pulled-in deps
       const result = await installAddon(currentId, addonsPath, (phase, percent) => {
         sendProgress(phase, percent);
-      });
+      }, currentId === addonId ? opts : undefined);
       allResults.installed.push(...result.installed);
 
       // Resolve missing deps → queue for install

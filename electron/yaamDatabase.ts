@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT
 import * as fs from 'fs';
 import * as path from 'path';
-import type { YaamMarker } from './shared/types';
+import type { YaamMarker, YaamOverlayEntry } from './shared/types';
 
 /**
  * Per-addon metadata stored in the central YAAM database.
@@ -29,6 +29,8 @@ export interface YaamAddonEntry {
   updatedAt: string;
   /** Relative file paths from the original ZIP (install manifest for detecting runtime-created files) */
   installedFiles?: string[];
+  /** Overlays (language patches, fixes) layered into this addon's folder */
+  overlays?: YaamOverlayEntry[];
 }
 
 /** Full database structure */
@@ -127,6 +129,78 @@ export function getAllEntries(addonsPath: string): Record<string, YaamAddonEntry
   return loadDatabase(addonsPath).addons;
 }
 
+// ─── Tracking-state backup (DB + all markers) ───
+
+/**
+ * Back up the complete tracking state — the central DB plus every per-folder
+ * .yaam.json marker — into YAAM/Backup/Tracking/<stamp>/.  Used before
+ * destructive tracking operations (baseline commit, marker cleanup) so they
+ * are undoable like every other YAAM action.
+ * Returns the backup directory ('' when nothing was backed up).
+ */
+export function backupTrackingState(addonsPath: string): string {
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-').replace('T', '_').slice(0, 19);
+  const dir = path.join(getYaamDir(addonsPath), 'Backup', 'Tracking', stamp);
+  try {
+    const db = loadDatabase(addonsPath);
+    const markers: Record<string, YaamMarker> = {};
+    if (fs.existsSync(addonsPath)) {
+      for (const entry of fs.readdirSync(addonsPath, { withFileTypes: true })) {
+        if (!entry.isDirectory()) continue;
+        const m = readMarkerFile(addonsPath, entry.name);
+        if (m) markers[entry.name] = m;
+      }
+    }
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, 'yaam-addons.json'), JSON.stringify(db, null, 2), 'utf-8');
+    fs.writeFileSync(path.join(dir, 'markers.json'), JSON.stringify(markers, null, 2), 'utf-8');
+    return dir;
+  } catch (err) {
+    console.error('Failed to back up tracking state:', err);
+    return '';
+  }
+}
+
+/**
+ * Restore a tracking-state backup: central DB and all markers are put back
+ * exactly as captured.  Markers of folders that no longer exist are skipped;
+ * markers created after the backup are removed (full state swap).
+ */
+export function restoreTrackingState(addonsPath: string, backupDir: string): { restored: boolean; markers: number; error?: string } {
+  try {
+    const dbFile = path.join(backupDir, 'yaam-addons.json');
+    const markersFile = path.join(backupDir, 'markers.json');
+    if (!fs.existsSync(dbFile) || !fs.existsSync(markersFile)) {
+      return { restored: false, markers: 0, error: 'Tracking backup not found' };
+    }
+    const db = JSON.parse(fs.readFileSync(dbFile, 'utf-8')) as YaamDatabase;
+    const markers = JSON.parse(fs.readFileSync(markersFile, 'utf-8')) as Record<string, YaamMarker>;
+    saveDatabase(db, addonsPath);
+    let count = 0;
+    if (fs.existsSync(addonsPath)) {
+      for (const entry of fs.readdirSync(addonsPath, { withFileTypes: true })) {
+        if (!entry.isDirectory()) continue;
+        const markerPath = path.join(addonsPath, entry.name, MARKER_FILE);
+        const m = markers[entry.name];
+        if (m) {
+          const dbEntry = db.addons[entry.name];
+          if (dbEntry) {
+            writeMarkerFile(addonsPath, entry.name, dbEntry);
+          } else {
+            fs.writeFileSync(markerPath, JSON.stringify(m, null, 2), 'utf-8');
+          }
+          count++;
+        } else if (fs.existsSync(markerPath)) {
+          fs.unlinkSync(markerPath); // marker created after the backup
+        }
+      }
+    }
+    return { restored: true, markers: count };
+  } catch (err) {
+    return { restored: false, markers: 0, error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
 // ─── Per-folder .yaam.json marker files ───
 
 const MARKER_FILE = '.yaam.json';
@@ -145,6 +219,8 @@ export function writeMarkerFile(addonsPath: string, folderName: string, entry: Y
     localVersion: entry.localVersion || undefined,
     installedAt: entry.installedAt,
     updatedAt: entry.updatedAt,
+    overlays: entry.overlays?.length ? entry.overlays : undefined,
+    installedFiles: entry.installedFiles?.length ? entry.installedFiles : undefined,
   };
   try {
     fs.writeFileSync(markerPath, JSON.stringify(marker, null, 2), 'utf-8');
@@ -172,6 +248,8 @@ export function readMarkerFile(addonsPath: string, folderName: string): YaamMark
       localVersion: typeof data.localVersion === 'string' ? data.localVersion : undefined,
       installedAt: data.installedAt || '',
       updatedAt: data.updatedAt || '',
+      overlays: Array.isArray(data.overlays) ? data.overlays as YaamOverlayEntry[] : undefined,
+      installedFiles: Array.isArray(data.installedFiles) ? data.installedFiles as string[] : undefined,
     };
   } catch {
     return null;
@@ -181,10 +259,12 @@ export function readMarkerFile(addonsPath: string, folderName: string): YaamMark
 /**
  * Delete all .yaam.json marker files from addon folders and clear
  * catalogVersion in the DB so every addon falls to best-effort detection.
- * Returns the number of marker files deleted.
+ * The complete tracking state is backed up first, so this is undoable via
+ * restoreTrackingState.  Returns the count and the backup directory.
  */
-export function cleanupMarkerFiles(addonsPath: string): number {
-  if (!addonsPath || !fs.existsSync(addonsPath)) return 0;
+export function cleanupMarkerFiles(addonsPath: string): { count: number; backupDir: string } {
+  if (!addonsPath || !fs.existsSync(addonsPath)) return { count: 0, backupDir: '' };
+  const backupDir = backupTrackingState(addonsPath);
   let count = 0;
   const db = loadDatabase(addonsPath);
   let dbChanged = false;
@@ -210,7 +290,7 @@ export function cleanupMarkerFiles(addonsPath: string): number {
     console.error('Failed to cleanup marker files:', err);
   }
   if (dbChanged) saveDatabase(db, addonsPath);
-  return count;
+  return { count, backupDir };
 }
 
 /**

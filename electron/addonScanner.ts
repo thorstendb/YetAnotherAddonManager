@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: MIT
 import * as fs from 'fs';
 import * as path from 'path';
-import { AddonInfo, DependencyRef, ColorSegment, YaamAddonEntry } from './shared/types';
-import { loadDatabase, saveDatabase, YaamDatabase, readMarkerFile, writeMarkerFile } from './yaamDatabase';
+import { AddonInfo, DependencyRef, ColorSegment, YaamAddonEntry, compareVersionStrings } from './shared/types';
+import { loadDatabase, saveDatabase, YaamDatabase, readMarkerFile, writeMarkerFile, backupTrackingState } from './yaamDatabase';
 
 /**
  * Parse color codes from a string.
@@ -181,6 +181,10 @@ function parseManifest(
   const files = parseFileList(content);
   const folderPath = path.dirname(manifestPath);
   const manifestExt = path.extname(manifestPath).replace('.', '') as 'txt' | 'addon';
+  let manifestMtime: number | undefined;
+  try {
+    manifestMtime = Math.floor(fs.statSync(manifestPath).mtimeMs / 1000);
+  } catch { /* stat failure — hint simply unavailable */ }
 
   const rawTitle = headers['Title'] || folderName;
   const { plain: title, segments: titleSegments } = parseColorCodes(rawTitle);
@@ -250,6 +254,7 @@ function parseManifest(
     allSavedVariableNames,
     yaamMeta: undefined, // injected from DB after scan
     yaamMarker: undefined, // injected from .yaam.json after scan
+    manifestMtime,
   };
 }
 
@@ -406,6 +411,8 @@ export function scanAddonsFolder(addonsPath: string): AddonInfo[] {
         localVersion: marker.localVersion ?? addon.version,
         installedAt: marker.installedAt,
         updatedAt: marker.updatedAt,
+        overlays: marker.overlays,
+        installedFiles: marker.installedFiles,
       };
       db.addons[addon.folderName] = entry;
       dbChanged = true;
@@ -440,6 +447,8 @@ export function scanAddonsFolder(addonsPath: string): AddonInfo[] {
       entry.catalogVersion = marker.catalogVersion;
       entry.catalogDate = marker.catalogDate;
       if (marker.localVersion) entry.localVersion = marker.localVersion;
+      if (marker.overlays) entry.overlays = marker.overlays;
+      if (marker.installedFiles) entry.installedFiles = marker.installedFiles;
       db.addons[addon.folderName] = entry;
       dbChanged = true;
     } else if (entry?.esouid && entry.catalogVersion && !marker) {
@@ -477,6 +486,12 @@ export function scanAddonsFolder(addonsPath: string): AddonInfo[] {
     if (entry?.esouid && marker && marker.localVersion === undefined && entry.localVersion) {
       writeMarkerFile(addonsPath, addon.folderName, entry);
     }
+    // Upgrade marker files written before installedFiles moved into the marker
+    // (one-time).  Required for the "central DB is a disposable cache" invariant:
+    // every field must be reconstructable from the folders alone.
+    if (entry?.esouid && marker && marker.installedFiles === undefined && entry.installedFiles?.length) {
+      writeMarkerFile(addonsPath, addon.folderName, entry);
+    }
 
     if (entry?.esouid) {
       addon.yaamMeta = entry;
@@ -489,6 +504,27 @@ export function scanAddonsFolder(addonsPath: string): AddonInfo[] {
       }
     }
   }
+
+  // ── Stale-entry cleanup ──
+  // DB entries whose folder no longer exists are dead weight and a trap: a
+  // later, unrelated addon reusing the same folder name would INHERIT the old
+  // identity (wrong esouid, wrong version anchors).  Markers travel inside
+  // the folders, so restoring a folder restores its entry — removing stale
+  // entries is lossless.  Guarded on a non-empty scan so pointing YAAM at an
+  // empty/wrong directory can never wipe the database of the real one.
+  if (addons.length > 0) {
+    const present = new Set(addons.map((a) => a.folderName));
+    for (const key of Object.keys(db.addons)) {
+      if (present.has(key)) continue;
+      // Folder may still exist without a parseable manifest (broken install,
+      // data-only folder) — keep its entry, only true orphans are removed.
+      if (fs.existsSync(path.join(addonsPath, key))) continue;
+      console.log(`[YAAM] Removing stale DB entry for missing folder: ${key}`);
+      delete db.addons[key];
+      dbChanged = true;
+    }
+  }
+
   if (dbChanged) saveDatabase(db, addonsPath);
 
   return addons;
@@ -560,7 +596,8 @@ function detectRuntimeFiles(addonsPath: string, folderName: string, installedFil
   if (!fs.existsSync(folderPath)) return [];
   const installedSet = new Set(installedFiles.map(f => f.replace(/\\/g, '/')));
   const actualFiles = walkAddonFolder(folderPath);
-  return actualFiles.filter(f => !installedSet.has(f));
+  // YAAM's own marker file is infrastructure, not an addon runtime artifact
+  return actualFiles.filter(f => f !== '.yaam.json' && !installedSet.has(f));
 }
 
 /**
@@ -663,7 +700,8 @@ export function reconcileYaamMetadata(
       if (!needsUpdate) continue;
 
       const changes: string[] = [];
-      if (existing.esouid !== m.esouid) changes.push(`id: ${existing.esouid}→${m.esouid}`);
+      const idChanged = existing.esouid !== m.esouid;
+      if (idChanged) changes.push(`id: ${existing.esouid}→${m.esouid}`);
       if (existing.catalogName !== m.name) changes.push(`name: ${existing.catalogName}→${m.name}`);
       if (existing.localVersion !== m.localVersion) changes.push(`localVer: ${existing.localVersion}→${m.localVersion}`);
 
@@ -672,8 +710,12 @@ export function reconcileYaamMetadata(
         url: m.url,
         catalogName: m.name,
         catalogAuthor: m.author,
-        catalogVersion: existing.catalogVersion,  // preserve install-time value
-        catalogDate: existing.catalogDate,         // preserve install-time value
+        // Preserve install-time anchors — UNLESS the identity changed (healed
+        // poisoned entry): then they described the WRONG catalog entry and
+        // must be cleared so the addon falls back to best-effort detection
+        // instead of comparing against a foreign version history.
+        catalogVersion: idChanged ? '' : existing.catalogVersion,
+        catalogDate: idChanged ? undefined : existing.catalogDate,
         localVersion: m.localVersion,
         installedAt: existing.installedAt,
         // Only bump updatedAt when the local addon files actually changed
@@ -684,6 +726,11 @@ export function reconcileYaamMetadata(
         updatedAt: existing.localVersion !== m.localVersion ? now : existing.updatedAt,
         installedFiles: existing.installedFiles,
       };
+      // Keep an existing .yaam.json marker in sync — a stale marker with the
+      // old esouid would otherwise re-poison or fight the healed DB entry.
+      if (idChanged && readMarkerFile(addonsPath, m.folderName)) {
+        writeMarkerFile(addonsPath, m.folderName, db.addons[m.folderName]);
+      }
       changed = true;
       result.updated++;
       result.details.push(`Updated ${m.folderName}: ${changes.join(', ')}`);
@@ -691,6 +738,82 @@ export function reconcileYaamMetadata(
   }
 
   if (changed) saveDatabase(db, addonsPath);
+  return result;
+}
+
+/** One addon to anchor as "currently up to date" (baseline commit). */
+export interface BaselineEntry {
+  folderName: string;
+  esouid: string;
+  url: string;
+  name: string;
+  author: string;
+  /** Current catalog version string — becomes the Tier-2 anchor */
+  catalogVersion: string;
+  /** Current catalog date (epoch seconds) */
+  catalogDate?: number;
+  /** Current manifest version — becomes the files-unchanged anchor */
+  localVersion: string;
+  /** Detected-but-untracked overlays (language patches) to anchor alongside */
+  overlays?: { esouid: string; catalogName: string; catalogVersion: string; catalogDate?: number }[];
+}
+
+/**
+ * Baseline commit: anchor the CURRENT state of the given addons as
+ * "up to date".  Writes catalogVersion/catalogDate (+ marker files) so these
+ * addons switch from Tier-3 heuristic comparison to deterministic Tier-2
+ * tracking — from now on ANY catalog change is a reliably detected update,
+ * no matter how chaotic the author's version strings are.
+ */
+export function commitBaseline(
+  addonsPath: string,
+  entries: BaselineEntry[]
+): { anchored: number; details: string[]; trackingBackupDir: string } {
+  // Anchoring overwrites version anchors in DB and markers — back up the full
+  // tracking state first so the commit is undoable like every other action.
+  const trackingBackupDir = entries.length > 0 ? backupTrackingState(addonsPath) : '';
+  const result = { anchored: 0, details: [] as string[], trackingBackupDir };
+  const now = new Date().toISOString();
+  const db = loadDatabase(addonsPath);
+
+  for (const e of entries) {
+    const existing = db.addons[e.folderName];
+    // Anchor detected-but-untracked overlays too: merge with already-tracked
+    // ones (tracked entries win — they carry real install metadata).
+    const trackedOverlays = existing?.overlays ?? [];
+    const newOverlays = (e.overlays ?? [])
+      .filter((ov) => !trackedOverlays.some((t) => t.esouid === ov.esouid))
+      .map((ov) => ({
+        esouid: ov.esouid,
+        catalogName: ov.catalogName,
+        catalogVersion: ov.catalogVersion,
+        catalogDate: ov.catalogDate,
+        installedAt: now,
+        updatedAt: now,
+        needsReapply: false,
+      }));
+    const overlays = [...trackedOverlays, ...newOverlays];
+    db.addons[e.folderName] = {
+      esouid: e.esouid,
+      url: e.url,
+      catalogName: e.name,
+      catalogAuthor: e.author,
+      catalogVersion: e.catalogVersion,
+      catalogDate: e.catalogDate,
+      localVersion: e.localVersion,
+      installedAt: existing?.installedAt ?? now,
+      // "The state on disk is current as of now" — also prevents stale
+      // date-fallback false positives against older catalog dates.
+      updatedAt: now,
+      installedFiles: existing?.installedFiles,
+      overlays: overlays.length > 0 ? overlays : undefined,
+    };
+    writeMarkerFile(addonsPath, e.folderName, db.addons[e.folderName]);
+    result.anchored++;
+    result.details.push(`${e.folderName} → "${e.catalogVersion}" (#${e.esouid})${newOverlays.length > 0 ? ` + overlay ${newOverlays.map((o) => `"${o.catalogName}" v${o.catalogVersion}`).join(', ')}` : ''}`);
+  }
+
+  if (result.anchored > 0) saveDatabase(db, addonsPath);
   return result;
 }
 
@@ -718,6 +841,478 @@ export function collectAllSavedVarNames(addons: AddonInfo[]): string[] {
     names.push(...addon.allSavedVariableNames);
   }
   return [...new Set(names)];
+}
+
+// ─── Folder hygiene: root orphans, broken installs, Finder duplicates ───
+
+/** A manifest file lying directly in the AddOns root (broken extraction). */
+export interface HygieneStrayManifest {
+  /** Manifest file name in the AddOns root, e.g. "ArchiveHelper.txt" */
+  file: string;
+  /** Addon name derived from the manifest file base name */
+  addonName: string;
+  title: string;
+  version: string;
+  addonVersion: number;
+  /** Root-level files/folders belonging to this manifest that exist on disk */
+  relatedFiles: string[];
+  /** Whether a proper folder AddOns/<addonName>/ with its own manifest exists */
+  folderExists: boolean;
+  /** Version of the proper folder's manifest (when folderExists) */
+  folderVersion: string;
+  /** True when the folder's manifest is same or newer → the root copy is stale */
+  rootIsStale: boolean;
+}
+
+/** A " 2"/" 3" copy created by macOS Finder when extracting into occupied folders. */
+export interface HygieneDuplicate {
+  /** Path relative to the AddOns root, e.g. "HodorReflexes/core 2" */
+  relPath: string;
+  /** The existing original it duplicates, relative to the AddOns root */
+  originalRelPath: string;
+  isDirectory: boolean;
+}
+
+export interface HygienePreview {
+  strayManifests: HygieneStrayManifest[];
+  duplicates: HygieneDuplicate[];
+  /** Root-level files not claimed by any stray manifest (e.g. README.md, esologo.dds) */
+  unclaimedRootFiles: string[];
+}
+
+const DUPLICATE_RE = /^(.+?) (\d+)(\.[^.]+)?$/;
+
+/** Read version headers from a manifest file (cheap, no full parse). */
+function readManifestVersionInfo(p: string): { title: string; version: string; addonVersion: number; files: string[] } | null {
+  try {
+    const content = fs.readFileSync(p, 'utf-8');
+    if (!/^##\s*(Title|APIVersion|Version)\s*:/im.test(content)) return null;
+    const headers = parseManifestHeaders(content);
+    return {
+      title: parseColorCodes(headers['Title'] || '').plain,
+      version: headers['Version'] || '',
+      addonVersion: headers['AddOnVersion'] ? parseInt(headers['AddOnVersion'], 10) : 0,
+      files: parseFileList(content),
+    };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Recursively find Finder-duplicate entries ("core 2", "Foo 3.addon") whose
+ * original sibling exists.  Depth-limited to keep the scan cheap.
+ */
+function collectDuplicates(root: string, dir: string, depth: number, results: HygieneDuplicate[]): void {
+  if (depth > 5) return;
+  let entries: fs.Dirent[];
+  try {
+    entries = fs.readdirSync(dir, { withFileTypes: true });
+  } catch {
+    return;
+  }
+  const names = new Set(entries.map((e) => e.name));
+  for (const entry of entries) {
+    if (entry.name.startsWith('.')) continue;
+    const m = entry.name.match(DUPLICATE_RE);
+    if (m) {
+      const original = m[1] + (m[3] ?? '');
+      if (names.has(original)) {
+        const rel = path.relative(root, path.join(dir, entry.name));
+        results.push({
+          relPath: rel,
+          originalRelPath: path.relative(root, path.join(dir, original)),
+          isDirectory: entry.isDirectory(),
+        });
+        continue; // don't descend into a folder we already flag as duplicate
+      }
+    }
+    if (entry.isDirectory()) {
+      collectDuplicates(root, path.join(dir, entry.name), depth + 1, results);
+    }
+  }
+}
+
+/**
+ * Scan the AddOns folder for hygiene problems:
+ *  - stray manifests in the root (ZIP extracted into AddOns/ instead of a
+ *    subfolder) with the root files/folders belonging to them,
+ *  - Finder duplicates (" 2"/" 3" copies) at any depth,
+ *  - leftover unclaimed root files.
+ * The game only loads AddOns/<Name>/<Name>.txt — everything found here is
+ * invisible to ESO and to the normal YAAM scan.
+ */
+export function previewFolderHygiene(addonsPath: string): HygienePreview {
+  const result: HygienePreview = { strayManifests: [], duplicates: [], unclaimedRootFiles: [] };
+  if (!fs.existsSync(addonsPath)) return result;
+
+  let rootEntries: fs.Dirent[];
+  try {
+    rootEntries = fs.readdirSync(addonsPath, { withFileTypes: true });
+  } catch {
+    return result;
+  }
+
+  const rootFiles = rootEntries.filter((e) => e.isFile()).map((e) => e.name);
+  const rootDirs = new Set(rootEntries.filter((e) => e.isDirectory()).map((e) => e.name));
+  const minionFiles = new Set(['miniondata.json', 'minion_data.json']);
+  const claimed = new Set<string>();
+
+  // 1. Stray manifests in the AddOns root
+  for (const file of rootFiles) {
+    if (!/\.(txt|addon)$/i.test(file)) continue;
+    const info = readManifestVersionInfo(path.join(addonsPath, file));
+    if (!info) continue; // not an addon manifest (e.g. a README.txt)
+    const addonName = file.replace(/\.(txt|addon)$/i, '');
+    claimed.add(file);
+
+    // Root files/folders belonging to this manifest: everything its file list
+    // references (first path segment) plus same-basename siblings (Foo.lua/.xml).
+    const related = new Set<string>();
+    for (const f of info.files) {
+      const first = f.replace(/\\/g, '/').split('/')[0].trim();
+      if (!first || first === file) continue;
+      if (rootDirs.has(first)) related.add(first);
+      else if (rootFiles.includes(first)) related.add(first);
+    }
+    for (const f of rootFiles) {
+      if (f !== file && f.startsWith(addonName + '.')) related.add(f);
+    }
+    for (const r of related) claimed.add(r);
+
+    // Compare against a properly installed folder of the same name
+    let folderExists = false;
+    let folderVersion = '';
+    let rootIsStale = false;
+    const properManifest = resolveManifestPath(path.join(addonsPath, addonName), addonName);
+    if (properManifest) {
+      folderExists = true;
+      const folderInfo = readManifestVersionInfo(properManifest);
+      folderVersion = folderInfo?.version || '';
+      if (folderInfo) {
+        // AddOnVersion integers are the most reliable ordering; fall back to
+        // version-string comparison, then to "folder wins" (the root copy is
+        // dead weight either way — the game never loads it).
+        if (info.addonVersion > 0 && folderInfo.addonVersion > 0) {
+          rootIsStale = folderInfo.addonVersion >= info.addonVersion;
+        } else {
+          rootIsStale = compareVersionStrings(info.version, folderInfo.version) <= 0;
+        }
+      } else {
+        rootIsStale = true;
+      }
+    }
+
+    result.strayManifests.push({
+      file,
+      addonName,
+      title: info.title || addonName,
+      version: info.version,
+      addonVersion: info.addonVersion,
+      relatedFiles: Array.from(related).sort(),
+      folderExists,
+      folderVersion,
+      rootIsStale,
+    });
+  }
+
+  // 2. Finder duplicates (root level and inside addon folders)
+  collectDuplicates(addonsPath, addonsPath, 0, result.duplicates);
+
+  // 3. Unclaimed root files (not a manifest, not claimed, not Minion's data)
+  for (const file of rootFiles) {
+    if (claimed.has(file)) continue;
+    if (file.startsWith('.')) continue; // .DS_Store & friends — pointless to move
+    if (minionFiles.has(file.toLowerCase())) continue;
+    result.unclaimedRootFiles.push(file);
+  }
+  result.unclaimedRootFiles.sort();
+
+  return result;
+}
+
+/** Undo information returned by applyFolderHygiene — enough to reverse every move. */
+export interface HygieneUndoInfo {
+  /** Removed/_hygiene/<stamp>/ directory holding the removed items ('' if none) */
+  hygieneDir: string;
+  /** Removed item paths relative to the AddOns root */
+  removals: string[];
+  /** Repairs: which items were moved into which new folder */
+  repairs: { addonName: string; movedItems: string[] }[];
+}
+
+/**
+ * Apply selected hygiene actions.
+ *  - repairs: stray manifest file names → create AddOns/<Name>/ and MOVE the
+ *    manifest plus its related root files into it (fixes the broken install).
+ *  - removals: paths relative to the AddOns root → moved (never deleted) to
+ *    Removed/_hygiene/<timestamp>/ preserving their relative structure.
+ * Returns undo info so the whole operation can be reversed.
+ */
+export function applyFolderHygiene(
+  addonsPath: string,
+  actions: { repairs: string[]; removals: string[] }
+): { repaired: string[]; removed: string[]; errors: string[]; undo: HygieneUndoInfo } {
+  const out = {
+    repaired: [] as string[],
+    removed: [] as string[],
+    errors: [] as string[],
+    undo: { hygieneDir: '', removals: [], repairs: [] } as HygieneUndoInfo,
+  };
+
+  // Re-scan so we act on current on-disk state, not a stale renderer preview
+  const preview = previewFolderHygiene(addonsPath);
+  const strayByFile = new Map(preview.strayManifests.map((s) => [s.file, s]));
+
+  for (const file of actions.repairs) {
+    const stray = strayByFile.get(file);
+    if (!stray) {
+      out.errors.push(`Repair skipped: ${file} is no longer a stray manifest`);
+      continue;
+    }
+    if (stray.folderExists) {
+      out.errors.push(`Repair skipped: folder ${stray.addonName}/ already exists (use remove instead)`);
+      continue;
+    }
+    try {
+      const targetDir = path.join(addonsPath, stray.addonName);
+      fs.mkdirSync(targetDir, { recursive: true });
+      const toMove = [stray.file, ...stray.relatedFiles];
+      const movedItems: string[] = [];
+      for (const item of toMove) {
+        const src = path.join(addonsPath, item);
+        if (!fs.existsSync(src)) continue;
+        fs.renameSync(src, path.join(targetDir, item));
+        movedItems.push(item);
+      }
+      out.repaired.push(stray.addonName);
+      out.undo.repairs.push({ addonName: stray.addonName, movedItems });
+    } catch (err) {
+      out.errors.push(`Repair failed for ${file}: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  if (actions.removals.length > 0) {
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const removedRoot = path.join(path.dirname(addonsPath), 'Removed', '_hygiene', stamp);
+    for (const rel of actions.removals) {
+      // Guard against path escapes — only paths inside the AddOns folder
+      const src = path.resolve(addonsPath, rel);
+      if (!src.startsWith(path.resolve(addonsPath) + path.sep)) {
+        out.errors.push(`Removal skipped (outside AddOns): ${rel}`);
+        continue;
+      }
+      if (!fs.existsSync(src)) continue;
+      try {
+        const dest = path.join(removedRoot, rel);
+        fs.mkdirSync(path.dirname(dest), { recursive: true });
+        fs.renameSync(src, dest);
+        out.removed.push(rel);
+        out.undo.hygieneDir = removedRoot;
+        out.undo.removals.push(rel);
+      } catch (err) {
+        out.errors.push(`Removal failed for ${rel}: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+    // Record what was moved as a unit — listRemovedEntries offers exactly
+    // these items for restore (intermediate dirs are scaffolding, not items).
+    if (out.undo.removals.length > 0) {
+      try {
+        fs.writeFileSync(path.join(removedRoot, '_meta.json'), JSON.stringify({ removals: out.undo.removals }, null, 2), 'utf-8');
+      } catch { /* listing falls back to first-level entries */ }
+    }
+  }
+
+  return out;
+}
+
+/**
+ * Reverse a folder-hygiene run: removed items move back from
+ * Removed/_hygiene/<stamp>/ to their original paths, repaired installs move
+ * back into the AddOns root (the created folder is removed when empty).
+ */
+export function undoFolderHygiene(
+  addonsPath: string,
+  undo: HygieneUndoInfo
+): { restored: number; errors: string[] } {
+  const out = { restored: 0, errors: [] as string[] };
+
+  // 1. Bring removed items back to their original locations
+  for (const rel of undo.removals) {
+    const src = path.join(undo.hygieneDir, rel);
+    const dest = path.resolve(addonsPath, rel);
+    if (!dest.startsWith(path.resolve(addonsPath) + path.sep)) continue;
+    if (!fs.existsSync(src)) continue;
+    try {
+      if (fs.existsSync(dest)) {
+        out.errors.push(`Undo skipped (already exists): ${rel}`);
+        continue;
+      }
+      fs.mkdirSync(path.dirname(dest), { recursive: true });
+      fs.renameSync(src, dest);
+      out.restored++;
+    } catch (err) {
+      out.errors.push(`Undo failed for ${rel}: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  // 2. Move repaired items back into the AddOns root
+  for (const rep of undo.repairs) {
+    const folder = path.join(addonsPath, rep.addonName);
+    for (const item of rep.movedItems) {
+      const src = path.join(folder, item);
+      const dest = path.join(addonsPath, item);
+      if (!fs.existsSync(src)) continue;
+      try {
+        if (fs.existsSync(dest)) {
+          out.errors.push(`Undo skipped (already exists): ${item}`);
+          continue;
+        }
+        fs.renameSync(src, dest);
+        out.restored++;
+      } catch (err) {
+        out.errors.push(`Undo failed for ${item}: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+    // Drop the created folder when nothing is left inside
+    try {
+      if (fs.existsSync(folder) && fs.readdirSync(folder).length === 0) {
+        fs.rmdirSync(folder);
+      }
+    } catch { /* leave non-empty folder in place */ }
+  }
+
+  return out;
+}
+
+// ─── Removed/ management (global restore path for every move-style delete) ───
+
+/** One restorable entry from the Removed/ folder. */
+export interface RemovedEntry {
+  /** Display name (folder or file name) */
+  name: string;
+  /** Path relative to Removed/ — key for restore */
+  relPath: string;
+  /** True when this entry came from a hygiene run (nested under _hygiene/<stamp>/) */
+  fromHygiene: boolean;
+  isDirectory: boolean;
+  sizeBytes: number;
+  mtimeMs: number;
+}
+
+/**
+ * List everything restorable from Removed/: top-level folders moved by
+ * delete/cleanup operations, plus items captured by hygiene runs.
+ */
+export function listRemovedEntries(addonsPath: string): RemovedEntry[] {
+  const removedRoot = path.join(path.dirname(addonsPath), 'Removed');
+  if (!fs.existsSync(removedRoot)) return [];
+  const results: RemovedEntry[] = [];
+
+  const statOf = (p: string): { size: number; mtimeMs: number; isDir: boolean } => {
+    try {
+      const st = fs.statSync(p);
+      return { size: st.isDirectory() ? getDirSizeSafe(p) : st.size, mtimeMs: st.mtimeMs, isDir: st.isDirectory() };
+    } catch {
+      return { size: 0, mtimeMs: 0, isDir: false };
+    }
+  };
+
+  for (const entry of fs.readdirSync(removedRoot, { withFileTypes: true })) {
+    if (entry.name === '_hygiene') {
+      // Hygiene stamps: list each item that was moved AS A UNIT (recorded in
+      // _meta.json); intermediate directories are scaffolding, not items.
+      const hygieneRoot = path.join(removedRoot, '_hygiene');
+      for (const stamp of fs.readdirSync(hygieneRoot, { withFileTypes: true })) {
+        if (!stamp.isDirectory()) continue;
+        const stampDir = path.join(hygieneRoot, stamp.name);
+        let items: string[] = [];
+        try {
+          const meta = JSON.parse(fs.readFileSync(path.join(stampDir, '_meta.json'), 'utf-8'));
+          if (Array.isArray(meta.removals)) items = meta.removals as string[];
+        } catch {
+          // Pre-meta stamps: fall back to first-level entries
+          items = fs.readdirSync(stampDir).filter((n) => n !== '_meta.json');
+        }
+        for (const rel of items) {
+          const abs = path.join(stampDir, rel);
+          if (!fs.existsSync(abs)) continue; // already restored
+          const st = statOf(abs);
+          results.push({
+            name: rel,
+            relPath: `_hygiene/${stamp.name}/${rel}`,
+            fromHygiene: true,
+            isDirectory: st.isDir,
+            sizeBytes: st.size,
+            mtimeMs: st.mtimeMs,
+          });
+        }
+      }
+      continue;
+    }
+    const st = statOf(path.join(removedRoot, entry.name));
+    results.push({
+      name: entry.name,
+      relPath: entry.name,
+      fromHygiene: false,
+      isDirectory: st.isDir,
+      sizeBytes: st.size,
+      mtimeMs: st.mtimeMs,
+    });
+  }
+
+  return results.sort((a, b) => b.mtimeMs - a.mtimeMs);
+}
+
+/** getDirSize that tolerates unreadable entries. */
+function getDirSizeSafe(dirPath: string): number {
+  let total = 0;
+  try {
+    for (const entry of fs.readdirSync(dirPath, { withFileTypes: true })) {
+      const full = path.join(dirPath, entry.name);
+      if (entry.isDirectory()) total += getDirSizeSafe(full);
+      else {
+        try { total += fs.statSync(full).size; } catch { /* skip */ }
+      }
+    }
+  } catch { /* skip */ }
+  return total;
+}
+
+/**
+ * Restore an entry from Removed/ back into the AddOns folder.
+ * Top-level entries go to AddOns/<name>; hygiene entries return to their
+ * captured relative path.  Never overwrites an existing target.
+ */
+export function restoreRemovedEntry(
+  addonsPath: string,
+  relPath: string
+): { restored: boolean; target: string; error?: string } {
+  const removedRoot = path.join(path.dirname(addonsPath), 'Removed');
+  const src = path.resolve(removedRoot, relPath);
+  if (!src.startsWith(path.resolve(removedRoot) + path.sep)) {
+    return { restored: false, target: '', error: 'Invalid path' };
+  }
+  if (!fs.existsSync(src)) {
+    return { restored: false, target: '', error: 'Entry no longer exists' };
+  }
+  // Hygiene entries carry their original AddOns-relative path after the stamp
+  const hygieneMatch = relPath.match(/^_hygiene\/[^/]+\/(.+)$/);
+  const targetRel = hygieneMatch ? hygieneMatch[1] : relPath;
+  const dest = path.resolve(addonsPath, targetRel);
+  if (!dest.startsWith(path.resolve(addonsPath) + path.sep)) {
+    return { restored: false, target: targetRel, error: 'Invalid target path' };
+  }
+  if (fs.existsSync(dest)) {
+    return { restored: false, target: targetRel, error: 'Target already exists — delete it first' };
+  }
+  try {
+    fs.mkdirSync(path.dirname(dest), { recursive: true });
+    fs.renameSync(src, dest);
+    return { restored: true, target: targetRel };
+  } catch (err) {
+    return { restored: false, target: targetRel, error: err instanceof Error ? err.message : String(err) };
+  }
 }
 
 // ─── Deletion / Cleanup ───

@@ -36,6 +36,10 @@ interface AddonTreeItemProps {
   installProgress?: Record<string, { phase: string; percent?: number; current?: number; total?: number }>;
   collapseAllCounter?: number;
   hasUpdate?: boolean;
+  /** Catalog version an update would install — shown next to the badge (same info the ESOUI tree shows) */
+  updateTargetVersion?: string;
+  /** Language patches / fix packs layered into this folder (overlay model) */
+  overlayInfo?: { count: number; needsReapply: boolean; layered: boolean };
 }
 
 const AddonTreeItem: React.FC<AddonTreeItemProps> = ({
@@ -66,6 +70,8 @@ const AddonTreeItem: React.FC<AddonTreeItemProps> = ({
   installProgress,
   collapseAllCounter = 0,
   hasUpdate = false,
+  updateTargetVersion,
+  overlayInfo,
 }) => {
   const [expanded, setExpanded] = useState(false);
   const [subAddonsExpanded, setSubAddonsExpanded] = useState(false);
@@ -351,6 +357,21 @@ const AddonTreeItem: React.FC<AddonTreeItemProps> = ({
             <span className="tree-version" title="Manifest has no version header — showing the installed catalog version"> v{addon.yaamMeta.catalogVersion}</span>
           ) : (
             <span className="tree-version tree-version-unknown" title="Manifest has no version header and the addon is not tracked by YAAM — reinstall once to enable update detection"> v?</span>
+          )}
+          {hasUpdate && updateTargetVersion && (
+            <span className="tree-local-version" title="Update available — version the catalog would install"> → v{updateTargetVersion}</span>
+          )}
+          {hasUpdate && <span className="tree-update-badge" title="Update available — catalog has a newer version">⬆️</span>}
+          {overlayInfo && overlayInfo.count > 0 && (
+            <span
+              className="tree-overlay-badge"
+              title={`${overlayInfo.count} language patch(es)/overlay(s) installed in this folder${overlayInfo.needsReapply ? ' — overwritten by an update, re-apply via Update All' : ''}`}
+            >
+              {' '}🧩{overlayInfo.needsReapply ? '⚠️' : ''}
+            </span>
+          )}
+          {overlayInfo?.layered && (
+            <span className="tree-overlay-badge" title="Manifest belongs to an untracked language patch — the original's version is unknown (see Update All → Patched folders)"> 🎭</span>
           )}
           {isUnreferenced && <span className="unreferenced-marker">{' \u26A0\uFE0E (unused)'}</span>}
           {isNotInCatalog && <span className="catalog-missing" title="Not found in catalog and no download URL">{' \u26A0\uFE0E'}</span>}

@@ -317,11 +317,17 @@ function md5OfFile(filePath: string): string {
  * Download and install an addon from the online catalog.
  * Downloads the zip to AddOns/Downloads/, then extracts to AddOns/.
  * Returns the list of installed directory names and any missing dependencies.
+ *
+ * opts.overlayFor: install this catalog entry as an OVERLAY (language patch /
+ * fix pack) into the named folder — the folder's main identity in the YAAM
+ * database is preserved and the overlay is tracked in its overlays[] list
+ * instead of hijacking the entry (the historic LangPatch problem).
  */
 export async function installAddon(
   addonId: string,
   addonsPath: string,
-  onProgress?: (phase: 'resolving' | 'downloading' | 'extracting', percent?: number) => void
+  onProgress?: (phase: 'resolving' | 'downloading' | 'extracting', percent?: number) => void,
+  opts?: { overlayFor?: string }
 ): Promise<{ installed: string[]; missingDeps: string[] }> {
   const downloadsDir = getDownloadsDir(addonsPath);
 
@@ -461,6 +467,58 @@ export async function installAddon(
       let changed = false;
       for (const dir of shippedDirs) {
         const existing = db.addons[dir];
+
+        if (opts?.overlayFor === dir) {
+          // ── Overlay install (language patch / fix pack) ──
+          // The folder's MAIN identity stays untouched; the overlay is
+          // upserted into overlays[] with its own catalog version history.
+          const base = existing ?? {
+            esouid: '',
+            url: '',
+            catalogName: '',
+            catalogAuthor: '',
+            catalogVersion: '',
+            localVersion: '',
+            installedAt: now,
+            updatedAt: now,
+          };
+          const prev = base.overlays?.find((o) => o.esouid === catalogEntry.id);
+          base.overlays = [
+            ...(base.overlays ?? []).filter((o) => o.esouid !== catalogEntry.id),
+            {
+              esouid: catalogEntry.id,
+              catalogName: catalogEntry.name,
+              catalogVersion: catalogEntry.version,
+              catalogDate: catalogEntry.date,
+              installedAt: prev?.installedAt || now,
+              updatedAt: now,
+              installedFiles: zipFilesByDir.get(dir),
+              needsReapply: false,
+            },
+          ];
+          // Patches usually replace the folder's manifest — refresh the
+          // files-unchanged anchor so Tier-2 tracking of the ORIGINAL stays
+          // trusted (its installed version did not change).
+          base.localVersion = localVersionByDir.get(dir) || base.localVersion;
+          base.updatedAt = now;
+          db.addons[dir] = base;
+          writeMarkerFile(addonsPath, dir, base);
+          changed = true;
+          console.log(`[YAAM] Installed overlay #${catalogEntry.id} "${catalogEntry.name}" v${catalogEntry.version} into ${dir} (main identity preserved: #${base.esouid || 'untracked'})`);
+          continue;
+        }
+
+        // ── Normal install / update of the folder's main addon ──
+        // Keep tracked overlays; flag those whose files were just overwritten
+        // by this install so the UI can offer a re-apply.
+        const newFiles = new Set(zipFilesByDir.get(dir) ?? []);
+        const overlays = existing?.overlays?.map((o) => {
+          const overwritten = (o.installedFiles ?? []).some((f) => newFiles.has(f));
+          if (overwritten && !o.needsReapply) {
+            console.log(`[YAAM] Overlay "${o.catalogName}" in ${dir} was overwritten by main-addon install — flagged for re-apply`);
+          }
+          return overwritten ? { ...o, needsReapply: true } : o;
+        });
         const entry = {
           esouid: catalogEntry.id,
           url: catalogEntry.infoUrl,
@@ -472,6 +530,7 @@ export async function installAddon(
           installedAt: existing?.installedAt || now,
           updatedAt: now,
           installedFiles: zipFilesByDir.get(dir),
+          overlays: overlays?.length ? overlays : undefined,
         };
         db.addons[dir] = entry;
         // Write per-folder .yaam.json marker for resilient tracking
@@ -531,6 +590,32 @@ export function cleanupDownloadsSelected(addonsPath: string, fileNames: string[]
     moved.push(name);
   }
   return { moved };
+}
+
+/**
+ * Undo a downloads cleanup: move the given .zip files from Downloads/ back
+ * into the AddOns root (skips files that vanished or would overwrite).
+ */
+export function moveDownloadsBack(addonsPath: string, fileNames: string[]): { restored: string[]; errors: string[] } {
+  const downloadsDir = getDownloadsDir(addonsPath);
+  const restored: string[] = [];
+  const errors: string[] = [];
+  for (const name of fileNames) {
+    const src = path.join(downloadsDir, name);
+    const dest = path.join(addonsPath, name);
+    if (!fs.existsSync(src)) continue;
+    if (fs.existsSync(dest)) {
+      errors.push(`${name}: already exists in AddOns/`);
+      continue;
+    }
+    try {
+      fs.renameSync(src, dest);
+      restored.push(name);
+    } catch (err) {
+      errors.push(`${name}: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+  return { restored, errors };
 }
 
 /**

@@ -7,6 +7,7 @@ interface ParseTest {
   expectedParts: number[]; expectedSubParts: number[];
   expectedPreRelease?: string; expectedPreReleaseNum?: number;
   expectedSuffix?: string; expectedSuffixParts?: number[];
+  expectedLetterRank?: number;
 }
 interface CompareTest {
   description: string; a: string; b: string; expected: string;
@@ -32,6 +33,9 @@ describe('parseVersionParts – real-world addon versions', () => {
       }
       if (t.expectedSuffixParts !== undefined) {
         expect(result.suffixParts).toEqual(t.expectedSuffixParts);
+      }
+      if (t.expectedLetterRank !== undefined) {
+        expect(result.letterRank).toBe(t.expectedLetterRank);
       }
     });
   }

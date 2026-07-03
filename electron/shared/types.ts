@@ -73,6 +73,35 @@ export interface AddonInfo {
   yaamMarker?: YaamMarker;
   /** Files found in the addon folder that were NOT part of the original install (runtime-created) */
   runtimeFiles?: string[];
+  /** Manifest file mtime (epoch seconds).  Extraction rewrites it, so it
+   *  approximates the install time — a stateless update hint:
+   *  catalog published later than this → likely newer than what's on disk. */
+  manifestMtime?: number;
+}
+
+/**
+ * An overlay (language patch / fix pack) installed INTO another addon's folder.
+ * Overlays have their own catalog identity and version history, independent of
+ * the folder's main addon — one folder can hold 1 original + N overlays.
+ */
+export interface YaamOverlayEntry {
+  /** ESOUI catalog UID of the overlay entry */
+  esouid: string;
+  /** Catalog name at time of install/update */
+  catalogName: string;
+  /** Catalog version of the overlay at time of install/update */
+  catalogVersion: string;
+  /** Catalog date (epoch seconds) at time of install/update */
+  catalogDate?: number;
+  /** ISO timestamp of first install via YAAM */
+  installedAt: string;
+  /** ISO timestamp of last update via YAAM */
+  updatedAt: string;
+  /** Relative file paths from the overlay's ZIP (for conflict detection) */
+  installedFiles?: string[];
+  /** Set when a later install of the main addon overwrote overlay files —
+   *  the overlay should be re-applied (re-installed) to restore the patch. */
+  needsReapply?: boolean;
 }
 
 /** Per-addon metadata stored in the central YAAM database (yaam-addons.json). */
@@ -97,6 +126,8 @@ export interface YaamAddonEntry {
   updatedAt: string;
   /** Relative file paths from the original ZIP (install manifest for detecting runtime-created files) */
   installedFiles?: string[];
+  /** Overlays (language patches, fixes) layered into this addon's folder */
+  overlays?: YaamOverlayEntry[];
 }
 
 /**
@@ -122,6 +153,12 @@ export interface YaamMarker {
   installedAt: string;
   /** ISO timestamp of last update via YAAM */
   updatedAt: string;
+  /** Overlays (language patches, fixes) layered into this addon's folder */
+  overlays?: YaamOverlayEntry[];
+  /** Relative file paths from the original ZIP.  Lives in the marker so the
+   *  central DB is FULLY reconstructable from the folders alone — deleting
+   *  yaam-addons.json is lossless. */
+  installedFiles?: string[];
 }
 
 export interface DependencyRef {
@@ -135,6 +172,21 @@ export interface DependencyRef {
 const VERSION_PRE_RELEASE_ORDER: Record<string, number> = {
   dev: 0, alpha: 1, pre: 2, beta: 3, rc: 4,
 };
+
+/**
+ * Split a compact 8-digit datestamp (YYYYMMDD, e.g. "20240310") into
+ * [YYYY, MM, DD].  Authors freely switch between "2024.03.10" and "20240310"
+ * (HodorReflexes even uses both at once: Version 2024.03.10 / AddOnVersion
+ * 20240310).  Returns null when the value is not a plausible datestamp.
+ */
+function splitDatestamp(n: number): number[] | null {
+  if (n < 19900101 || n > 20991231) return null;
+  const y = Math.floor(n / 10000);
+  const m = Math.floor((n % 10000) / 100);
+  const d = n % 100;
+  if (m < 1 || m > 12 || d < 1 || d > 31) return null;
+  return [y, m, d];
+}
 
 /**
  * Normalize date-based version parts to [YYYY, MM, DD] order so that
@@ -181,6 +233,8 @@ function normalizeDateParts(parts: number[]): number[] {
  *   2.3.22 build 1442     – with build number
  *   v2.31                 – leading v prefix
  *   85, 104               – simple integer
+ *   20240310              – compact datestamp (≡ 2024.03.10)
+ *   3.16.7b, 2.1.5b       – hotfix letter suffix (3.16.7 < 3.16.7a < 3.16.7b)
  *   4.0.5.6.1             – extra-long (arbitrary number of segments)
  *   1.0-alpha, 1.0-rc.2  – pre-release
  *   2026-03-04 (20260304) – with parenthesized build metadata
@@ -194,6 +248,8 @@ export function parseVersionParts(raw: string): {
   preReleaseNum: number;
   suffix?: string;
   suffixParts: number[];
+  /** Hotfix letter directly after the last digit: 0 = none, a=1, b=2, … */
+  letterRank: number;
 } {
   let s = (raw || '').trim();
 
@@ -220,6 +276,18 @@ export function parseVersionParts(raw: string): {
     preRelease = preMatch[1].toLowerCase();
     preReleaseNum = preMatch[2] ? parseInt(preMatch[2], 10) : 0;
     s = s.replace(preMatch[0], '');
+  }
+
+  // Detect and extract a hotfix letter suffix: a single letter directly after
+  // the last digit at the end of the string ("3.16.7b", "1.4.2a").  ESO
+  // convention: this is a re-release AFTER the plain version, so
+  // 3.16.7 < 3.16.7a < 3.16.7b.  Multi-letter tails ("36.23PL", "1.02-custom")
+  // are language/author tags with no orderable meaning and stay ignored.
+  let letterRank = 0;
+  const letterMatch = s.match(/(\d)([a-z])$/i);
+  if (letterMatch) {
+    letterRank = letterMatch[2].toLowerCase().charCodeAt(0) - 96; // a=1 … z=26
+    s = s.slice(0, -1);
   }
 
   // Detect and extract suffix keywords (r, build, rev) that split the version
@@ -252,12 +320,18 @@ export function parseVersionParts(raw: string): {
   const nums = s.match(/\d+/g);
   let parts = nums ? nums.map(Number) : [0];
 
+  // A single 8-digit group is a compact datestamp (20240310 ≡ 2024.03.10)
+  if (parts.length === 1) {
+    const stamp = splitDatestamp(parts[0]);
+    if (stamp) parts = stamp;
+  }
+
   // Normalise date-based versions so ISO / US / EU all compare correctly
   parts = normalizeDateParts(parts);
   // Detect whether this version looks like a date (3 segments with a plausible year)
   const isDate = parts.length === 3 && parts[0] >= 2000 && parts[1] >= 1 && parts[1] <= 12 && parts[2] >= 1 && parts[2] <= 31;
 
-  return { parts, subParts, isDate, preRelease, preReleaseNum, suffix, suffixParts };
+  return { parts, subParts, isDate, preRelease, preReleaseNum, suffix, suffixParts, letterRank };
 }
 
 /**
@@ -285,10 +359,22 @@ export function versionsDigitEqual(a: string, b: string): boolean {
   const vb = parseVersionParts(sb);
   // Different pre-release tags are never the same release (1.0-beta ≠ 1.0).
   if (va.preRelease !== vb.preRelease || va.preReleaseNum !== vb.preReleaseNum) return false;
-  // Date-based versions compare reliably as parts; digit concatenation would
-  // equate e.g. "2026.1.10" with "2026.11.0" — never shortcut when either side
-  // looks like a date.
-  if (va.isDate || vb.isDate) return false;
+  // A hotfix letter marks a NEW release: "3.16.7" ≠ "3.16.7b" even though the
+  // digit sequences are identical.
+  if (va.letterRank !== vb.letterRank) return false;
+  // Date-based versions compare reliably as parts, not as digit concatenation
+  // (that would equate "2026.1.10" with "2026.11.0").  When BOTH sides are
+  // dates, equal [Y,M,D] parts mean the same release regardless of formatting
+  // ("20260620" ≡ "2026.06.20" ≡ "2026-06-20") — but parenthesized build
+  // metadata must match too ("2026-03-04 (20260304)" ≠ "2026-03-04 (20260305)").
+  // A date on only one side is a scheme change — never equal here.
+  if (va.isDate || vb.isDate) {
+    return va.isDate && vb.isDate
+      && va.parts.length === vb.parts.length
+      && va.parts.every((p, i) => p === vb.parts[i])
+      && va.subParts.length === vb.subParts.length
+      && va.subParts.every((p, i) => p === vb.subParts[i]);
+  }
 
   const rawDigits = (s: string): string => (s.match(/\d+/g) || []).join('');
   const da = rawDigits(sa);
@@ -468,6 +554,9 @@ export function compareVersionStrings(a: string, b: string, catalogDateEpoch?: n
     }
   }
 
+  // Tiebreaker: hotfix letter suffix (3.16.7 < 3.16.7a < 3.16.7b)
+  if (va.letterRank !== vb.letterRank) return va.letterRank - vb.letterRank;
+
   return 0;
 }
 
@@ -646,4 +735,12 @@ export const IPC_CHANNELS = {
   CLEANUP_YAAM_MARKERS: 'cleanup-yaam-markers',
   UPDATE_CATALOG_SNAPSHOT: 'update-catalog-snapshot',
   COMMIT_CATALOG_SNAPSHOT: 'commit-catalog-snapshot',
+  COMMIT_BASELINE: 'commit-baseline',
+  PREVIEW_FOLDER_HYGIENE: 'preview-folder-hygiene',
+  APPLY_FOLDER_HYGIENE: 'apply-folder-hygiene',
+  UNDO_FOLDER_HYGIENE: 'undo-folder-hygiene',
+  RESTORE_TRACKING_STATE: 'restore-tracking-state',
+  LIST_REMOVED: 'list-removed',
+  RESTORE_REMOVED: 'restore-removed',
+  MOVE_DOWNLOADS_BACK: 'move-downloads-back',
 } as const;

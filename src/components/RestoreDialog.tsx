@@ -32,13 +32,25 @@ interface CurrentAddon {
   version: string;
 }
 
+interface RemovedEntryItem {
+  name: string;
+  relPath: string;
+  fromHygiene: boolean;
+  isDirectory: boolean;
+  sizeBytes: number;
+  mtimeMs: number;
+}
+
 interface RestoreDialogProps {
   snapshots: AddonSnapshot[];
   backups: AddonBackup[];
   svBackups: SvBackupEntry[];
+  /** Entries moved to Removed/ by deletes, cleanups and hygiene runs */
+  removedEntries: RemovedEntryItem[];
   currentAddons: CurrentAddon[];
   onRestoreBackup: (folderName: string, version: string, backupPath: string) => void;
   onRestoreSvFile: (backupFilePath: string) => void;
+  onRestoreRemoved: (relPath: string) => void;
   onClose: () => void;
 }
 
@@ -48,15 +60,17 @@ function formatTimestamp(iso: string): string {
     ' ' + d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
 }
 
-type TabId = 'backups' | 'snapshots' | 'savedvars';
+type TabId = 'backups' | 'snapshots' | 'savedvars' | 'removed';
 
 const RestoreDialog: React.FC<RestoreDialogProps> = ({
   snapshots,
   backups,
   svBackups,
+  removedEntries,
   currentAddons,
   onRestoreBackup,
   onRestoreSvFile,
+  onRestoreRemoved,
   onClose,
 }) => {
   const closeRef = useRef<HTMLButtonElement>(null);
@@ -185,6 +199,12 @@ const RestoreDialog: React.FC<RestoreDialogProps> = ({
             onClick={() => setActiveTab('savedvars')}
           >
             💾 SavedVariables ({svBackups.length})
+          </button>
+          <button
+            className={`restore-tab ${activeTab === 'removed' ? 'active' : ''}`}
+            onClick={() => setActiveTab('removed')}
+          >
+            🗑️ Removed ({removedEntries.length})
           </button>
         </div>
 
@@ -384,6 +404,41 @@ const RestoreDialog: React.FC<RestoreDialogProps> = ({
                     </div>
                   );
                 })}
+              </div>
+            )}
+          </div>
+        )}
+
+        {activeTab === 'removed' && (
+          <div className="restore-content">
+            {removedEntries.length === 0 ? (
+              <div className="restore-empty">
+                Nothing in Removed/. Deleted addons, cleaned-up libraries and folder-hygiene
+                items are moved there instead of being deleted — restore them here anytime.
+              </div>
+            ) : (
+              <div className="restore-list">
+                {removedEntries.map((entry) => (
+                  <div key={entry.relPath} className="restore-addon-group">
+                    <div className="restore-version-row">
+                      <span className="restore-version-label">
+                        {entry.isDirectory ? '📁' : '📄'} {entry.name}
+                        {entry.fromHygiene && <span className="restore-current-ver" title="Captured by a folder-hygiene run"> (hygiene)</span>}
+                        <span className="restore-current-ver">
+                          {' '}— {formatTimestamp(new Date(entry.mtimeMs).toISOString())}
+                          {entry.sizeBytes > 0 && `, ${entry.sizeBytes >= 1048576 ? (entry.sizeBytes / 1048576).toFixed(1) + ' MB' : Math.max(1, Math.round(entry.sizeBytes / 1024)) + ' KB'}`}
+                        </span>
+                      </span>
+                      <button
+                        className="restore-btn"
+                        onClick={() => onRestoreRemoved(entry.relPath)}
+                        title={`Move back to AddOns/${entry.fromHygiene ? ' (original location)' : ''}`}
+                      >
+                        ↩ Restore
+                      </button>
+                    </div>
+                  </div>
+                ))}
               </div>
             )}
           </div>

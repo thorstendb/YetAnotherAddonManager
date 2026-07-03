@@ -13,8 +13,9 @@ function errMsg(err: unknown): string {
 interface OnlineBrowserProps {
   installedDirNames: Set<string>;
   localAddons: AddonInfo[];
-  addonPath: string;
   knownAddonNames: Set<string>;
+  /** Central install handler from App — one code path for ALL install surfaces
+   *  (backup before update, undo log action, overlay-aware LangPatch install) */
   onInstall: (addon: CatalogAddon) => void;
   onLog: (message: string, level?: 'info' | 'warn' | 'error' | 'success') => void;
   onNavigate: (name: string) => void;
@@ -30,6 +31,8 @@ interface OnlineBrowserProps {
   checkUpdateAvailable?: (addon: AddonInfo, catalogAddon: CatalogAddon) => boolean;
   /** Authoritative set of catalog addon IDs with updates (computed in App.tsx) */
   updatableCatalogIds?: Set<string>;
+  /** Overlay-classified catalog entries: id → name of the original addon they patch */
+  overlayTargets?: Map<string, string>;
 }
 
 type SortField = 'name' | 'downloads' | 'monthly' | 'date' | 'favorites';
@@ -37,7 +40,6 @@ type SortField = 'name' | 'downloads' | 'monthly' | 'date' | 'favorites';
 const OnlineBrowser: React.FC<OnlineBrowserProps> = ({
   installedDirNames,
   localAddons,
-  addonPath,
   knownAddonNames,
   onInstall,
   onLog,
@@ -52,6 +54,7 @@ const OnlineBrowser: React.FC<OnlineBrowserProps> = ({
   installProgress,
   checkUpdateAvailable,
   updatableCatalogIds: updatableCatalogIdsProp,
+  overlayTargets,
 }) => {
   const [allAddons, setAllAddons] = useState<CatalogAddon[]>([]);
   const [loading, setLoading] = useState(false);
@@ -60,7 +63,6 @@ const OnlineBrowser: React.FC<OnlineBrowserProps> = ({
   const [sortField, setSortField] = useState<SortField>('downloads');
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
   const [focusedId, setFocusedId] = useState<string | null>(null);
-  const [installing, setInstalling] = useState<string | null>(null);
   const [depsExpandedIds, setDepsExpandedIds] = useState<Set<string>>(new Set());
   const [optDepsExpandedIds, setOptDepsExpandedIds] = useState<Set<string>>(new Set());
   const [charsExpandedIds, setCharsExpandedIds] = useState<Set<string>>(new Set());
@@ -234,45 +236,10 @@ const OnlineBrowser: React.FC<OnlineBrowserProps> = ({
     return sorted;
   }, [allAddons, categoryFilter, searchQuery, sortField, showInstalledOnly, installedDirNames]);
 
-  const handleInstall = useCallback(async (addon: CatalogAddon) => {
-    if (!addonPath) {
-      onLog('Set an AddOns path before installing', 'warn');
-      return;
-    }
-    setInstalling(addon.id);
-    onLog(`Installing "${addon.name}" from catalog...`, 'info');
-    try {
-      const result = await window.electronAPI.installAddon(addon.id, addonPath);
-      if (result.error) {
-        onLog(`Failed to install "${addon.name}": ${result.error}`, 'error');
-      } else {
-        const primaryDirs = result.installed.filter((d) => !d.startsWith('Lib'));
-        const depDirs = result.installed.filter((d) => d.startsWith('Lib'));
-        if (depDirs.length > 0) {
-          onLog(
-            `Installed "${addon.name}" (${primaryDirs.join(', ')}) + ${depDirs.length} dependenc${depDirs.length === 1 ? 'y' : 'ies'} (${depDirs.join(', ')})`,
-            'success'
-          );
-        } else {
-          onLog(
-            `Installed "${addon.name}" (${result.installed.join(', ')})`,
-            'success'
-          );
-        }
-        if (result.missingDeps.length > 0) {
-          onLog(
-            `Could not resolve ${result.missingDeps.length} dependenc${result.missingDeps.length === 1 ? 'y' : 'ies'}: ${result.missingDeps.join(', ')}`,
-            'warn'
-          );
-        }
-        onInstall(addon);
-      }
-    } catch (err: unknown) {
-      onLog(`Error installing "${addon.name}": ${errMsg(err)}`, 'error');
-    } finally {
-      setInstalling(null);
-    }
-  }, [addonPath, onInstall, onLog]);
+  // All installs route through the central App handler so every surface gets
+  // identical behavior: backup before update, undo log action, overlay-aware
+  // LangPatch handling, rescan and snapshot commit.
+  const handleInstall = onInstall;
 
   const formatNumber = (n: number) => {
     if (n >= 1000000) return (n / 1000000).toFixed(1) + 'M';
@@ -529,7 +496,7 @@ const OnlineBrowser: React.FC<OnlineBrowserProps> = ({
               ? compareVersionStrings(localVer, addon.version, addon.date) > 0
               : false;
             const isExpanded = expandedIds.has(addon.id);
-            const isCurrentlyInstalling = installing === addon.id;
+            const isCurrentlyInstalling = installingAddonId === addon.id;
             const catName = getCategoryName(addon.categoryId);
             const deps = getDepsForOnlineAddon(addon);
             const optDeps = getOptDepsForOnlineAddon(addon);
@@ -564,6 +531,9 @@ const OnlineBrowser: React.FC<OnlineBrowserProps> = ({
                     {localVer && (hasUpdate || isLocalNewer) && <span className="tree-local-version"> [local: v{localVer}]</span>}
                     {hasUpdate && <span className="tree-update-badge" title="Update available — catalog has a newer version">⬆️</span>}
                     {isLocalNewer && <span className="tree-regression-badge" title="Local version is newer than catalog — possible version scheme change">⚠️</span>}
+                    {overlayTargets?.has(addon.id) && (
+                      <span className="tree-overlay-badge" title={`Language patch / fix pack for "${overlayTargets.get(addon.id)}" — installs into its folder as an overlay (main identity preserved)`}> 🧩</span>
+                    )}
                   </span>
                   <span className="tree-row-actions">
                     <button
@@ -595,7 +565,7 @@ const OnlineBrowser: React.FC<OnlineBrowserProps> = ({
                     )}
                   </span>
                 </div>
-                {(isCurrentlyInstalling || installingAddonId === addon.id) && (() => {
+                {isCurrentlyInstalling && (() => {
                   const progress = installProgress?.[addon.id];
                   if (!progress) return null;
                   const isIndeterminate = progress.phase === 'resolving';
@@ -732,7 +702,7 @@ const OnlineBrowser: React.FC<OnlineBrowserProps> = ({
                             {deps.map((dep, i) => {
                               const { installed: isDepInstalled, outdated: isDepOutdated } = getDepStatus(dep);
                               const depCatalog = catalogByDir?.get(dep.name);
-                              const isDepInstalling = depCatalog && (installing === depCatalog.id || installingAddonId === depCatalog.id);
+                              const isDepInstalling = depCatalog && installingAddonId === depCatalog.id;
                               return (
                               <div key={i} className={`tree-subtree-leaf ${!isDepInstalled || isDepOutdated ? 'dep-missing' : ''}`}>
                                 <span className="tree-leaf-icon">{!isDepInstalled ? '❌' : isDepOutdated ? '⚠️' : '📎'}</span>
@@ -801,7 +771,7 @@ const OnlineBrowser: React.FC<OnlineBrowserProps> = ({
                             {optDeps.map((dep, i) => {
                               const { installed: isDepInstalled, outdated: isDepOutdated } = getDepStatus(dep);
                               const depCatalog = catalogByDir?.get(dep.name);
-                              const isDepInstalling = depCatalog && (installing === depCatalog.id || installingAddonId === depCatalog.id);
+                              const isDepInstalling = depCatalog && installingAddonId === depCatalog.id;
                               return (
                               <div key={i} className={`tree-subtree-leaf ${!isDepInstalled || isDepOutdated ? 'dep-missing' : ''}`}>
                                 <span className="tree-leaf-icon">{!isDepInstalled ? '❌' : isDepOutdated ? '⚠️' : '📎'}</span>
@@ -961,7 +931,7 @@ const OnlineBrowser: React.FC<OnlineBrowserProps> = ({
                   ? checkUpdateAvailable(localAddonForBtn, infoAddon) : false;
                 const isLocalNewer = installed && localAddonForBtn && infoAddon.version
                   ? compareVersionStrings(localAddonForBtn.version, infoAddon.version, infoAddon.date) > 0 : false;
-                const isCurrentlyInstalling = installing === infoAddon.id || installingAddonId === infoAddon.id;
+                const isCurrentlyInstalling = installingAddonId === infoAddon.id;
                 return (
                   <div className="addon-info-actions">
                     <button className="info-action-btn" onClick={() => { setInfoAddonId(null); handleInstall(infoAddon); }} disabled={isCurrentlyInstalling}

@@ -30,9 +30,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.invoke(IPC_CHANNELS.FETCH_CATEGORIES),
   installAddon: (
     addonId: string,
-    addonsPath: string
+    addonsPath: string,
+    opts?: { overlayFor?: string }
   ): Promise<{ installed: string[]; missingDeps: string[]; error?: string }> =>
-    ipcRenderer.invoke(IPC_CHANNELS.INSTALL_ADDON, addonId, addonsPath),
+    ipcRenderer.invoke(IPC_CHANNELS.INSTALL_ADDON, addonId, addonsPath, opts),
   getAddonSettings: (addonsPath: string): Promise<AddonSettingsData> =>
     ipcRenderer.invoke(IPC_CHANNELS.GET_ADDON_SETTINGS, addonsPath),
   setAddonSetting: (
@@ -190,10 +191,39 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.invoke(IPC_CHANNELS.RECONCILE_YAAM_META, addonsPath, matches),
   getYaamDb: (addonsPath: string): Promise<Record<string, { esouid: string; url: string; catalogName: string; catalogAuthor: string; catalogVersion: string; localVersion: string; installedAt: string; updatedAt: string }>> =>
     ipcRenderer.invoke(IPC_CHANNELS.GET_YAAM_DB, addonsPath),
-  cleanupYaamMarkers: (addonsPath: string): Promise<number> =>
+  cleanupYaamMarkers: (addonsPath: string): Promise<{ count: number; backupDir: string }> =>
     ipcRenderer.invoke(IPC_CHANNELS.CLEANUP_YAAM_MARKERS, addonsPath),
+  restoreTrackingState: (addonsPath: string, backupDir: string): Promise<{ restored: boolean; markers: number; error?: string }> =>
+    ipcRenderer.invoke(IPC_CHANNELS.RESTORE_TRACKING_STATE, addonsPath, backupDir),
+  listRemoved: (addonsPath: string): Promise<{ name: string; relPath: string; fromHygiene: boolean; isDirectory: boolean; sizeBytes: number; mtimeMs: number }[]> =>
+    ipcRenderer.invoke(IPC_CHANNELS.LIST_REMOVED, addonsPath),
+  restoreRemoved: (addonsPath: string, relPath: string): Promise<{ restored: boolean; target: string; error?: string }> =>
+    ipcRenderer.invoke(IPC_CHANNELS.RESTORE_REMOVED, addonsPath, relPath),
+  moveDownloadsBack: (addonsPath: string, fileNames: string[]): Promise<{ restored: string[]; errors: string[] }> =>
+    ipcRenderer.invoke(IPC_CHANNELS.MOVE_DOWNLOADS_BACK, addonsPath, fileNames),
   updateCatalogSnapshot: (addonsPath: string): Promise<{ changed: [string, { oldVersion: string; newVersion: string }][]; added: string[]; removed: string[] } | null> =>
     ipcRenderer.invoke(IPC_CHANNELS.UPDATE_CATALOG_SNAPSHOT, addonsPath),
+  commitBaseline: (
+    addonsPath: string,
+    entries: { folderName: string; esouid: string; url: string; name: string; author: string; catalogVersion: string; catalogDate?: number; localVersion: string; overlays?: { esouid: string; catalogName: string; catalogVersion: string; catalogDate?: number }[] }[]
+  ): Promise<{ anchored: number; details: string[]; trackingBackupDir: string }> =>
+    ipcRenderer.invoke(IPC_CHANNELS.COMMIT_BASELINE, addonsPath, entries),
+  previewFolderHygiene: (addonsPath: string): Promise<{
+    strayManifests: { file: string; addonName: string; title: string; version: string; addonVersion: number; relatedFiles: string[]; folderExists: boolean; folderVersion: string; rootIsStale: boolean }[];
+    duplicates: { relPath: string; originalRelPath: string; isDirectory: boolean }[];
+    unclaimedRootFiles: string[];
+  }> =>
+    ipcRenderer.invoke(IPC_CHANNELS.PREVIEW_FOLDER_HYGIENE, addonsPath),
+  applyFolderHygiene: (
+    addonsPath: string,
+    actions: { repairs: string[]; removals: string[] }
+  ): Promise<{ repaired: string[]; removed: string[]; errors: string[]; undo: { hygieneDir: string; removals: string[]; repairs: { addonName: string; movedItems: string[] }[] } }> =>
+    ipcRenderer.invoke(IPC_CHANNELS.APPLY_FOLDER_HYGIENE, addonsPath, actions),
+  undoFolderHygiene: (
+    addonsPath: string,
+    undo: { hygieneDir: string; removals: string[]; repairs: { addonName: string; movedItems: string[] }[] }
+  ): Promise<{ restored: number; errors: string[] }> =>
+    ipcRenderer.invoke(IPC_CHANNELS.UNDO_FOLDER_HYGIENE, addonsPath, undo),
   commitCatalogSnapshot: (addonsPath: string): Promise<boolean> =>
     ipcRenderer.invoke(IPC_CHANNELS.COMMIT_CATALOG_SNAPSHOT, addonsPath),
 });
