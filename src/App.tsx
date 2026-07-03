@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { AddonInfo, AddonSettingsData, CatalogAddon, SavedVarsInfo, compareVersionStrings, versionsDigitEqual, dateToVersion } from '../electron/shared/types';
-import { classifyDirOwnership, findHijackedManifestOverlay } from '../electron/shared/overlays';
+import { classifyDirOwnership, findHijackedManifestOverlay, hasOverlayStyleName } from '../electron/shared/overlays';
 import PathBar from './components/PathBar';
 import StatusBar from './components/StatusBar';
 import TreePanel from './components/TreePanel';
@@ -601,7 +601,15 @@ function App() {
           }
         }
         const overlayIds = new Set(ownership.overlays.map((o) => o.id));
-        if (overlayIds.has(main.id) && ownership.original) {
+        // Marker beats overlay classification: a DB/marker match records what
+        // the user DELIBERATELY installed — that entry IS the folder identity.
+        // Category 33 also holds rewrites/forks/successors ("Asylum Tracker
+        // 3.0.0 - Total cleanup", "Heat Shock Tracker (former Stagger)"), and
+        // redirecting those to the abandoned "original" produced downgrade
+        // offers (3.0.0 → 2.0.5).  Only a clearly patch-style NAME (LangPatch,
+        // translation, …) may override a tracked match.
+        const redirectAllowed = !matchedByMeta || hasOverlayStyleName(main.name);
+        if (overlayIds.has(main.id) && ownership.original && redirectAllowed) {
           // The best match IS a patch (hijacked manifest, dependency URL or a
           // legacy DB entry pointing at the patch) → redirect to the original.
           if (!installedOverlays.some((o) => o.catalogAddon.id === main.id)) {
@@ -614,7 +622,8 @@ function App() {
         } else if (ownership.original && main.id === ownership.original.id) {
           // Main match is already the original — the manifest title may still
           // reveal a hijacking patch that was installed outside YAAM.
-          const hijacked = findHijackedManifestOverlay(addon.title, ownership.overlays);
+          // (Same-named patch entries carry no hijack evidence.)
+          const hijacked = findHijackedManifestOverlay(addon.title, ownership.overlays, ownership.original.name);
           if (hijacked && !installedOverlays.some((o) => o.catalogAddon.id === hijacked.id)) {
             installedOverlays.push({ catalogAddon: hijacked, evidence: 'manifest' });
             layered = true;
@@ -1002,6 +1011,17 @@ function App() {
       const filesUnchanged = !anchor || addon.version === anchor;
       if (trackedVersion && filesUnchanged) {
         if (trackedVersion !== catalogAddon.version && !versionsDigitEqual(trackedVersion, catalogAddon.version)) {
+          // Downgrade guard: never auto-offer a target that is provably OLDER
+          // than what we installed.  This is the safety net for wrong catalog
+          // matches (a misclassified successor redirected to its abandoned
+          // predecessor would otherwise offer 3.0.0 → 2.0.5).  A deliberate
+          // author rollback is rare — reinstall via the browser covers it.
+          // compareVersionStrings returns 0 when schemes are incomparable, so
+          // legitimate scheme-change updates are never suppressed here.
+          if (compareVersionStrings(catalogAddon.version, trackedVersion) < 0) {
+            console.log(`[YAAM] Tier 2 downgrade suppressed: ${addon.folderName} trackedVersion="${trackedVersion}" catalogVersion="${catalogAddon.version}"`);
+            return false;
+          }
           console.log(`[YAAM] Tier 2 update (version): ${addon.folderName} trackedVersion="${trackedVersion}" catalogVersion="${catalogAddon.version}"`);
           return true;
         }

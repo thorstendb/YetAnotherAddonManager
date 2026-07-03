@@ -39,6 +39,18 @@ export function isOverlayStyleEntry(ca: Pick<CatalogAddon, 'categoryId' | 'name'
   return OVERLAY_CATEGORY_IDS.has(ca.categoryId) || OVERLAY_NAME_RE.test(ca.name);
 }
 
+/**
+ * STRONG overlay evidence: the NAME clearly marks a patch/translation.
+ * Category 33 alone is weak — authors also file complete rewrites, forks and
+ * successors there ("Asylum Tracker 3.0.0 - Total cleanup", "Heat Shock
+ * Tracker (former Stagger)", "… (theviper121)").  A category-only entry that a
+ * user deliberately installed (DB/marker match) must keep the folder identity,
+ * so callers use this check before overriding a tracked match.
+ */
+export function hasOverlayStyleName(name: string): boolean {
+  return OVERLAY_NAME_RE.test(name);
+}
+
 export interface DirOwnership {
   /** The folder's main identity: best non-overlay entry claiming it as primary dir */
   original?: CatalogAddon;
@@ -86,12 +98,21 @@ const norm = (s: string): string => s.toLowerCase().replace(/[^a-z0-9]/g, '');
  * Manifest-hijack evidence: language patches replace <Folder>.txt, so the
  * installed manifest carries the PATCH's title (e.g. "AsylumNotifier.LangPatch").
  * Returns the overlay whose catalog name matches the local manifest title.
+ *
+ * A patch whose catalog name equals the ORIGINAL's name carries no evidence:
+ * the local title matches both, so it cannot prove a hijack (seen with
+ * "Rare Fish Tracker", where a patch entry shares the original's exact name).
  */
 export function findHijackedManifestOverlay(
   localTitle: string,
-  overlays: CatalogAddon[]
+  overlays: CatalogAddon[],
+  originalName?: string
 ): CatalogAddon | undefined {
   const t = norm(localTitle);
   if (!t) return undefined;
-  return overlays.find((ov) => norm(ov.name) === t);
+  const o = originalName ? norm(originalName) : '';
+  return overlays.find((ov) => {
+    const n = norm(ov.name);
+    return n === t && (!o || n !== o);
+  });
 }
