@@ -58,6 +58,7 @@ const OnlineBrowser: React.FC<OnlineBrowserProps> = ({
 }) => {
   const [allAddons, setAllAddons] = useState<CatalogAddon[]>([]);
   const [loading, setLoading] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [categoryFilter, setCategoryFilter] = useState('');
   const [sortField, setSortField] = useState<SortField>('downloads');
@@ -157,6 +158,7 @@ const OnlineBrowser: React.FC<OnlineBrowserProps> = ({
 
   const loadList = useCallback(async (forceRefresh: boolean) => {
     setLoading(true);
+    setLoadError(null);
     try {
       const list = await window.electronAPI.fetchAddonCatalog(forceRefresh);
       setAllAddons(list);
@@ -166,6 +168,9 @@ const OnlineBrowser: React.FC<OnlineBrowserProps> = ({
         onLog(`Loaded addon catalog: ${list.length} addons`, 'info');
       }
     } catch (err: unknown) {
+      // Keep the reason around: an empty panel that says "No matching addons"
+      // reads like an active filter, not like a failed download.
+      setLoadError(errMsg(err));
       onLog(`Failed to load addon catalog: ${errMsg(err)}`, 'error');
     } finally {
       setLoading(false);
@@ -478,6 +483,19 @@ const OnlineBrowser: React.FC<OnlineBrowserProps> = ({
           <div className="empty-state">
             <div className="icon">🌐</div>
             <p>Loading addon catalog...</p>
+          </div>
+        ) : loadError && allAddons.length === 0 ? (
+          <div className="empty-state">
+            <div className="icon">⚠️</div>
+            <p>Addon catalog could not be loaded</p>
+            <p style={{ fontSize: '0.85em', opacity: 0.8, maxWidth: '32em' }}>{loadError}</p>
+            <p style={{ fontSize: '0.85em', opacity: 0.8, maxWidth: '32em' }}>
+              YAAM could not reach api.mmoui.com. Check firewall, antivirus (HTTPS scanning),
+              VPN or DNS — Minion uses the same server.
+            </p>
+            <button onClick={() => loadList(true)} style={{ marginTop: '0.75em' }}>
+              Retry
+            </button>
           </div>
         ) : filteredAddons.length === 0 ? (
           <div className="empty-state">

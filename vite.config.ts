@@ -22,6 +22,19 @@ export default defineConfig({
         },
       },
       {
+        // Filesystem worker: emitted next to main.js, started via
+        // new Worker(path.join(__dirname, 'fsWorker.js')).
+        entry: 'electron/fsWorker.ts',
+        vite: {
+          build: {
+            outDir: 'dist-electron',
+            rollupOptions: {
+              external: ['electron'],
+            },
+          },
+        },
+      },
+      {
         entry: 'electron/preload.ts',
         onstart(options) {
           options.reload();

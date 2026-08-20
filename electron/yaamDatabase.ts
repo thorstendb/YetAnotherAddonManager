@@ -75,11 +75,28 @@ export function loadDatabase(addonsPath: string): YaamDatabase {
   return { schemaVersion: CURRENT_SCHEMA, addons: {} };
 }
 
+/**
+ * Write a JSON file atomically: serialize to a temp file in the same directory,
+ * then rename over the target.  rename() is atomic within a filesystem, so a
+ * reader either sees the old file or the complete new one — never a truncated
+ * mix.  This is what makes it safe to kill a stuck worker mid-scan.
+ */
+function writeJsonAtomic(targetPath: string, data: unknown): void {
+  const tmpPath = `${targetPath}.${process.pid}.tmp`;
+  try {
+    fs.writeFileSync(tmpPath, JSON.stringify(data, null, 2), 'utf-8');
+    fs.renameSync(tmpPath, targetPath);
+  } catch (err) {
+    try { if (fs.existsSync(tmpPath)) fs.unlinkSync(tmpPath); } catch { /* best effort */ }
+    throw err;
+  }
+}
+
 /** Save the database to disk. */
 export function saveDatabase(db: YaamDatabase, addonsPath: string): void {
   const dbPath = getDbPath(addonsPath);
   try {
-    fs.writeFileSync(dbPath, JSON.stringify(db, null, 2), 'utf-8');
+    writeJsonAtomic(dbPath, db);
   } catch (err) {
     console.error('Failed to save YAAM database:', err);
   }
@@ -152,8 +169,8 @@ export function backupTrackingState(addonsPath: string): string {
       }
     }
     fs.mkdirSync(dir, { recursive: true });
-    fs.writeFileSync(path.join(dir, 'yaam-addons.json'), JSON.stringify(db, null, 2), 'utf-8');
-    fs.writeFileSync(path.join(dir, 'markers.json'), JSON.stringify(markers, null, 2), 'utf-8');
+    writeJsonAtomic(path.join(dir, 'yaam-addons.json'), db);
+    writeJsonAtomic(path.join(dir, 'markers.json'), markers);
     return dir;
   } catch (err) {
     console.error('Failed to back up tracking state:', err);
@@ -187,7 +204,7 @@ export function restoreTrackingState(addonsPath: string, backupDir: string): { r
           if (dbEntry) {
             writeMarkerFile(addonsPath, entry.name, dbEntry);
           } else {
-            fs.writeFileSync(markerPath, JSON.stringify(m, null, 2), 'utf-8');
+            writeJsonAtomic(markerPath, m);
           }
           count++;
         } else if (fs.existsSync(markerPath)) {
@@ -223,7 +240,7 @@ export function writeMarkerFile(addonsPath: string, folderName: string, entry: Y
     installedFiles: entry.installedFiles?.length ? entry.installedFiles : undefined,
   };
   try {
-    fs.writeFileSync(markerPath, JSON.stringify(marker, null, 2), 'utf-8');
+    writeJsonAtomic(markerPath, marker);
   } catch (err) {
     console.error(`Failed to write ${MARKER_FILE} for ${folderName}:`, err);
   }

@@ -6,9 +6,11 @@ import * as fs from 'fs';
 import * as os from 'os';
 import { IPC_CHANNELS } from './shared/types';
 import { loadConfig, saveConfig } from './configStore';
-import { scanAddonsFolder, cleanupUnusedLibraries, deleteAddon, deleteAddonAndExclusiveRefs, previewUnusedLibraries, cleanupSelectedLibraries, reconcileYaamMetadata, ReconcileMatch, commitBaseline, BaselineEntry, previewFolderHygiene, applyFolderHygiene, undoFolderHygiene, HygieneUndoInfo, listRemovedEntries, restoreRemovedEntry } from './addonScanner';
-import { fetchAddonCatalog, fetchAddonDetails, fetchCategories, installAddon, cleanupDownloadsFolder, previewCleanupDownloads, cleanupDownloadsSelected, moveDownloadsBack, updateCatalogSnapshot, commitCatalogSnapshot } from './addonCatalogApi';
-import { parseAddonSettings, setAddonSetting, batchSetAddonSettings, getSavedVarsInfo, deleteSavedVars, cleanupSettings, undoCleanupSettings, listSavedVarsBackups, restoreSavedVarsFile, exportProfile, importProfile, exportProfileAsZip, previewProfileZip, importProfileFromZip, ExportData, previewCleanupSettings, cleanupSettingsSelected } from './settingsManager';
+import { cleanupUnusedLibraries, deleteAddon, deleteAddonAndExclusiveRefs, previewUnusedLibraries, cleanupSelectedLibraries, reconcileYaamMetadata, ReconcileMatch, commitBaseline, BaselineEntry, previewFolderHygiene, applyFolderHygiene, undoFolderHygiene, HygieneUndoInfo, listRemovedEntries, restoreRemovedEntry } from './addonScanner';
+import { callFs, shutdownFsWorker } from './fsWorkerHost';
+import { TIMEOUTS } from './shared/timeouts';
+import { fetchAddonCatalog, fetchAddonDetails, fetchCategories, installAddon, updateCatalogSnapshot, commitCatalogSnapshot } from './addonCatalogApi';
+import { setAddonSetting, batchSetAddonSettings, getSavedVarsInfo, deleteSavedVars, cleanupSettings, undoCleanupSettings, listSavedVarsBackups, restoreSavedVarsFile, exportProfile, importProfile, exportProfileAsZip, previewProfileZip, importProfileFromZip, ExportData, previewCleanupSettings, cleanupSettingsSelected } from './settingsManager';
 import { saveSnapshotIfChanged, listSnapshots, listAddonBackups, restoreAddonFromBackup, backupAddonFolder, deleteAddonBackups, SnapshotAddon } from './snapshotManager';
 import { migrateFromFolderFiles, getAllEntries, getYaamDir, cleanupMarkerFiles, restoreTrackingState } from './yaamDatabase';
 
@@ -68,11 +70,37 @@ if (fs.existsSync(legacyTmpDir)) {
 // Clean up temp userData on quit (best-effort; Electron may still hold locks on
 // Cache files on Windows, so we also retry cleanup at next startup above).
 app.on('will-quit', () => {
+  shutdownFsWorker();
   try {
     fs.rmSync(userDataDir, { recursive: true, force: true });
   } catch {
     // Ignore — stale temp dir will be cleaned on next launch
   }
+
+  // A worker thread stuck in a blocking syscall (OneDrive "Files On-Demand",
+  // dead network share) cannot be killed: terminate() only stops a thread that
+  // returns to the JS runtime, and a pending read never does.  Such a thread
+  // keeps the whole process alive — precisely the "has to be killed via task
+  // manager" behaviour users report about Minion.
+  //
+  // The timer is unref'd, so it never delays a normal quit: if the process can
+  // exit it is gone long before this fires.  It only fires when something is
+  // holding the process hostage, and then a hard exit is correct — every write
+  // YAAM performs is synchronous and already flushed by this point.
+  // Escalate in two steps: app.exit() first, and if even that cannot complete
+  // (Node waits for worker threads on exit, so it may not) fall back to
+  // killing our own process.  Verified: terminate() and process.exit() both
+  // fail against a thread blocked in read(); SIGKILL is what actually works.
+  const forceExit = setTimeout(() => {
+    console.warn('[YAAM] Forcing exit — a filesystem worker is stuck in a blocking call');
+    app.exit(0);
+    const hardKill = setTimeout(() => {
+      console.warn('[YAAM] app.exit() did not complete — killing the process');
+      process.kill(process.pid, 'SIGKILL');
+    }, 1000);
+    hardKill.unref();
+  }, 2000);
+  forceExit.unref();
 });
 
 // Enforce single instance — prevents restart loops from portable launcher
@@ -206,17 +234,17 @@ ipcMain.handle(IPC_CHANNELS.SAVE_UI_SETTINGS, async (_event, settings: { logHeig
 });
 
 ipcMain.handle(IPC_CHANNELS.SCAN_ADDONS, async (_event, addonPath: string) => {
-  try {
-    return scanAddonsFolder(addonPath);
-  } catch (err: unknown) {
-    console.error('Scan error:', err);
-    return [];
-  }
+  // Runs in the filesystem worker so a blocking syscall (OneDrive "Files
+  // On-Demand", dead network share) can be timed out and aborted instead of
+  // wedging the main process.  Errors are propagated: the renderer logs them
+  // and shows the user what happened — returning [] silently was exactly the
+  // behaviour that made "stuck at Scanning…" impossible to diagnose.
+  return await callFs('scanAddons', [addonPath], TIMEOUTS.fs.scan);
 });
 
 ipcMain.handle(IPC_CHANNELS.RECONCILE_YAAM_META, async (_event, addonsPath: string, matches: ReconcileMatch[]) => {
   try {
-    return reconcileYaamMetadata(addonsPath, matches);
+    return await callFs('reconcileYaamMetadata', [addonsPath, matches], TIMEOUTS.fs.scan);
   } catch (err: unknown) {
     console.error('Reconcile error:', err);
     return { created: 0, updated: 0, details: [] };
@@ -225,7 +253,7 @@ ipcMain.handle(IPC_CHANNELS.RECONCILE_YAAM_META, async (_event, addonsPath: stri
 
 ipcMain.handle(IPC_CHANNELS.COMMIT_BASELINE, async (_event, addonsPath: string, entries: BaselineEntry[]) => {
   try {
-    return commitBaseline(addonsPath, entries);
+    return await callFs('commitBaseline', [addonsPath, entries], TIMEOUTS.fs.scan);
   } catch (err: unknown) {
     console.error('Commit baseline error:', err);
     return { anchored: 0, details: [] };
@@ -234,7 +262,7 @@ ipcMain.handle(IPC_CHANNELS.COMMIT_BASELINE, async (_event, addonsPath: string, 
 
 ipcMain.handle(IPC_CHANNELS.PREVIEW_FOLDER_HYGIENE, async (_event, addonsPath: string) => {
   try {
-    return previewFolderHygiene(addonsPath);
+    return await callFs('previewFolderHygiene', [addonsPath], TIMEOUTS.fs.scan);
   } catch (err: unknown) {
     console.error('Preview folder hygiene error:', err);
     return { strayManifests: [], duplicates: [], unclaimedRootFiles: [] };
@@ -243,7 +271,7 @@ ipcMain.handle(IPC_CHANNELS.PREVIEW_FOLDER_HYGIENE, async (_event, addonsPath: s
 
 ipcMain.handle(IPC_CHANNELS.APPLY_FOLDER_HYGIENE, async (_event, addonsPath: string, actions: { repairs: string[]; removals: string[] }) => {
   try {
-    return applyFolderHygiene(addonsPath, actions);
+    return await callFs('applyFolderHygiene', [addonsPath, actions], TIMEOUTS.fs.scan);
   } catch (err: unknown) {
     console.error('Apply folder hygiene error:', err);
     return { repaired: [], removed: [], errors: [String(err)], undo: { hygieneDir: '', removals: [], repairs: [] } };
@@ -252,7 +280,7 @@ ipcMain.handle(IPC_CHANNELS.APPLY_FOLDER_HYGIENE, async (_event, addonsPath: str
 
 ipcMain.handle(IPC_CHANNELS.UNDO_FOLDER_HYGIENE, async (_event, addonsPath: string, undo: HygieneUndoInfo) => {
   try {
-    return undoFolderHygiene(addonsPath, undo);
+    return await callFs('undoFolderHygiene', [addonsPath, undo], TIMEOUTS.fs.scan);
   } catch (err: unknown) {
     console.error('Undo folder hygiene error:', err);
     return { restored: 0, errors: [String(err)] };
@@ -261,7 +289,7 @@ ipcMain.handle(IPC_CHANNELS.UNDO_FOLDER_HYGIENE, async (_event, addonsPath: stri
 
 ipcMain.handle(IPC_CHANNELS.RESTORE_TRACKING_STATE, async (_event, addonsPath: string, backupDir: string) => {
   try {
-    return restoreTrackingState(addonsPath, backupDir);
+    return await callFs('restoreTrackingState', [addonsPath, backupDir], TIMEOUTS.fs.quick);
   } catch (err: unknown) {
     console.error('Restore tracking state error:', err);
     return { restored: false, markers: 0, error: String(err) };
@@ -270,7 +298,7 @@ ipcMain.handle(IPC_CHANNELS.RESTORE_TRACKING_STATE, async (_event, addonsPath: s
 
 ipcMain.handle(IPC_CHANNELS.LIST_REMOVED, async (_event, addonsPath: string) => {
   try {
-    return listRemovedEntries(addonsPath);
+    return await callFs('listRemovedEntries', [addonsPath], TIMEOUTS.fs.quick);
   } catch (err: unknown) {
     console.error('List removed error:', err);
     return [];
@@ -279,7 +307,7 @@ ipcMain.handle(IPC_CHANNELS.LIST_REMOVED, async (_event, addonsPath: string) => 
 
 ipcMain.handle(IPC_CHANNELS.RESTORE_REMOVED, async (_event, addonsPath: string, relPath: string) => {
   try {
-    return restoreRemovedEntry(addonsPath, relPath);
+    return await callFs('restoreRemovedEntry', [addonsPath, relPath], TIMEOUTS.fs.quick);
   } catch (err: unknown) {
     console.error('Restore removed error:', err);
     return { restored: false, target: '', error: String(err) };
@@ -288,7 +316,7 @@ ipcMain.handle(IPC_CHANNELS.RESTORE_REMOVED, async (_event, addonsPath: string, 
 
 ipcMain.handle(IPC_CHANNELS.MOVE_DOWNLOADS_BACK, async (_event, addonsPath: string, fileNames: string[]) => {
   try {
-    return moveDownloadsBack(addonsPath, fileNames);
+    return await callFs('moveDownloadsBack', [addonsPath, fileNames], TIMEOUTS.fs.quick);
   } catch (err: unknown) {
     console.error('Move downloads back error:', err);
     return { restored: [], errors: [String(err)] };
@@ -297,7 +325,7 @@ ipcMain.handle(IPC_CHANNELS.MOVE_DOWNLOADS_BACK, async (_event, addonsPath: stri
 
 ipcMain.handle(IPC_CHANNELS.GET_YAAM_DB, async (_event, addonsPath: string) => {
   try {
-    return getAllEntries(addonsPath);
+    return await callFs('getAllEntries', [addonsPath], TIMEOUTS.fs.quick);
   } catch (err: unknown) {
     console.error('Get YAAM DB error:', err);
     return {};
@@ -306,7 +334,7 @@ ipcMain.handle(IPC_CHANNELS.GET_YAAM_DB, async (_event, addonsPath: string) => {
 
 ipcMain.handle(IPC_CHANNELS.CLEANUP_YAAM_MARKERS, async (_event, addonsPath: string) => {
   try {
-    return cleanupMarkerFiles(addonsPath);
+    return await callFs('cleanupMarkerFiles', [addonsPath], TIMEOUTS.fs.quick);
   } catch (err: unknown) {
     console.error('Cleanup markers error:', err);
     return 0;
@@ -325,7 +353,7 @@ ipcMain.handle(IPC_CHANNELS.SELECT_FOLDER, async () => {
 
 ipcMain.handle(IPC_CHANNELS.CLEANUP_UNUSED, async (_event, addonPath: string) => {
   try {
-    return cleanupUnusedLibraries(addonPath);
+    return await callFs('cleanupUnusedLibraries', [addonPath], TIMEOUTS.fs.scan);
   } catch (err: unknown) {
     console.error('Cleanup error:', err);
     return { moved: [], addons: [] };
@@ -334,7 +362,7 @@ ipcMain.handle(IPC_CHANNELS.CLEANUP_UNUSED, async (_event, addonPath: string) =>
 
 ipcMain.handle(IPC_CHANNELS.DELETE_ADDON, async (_event, addonPath: string, folderName: string) => {
   try {
-    return deleteAddon(addonPath, folderName);
+    return await callFs('deleteAddon', [addonPath, folderName], TIMEOUTS.fs.install);
   } catch (err: unknown) {
     console.error('Delete error:', err);
     return [];
@@ -345,7 +373,7 @@ ipcMain.handle(
   IPC_CHANNELS.DELETE_ADDON_AND_REFS,
   async (_event, addonPath: string, folderName: string) => {
     try {
-      return deleteAddonAndExclusiveRefs(addonPath, folderName);
+      return await callFs('deleteAddonAndExclusiveRefs', [addonPath, folderName], TIMEOUTS.fs.install);
     } catch (err: unknown) {
       console.error('Delete with refs error:', err);
       return { removedAddon: folderName, removedLibs: [], addons: [] };
@@ -467,19 +495,15 @@ ipcMain.handle(IPC_CHANNELS.INSTALL_ADDON, async (_event, addonId: string, addon
 });
 
 ipcMain.handle(IPC_CHANNELS.GET_ADDON_SETTINGS, async (_event, addonsPath: string) => {
-  try {
-    return parseAddonSettings(addonsPath);
-  } catch (err: unknown) {
-    console.error('Parse settings error:', err);
-    return { version: 0, acknowledgedOutOfDateVersion: 0, addOnsEnabled: true, characters: {}, defaults: {} };
-  }
+  // The renderer substitutes its own defaults on failure and logs the reason.
+  return await callFs('getAddonSettings', [addonsPath], TIMEOUTS.fs.settings);
 });
 
 ipcMain.handle(
   IPC_CHANNELS.SET_ADDON_SETTING,
   async (_event, addonsPath: string, character: string, addonName: string, enabled: boolean) => {
     try {
-      return setAddonSetting(addonsPath, character, addonName, enabled);
+      return await callFs('setAddonSetting', [addonsPath, character, addonName, enabled], TIMEOUTS.fs.settings);
     } catch (err: unknown) {
       console.error('Set addon setting error:', err);
       return { backupPath: '', error: errMsg(err) };
@@ -491,7 +515,7 @@ ipcMain.handle(
   IPC_CHANNELS.BATCH_SET_ADDON_SETTINGS,
   async (_event, addonsPath: string, changes: { character: string; addonName: string; enabled: boolean }[]) => {
     try {
-      return batchSetAddonSettings(addonsPath, changes);
+      return await callFs('batchSetAddonSettings', [addonsPath, changes], TIMEOUTS.fs.settings);
     } catch (err: unknown) {
       console.error('Batch set addon settings error:', err);
       return { backupPath: '', applied: 0, error: errMsg(err) };
@@ -500,17 +524,12 @@ ipcMain.handle(
 );
 
 ipcMain.handle(IPC_CHANNELS.GET_SAVED_VARS_INFO, async (_event, addonsPath: string, addonNames: string[]) => {
-  try {
-    return getSavedVarsInfo(addonsPath, addonNames);
-  } catch (err: unknown) {
-    console.error('Get saved vars info error:', err);
-    return { addonFiles: {} };
-  }
+  return await callFs('getSavedVarsInfo', [addonsPath, addonNames], TIMEOUTS.fs.savedVars);
 });
 
 ipcMain.handle(IPC_CHANNELS.DELETE_SAVED_VARS, async (_event, addonsPath: string, addonName: string) => {
   try {
-    return deleteSavedVars(addonsPath, addonName);
+    return await callFs('deleteSavedVars', [addonsPath, addonName], TIMEOUTS.fs.quick);
   } catch (err: unknown) {
     console.error('Delete saved vars error:', err);
     return { deleted: [], backupDir: '', error: errMsg(err) };
@@ -519,7 +538,7 @@ ipcMain.handle(IPC_CHANNELS.DELETE_SAVED_VARS, async (_event, addonsPath: string
 
 ipcMain.handle(IPC_CHANNELS.CLEANUP_SETTINGS, async (_event, addonsPath: string, existingAddonNames: string[]) => {
   try {
-    return cleanupSettings(addonsPath, existingAddonNames);
+    return await callFs('cleanupSettings', [addonsPath, existingAddonNames], TIMEOUTS.fs.settings);
   } catch (err: unknown) {
     console.error('Cleanup settings error:', err);
     return { removedFromSettings: [], removedSavedVars: [], backupPath: '', svBackupDir: '', error: errMsg(err) };
@@ -528,7 +547,7 @@ ipcMain.handle(IPC_CHANNELS.CLEANUP_SETTINGS, async (_event, addonsPath: string,
 
 ipcMain.handle(IPC_CHANNELS.UNDO_CLEANUP_SETTINGS, async (_event, addonsPath: string, settingsBackupPath: string, svBackupDir: string) => {
   try {
-    return undoCleanupSettings(addonsPath, settingsBackupPath, svBackupDir);
+    return await callFs('undoCleanupSettings', [addonsPath, settingsBackupPath, svBackupDir], TIMEOUTS.fs.settings);
   } catch (err: unknown) {
     console.error('Undo cleanup error:', err);
     return { restoredSettings: false, restoredSavedVars: [], error: errMsg(err) };
@@ -537,7 +556,7 @@ ipcMain.handle(IPC_CHANNELS.UNDO_CLEANUP_SETTINGS, async (_event, addonsPath: st
 
 ipcMain.handle(IPC_CHANNELS.CLEANUP_DOWNLOADS, async (_event, addonsPath: string) => {
   try {
-    return cleanupDownloadsFolder(addonsPath);
+    return await callFs('cleanupDownloadsFolder', [addonsPath], TIMEOUTS.fs.quick);
   } catch (err: unknown) {
     console.error('Cleanup downloads error:', err);
     return { moved: [], error: errMsg(err) };
@@ -546,7 +565,7 @@ ipcMain.handle(IPC_CHANNELS.CLEANUP_DOWNLOADS, async (_event, addonsPath: string
 
 ipcMain.handle(IPC_CHANNELS.SAVE_SNAPSHOT, async (_event, addonsPath: string, addons: SnapshotAddon[]) => {
   try {
-    return saveSnapshotIfChanged(addonsPath, addons);
+    return await callFs('saveSnapshotIfChanged', [addonsPath, addons], TIMEOUTS.fs.quick);
   } catch (err: unknown) {
     console.error('Save snapshot error:', err);
     return null;
@@ -555,7 +574,7 @@ ipcMain.handle(IPC_CHANNELS.SAVE_SNAPSHOT, async (_event, addonsPath: string, ad
 
 ipcMain.handle(IPC_CHANNELS.LIST_SNAPSHOTS, async (_event, addonsPath: string) => {
   try {
-    return listSnapshots(addonsPath);
+    return await callFs('listSnapshots', [addonsPath], TIMEOUTS.fs.quick);
   } catch (err: unknown) {
     console.error('List snapshots error:', err);
     return [];
@@ -564,7 +583,7 @@ ipcMain.handle(IPC_CHANNELS.LIST_SNAPSHOTS, async (_event, addonsPath: string) =
 
 ipcMain.handle(IPC_CHANNELS.LIST_ADDON_BACKUPS, async (_event, addonsPath: string) => {
   try {
-    return listAddonBackups(addonsPath);
+    return await callFs('listAddonBackups', [addonsPath], TIMEOUTS.fs.quick);
   } catch (err: unknown) {
     console.error('List addon backups error:', err);
     return [];
@@ -573,7 +592,7 @@ ipcMain.handle(IPC_CHANNELS.LIST_ADDON_BACKUPS, async (_event, addonsPath: strin
 
 ipcMain.handle(IPC_CHANNELS.RESTORE_ADDON_BACKUP, async (_event, addonsPath: string, folderName: string, backupPath: string) => {
   try {
-    return restoreAddonFromBackup(addonsPath, folderName, backupPath);
+    return await callFs('restoreAddonFromBackup', [addonsPath, folderName, backupPath], TIMEOUTS.fs.backup);
   } catch (err: unknown) {
     console.error('Restore addon backup error:', err);
     return false;
@@ -582,7 +601,7 @@ ipcMain.handle(IPC_CHANNELS.RESTORE_ADDON_BACKUP, async (_event, addonsPath: str
 
 ipcMain.handle(IPC_CHANNELS.BACKUP_ADDON_FOLDER, async (_event, addonsPath: string, folderName: string, version: string) => {
   try {
-    return backupAddonFolder(addonsPath, folderName, version);
+    return await callFs('backupAddonFolder', [addonsPath, folderName, version], TIMEOUTS.fs.backup);
   } catch (err: unknown) {
     console.error('Backup addon folder error:', err);
     return '';
@@ -591,7 +610,7 @@ ipcMain.handle(IPC_CHANNELS.BACKUP_ADDON_FOLDER, async (_event, addonsPath: stri
 
 ipcMain.handle(IPC_CHANNELS.DELETE_ADDON_BACKUPS, async (_event, backupPaths: string[]) => {
   try {
-    return deleteAddonBackups(backupPaths);
+    return await callFs('deleteAddonBackups', [backupPaths], TIMEOUTS.fs.quick);
   } catch (err: unknown) {
     console.error('Delete addon backups error:', err);
     return 0;
@@ -600,7 +619,7 @@ ipcMain.handle(IPC_CHANNELS.DELETE_ADDON_BACKUPS, async (_event, backupPaths: st
 
 ipcMain.handle(IPC_CHANNELS.LIST_SV_BACKUPS, async (_event, addonsPath: string) => {
   try {
-    return listSavedVarsBackups(addonsPath);
+    return await callFs('listSavedVarsBackups', [addonsPath], TIMEOUTS.fs.quick);
   } catch (err: unknown) {
     console.error('List SV backups error:', err);
     return [];
@@ -609,7 +628,7 @@ ipcMain.handle(IPC_CHANNELS.LIST_SV_BACKUPS, async (_event, addonsPath: string) 
 
 ipcMain.handle(IPC_CHANNELS.RESTORE_SV_FILE, async (_event, addonsPath: string, backupFilePath: string) => {
   try {
-    return restoreSavedVarsFile(addonsPath, backupFilePath);
+    return await callFs('restoreSavedVarsFile', [addonsPath, backupFilePath], TIMEOUTS.fs.quick);
   } catch (err: unknown) {
     console.error('Restore SV file error:', err);
     return { restored: false, fileName: '', error: errMsg(err) };
@@ -626,11 +645,18 @@ ipcMain.handle(IPC_CHANNELS.EXPORT_PROFILE, async (
   runtimeFilesMap?: Record<string, string[]>
 ) => {
   try {
-    return exportProfile(addonsPath, addonList, bundleFolders, (phase, percent) => {
-      if (mainWindow) {
-        mainWindow.webContents.send(IPC_CHANNELS.EXPORT_PROGRESS, { phase, percent });
-      }
-    }, runtimeFilesMap);
+    return await callFs('exportProfile', [
+      addonsPath,
+      addonList,
+      bundleFolders,
+      // Forwarded through the worker's progress channel.
+      (phase: string, percent: number) => {
+        if (mainWindow) {
+          mainWindow.webContents.send(IPC_CHANNELS.EXPORT_PROGRESS, { phase, percent });
+        }
+      },
+      runtimeFilesMap,
+    ], TIMEOUTS.fs.backup);
   } catch (err: unknown) {
     console.error('Export profile error:', err);
     return { error: errMsg(err) };
@@ -639,7 +665,7 @@ ipcMain.handle(IPC_CHANNELS.EXPORT_PROFILE, async (
 
 ipcMain.handle(IPC_CHANNELS.IMPORT_PROFILE, async (_event, addonsPath: string, data: ExportData) => {
   try {
-    return importProfile(addonsPath, data);
+    return await callFs('importProfile', [addonsPath, data], TIMEOUTS.fs.backup);
   } catch (err: unknown) {
     console.error('Import profile error:', err);
     return { addonsToInstall: [], restoredSettings: [], restoredBundles: [], errors: [errMsg(err)] };
@@ -654,9 +680,15 @@ ipcMain.handle(IPC_CHANNELS.EXPORT_PROFILE_ZIP, async (
   exportOptions?: { includeAddonSettings?: boolean; includeSavedVars?: boolean; includeUserSettings?: boolean; excludeRuntimeFiles?: Record<string, string[]> }
 ) => {
   try {
-    const buf = exportProfileAsZip(addonsPath, addonList, bundleFolders, exportOptions, (phase, percent) => {
-      if (mainWindow) mainWindow.webContents.send(IPC_CHANNELS.EXPORT_PROGRESS, { phase, percent });
-    });
+    const buf = await callFs('exportProfileAsZip', [
+      addonsPath,
+      addonList,
+      bundleFolders,
+      exportOptions,
+      (phase: string, percent: number) => {
+        if (mainWindow) mainWindow.webContents.send(IPC_CHANNELS.EXPORT_PROGRESS, { phase, percent });
+      },
+    ], TIMEOUTS.fs.backup);
 
     const ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
     const result = await dialog.showSaveDialog(mainWindow!, {
@@ -676,7 +708,7 @@ ipcMain.handle(IPC_CHANNELS.EXPORT_PROFILE_ZIP, async (
 
 ipcMain.handle(IPC_CHANNELS.PREVIEW_PROFILE_ZIP, async (_event, zipPath: string) => {
   try {
-    return previewProfileZip(zipPath);
+    return await callFs('previewProfileZip', [zipPath], TIMEOUTS.fs.backup);
   } catch (err: unknown) {
     console.error('Preview profile ZIP error:', err);
     return { error: errMsg(err) };
@@ -690,7 +722,7 @@ ipcMain.handle(IPC_CHANNELS.IMPORT_PROFILE_ZIP, async (
   options?: { importAddonSettings?: boolean; importUserSettings?: boolean; savedVarFilter?: Record<string, boolean>; addonFilter?: Record<string, boolean> }
 ) => {
   try {
-    return importProfileFromZip(addonsPath, zipPath, options);
+    return await callFs('importProfileFromZip', [addonsPath, zipPath, options], TIMEOUTS.fs.backup);
   } catch (err: unknown) {
     console.error('Import profile ZIP error:', err);
     return { addonsToInstall: [], restoredSettings: [], restoredBundles: [], errors: [errMsg(err)] };
@@ -790,7 +822,7 @@ ipcMain.handle(IPC_CHANNELS.GET_SYSTEM_FONTS, async () => {
 
 ipcMain.handle(IPC_CHANNELS.PREVIEW_CLEANUP_LIBS, async (_event, addonsPath: string) => {
   try {
-    return previewUnusedLibraries(addonsPath);
+    return await callFs('previewUnusedLibraries', [addonsPath], TIMEOUTS.fs.scan);
   } catch (err: unknown) {
     console.error('Preview cleanup libs error:', err);
     return { unreferenced: [], optionalOnly: [] };
@@ -799,7 +831,7 @@ ipcMain.handle(IPC_CHANNELS.PREVIEW_CLEANUP_LIBS, async (_event, addonsPath: str
 
 ipcMain.handle(IPC_CHANNELS.CLEANUP_LIBS_SELECTED, async (_event, addonsPath: string, folderNames: string[]) => {
   try {
-    return cleanupSelectedLibraries(addonsPath, folderNames);
+    return await callFs('cleanupSelectedLibraries', [addonsPath, folderNames], TIMEOUTS.fs.scan);
   } catch (err: unknown) {
     console.error('Cleanup selected libs error:', err);
     return { moved: [], addons: [] };
@@ -808,7 +840,7 @@ ipcMain.handle(IPC_CHANNELS.CLEANUP_LIBS_SELECTED, async (_event, addonsPath: st
 
 ipcMain.handle(IPC_CHANNELS.PREVIEW_CLEANUP_SETTINGS, async (_event, addonsPath: string, existingAddonNames: string[]) => {
   try {
-    return previewCleanupSettings(addonsPath, existingAddonNames);
+    return await callFs('previewCleanupSettings', [addonsPath, existingAddonNames], TIMEOUTS.fs.settings);
   } catch (err: unknown) {
     console.error('Preview cleanup settings error:', err);
     return { orphanedSettings: [], orphanedSavedVars: [] };
@@ -817,7 +849,7 @@ ipcMain.handle(IPC_CHANNELS.PREVIEW_CLEANUP_SETTINGS, async (_event, addonsPath:
 
 ipcMain.handle(IPC_CHANNELS.CLEANUP_SETTINGS_SELECTED, async (_event, addonsPath: string, existingAddonNames: string[], settingsToRemove: string[], savedVarsToRemove: string[]) => {
   try {
-    return cleanupSettingsSelected(addonsPath, existingAddonNames, settingsToRemove, savedVarsToRemove);
+    return await callFs('cleanupSettingsSelected', [addonsPath, existingAddonNames, settingsToRemove, savedVarsToRemove], TIMEOUTS.fs.settings);
   } catch (err: unknown) {
     console.error('Cleanup selected settings error:', err);
     return { removedFromSettings: [], removedSavedVars: [], backupPath: '', svBackupDir: '', error: errMsg(err) };
@@ -826,7 +858,7 @@ ipcMain.handle(IPC_CHANNELS.CLEANUP_SETTINGS_SELECTED, async (_event, addonsPath
 
 ipcMain.handle(IPC_CHANNELS.PREVIEW_CLEANUP_DOWNLOADS, async (_event, addonsPath: string) => {
   try {
-    return previewCleanupDownloads(addonsPath);
+    return await callFs('previewCleanupDownloads', [addonsPath], TIMEOUTS.fs.quick);
   } catch (err: unknown) {
     console.error('Preview cleanup downloads error:', err);
     return [];
@@ -835,7 +867,7 @@ ipcMain.handle(IPC_CHANNELS.PREVIEW_CLEANUP_DOWNLOADS, async (_event, addonsPath
 
 ipcMain.handle(IPC_CHANNELS.CLEANUP_DOWNLOADS_SELECTED, async (_event, addonsPath: string, fileNames: string[]) => {
   try {
-    return cleanupDownloadsSelected(addonsPath, fileNames);
+    return await callFs('cleanupDownloadsSelected', [addonsPath, fileNames], TIMEOUTS.fs.quick);
   } catch (err: unknown) {
     console.error('Cleanup selected downloads error:', err);
     return { moved: [] };

@@ -4,6 +4,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { AddonInfo, DependencyRef, ColorSegment, YaamAddonEntry, compareVersionStrings } from './shared/types';
 import { loadDatabase, saveDatabase, YaamDatabase, readMarkerFile, writeMarkerFile, backupTrackingState } from './yaamDatabase';
+import { canEnterDir } from './shared/fsWalk';
 
 /**
  * Parse color codes from a string.
@@ -311,7 +312,11 @@ function collectSubAddons(
   selfName: string,
   topParent: string,
   results: AddonInfo[],
+  depth = 0,
+  visited: Set<string> = new Set(),
 ): void {
+  if (!canEnterDir(dir, depth, visited)) return;
+
   let entries: fs.Dirent[];
   try {
     entries = fs.readdirSync(dir, { withFileTypes: true });
@@ -344,7 +349,7 @@ function collectSubAddons(
     }
 
     // Recurse deeper (e.g. HarvestMap/Modules/HarvestMapAD/)
-    collectSubAddons(subDir, selfName, topParent, results);
+    collectSubAddons(subDir, selfName, topParent, results, depth + 1, visited);
   }
 }
 
@@ -570,15 +575,36 @@ function loadMinionData(addonsPath: string): Map<string, MinionEntry> {
 
 /**
  * Walk an addon folder recursively and return all file paths relative to the addon root.
+ *
+ * Bounded by depth, file count and a visited-set: the scan is fully synchronous,
+ * so a link loop here does not just slow things down — it wedges the entire
+ * Electron main process and every IPC call along with it.
  */
-function walkAddonFolder(folderPath: string, prefix = ''): string[] {
-  const results: string[] = [];
+const WALK_MAX_FILES = 50_000;
+
+function walkAddonFolder(
+  folderPath: string,
+  prefix = '',
+  depth = 0,
+  visited: Set<string> = new Set(),
+  results: string[] = []
+): string[] {
+  if (results.length >= WALK_MAX_FILES) return results;
+  if (!canEnterDir(folderPath, depth, visited)) return results;
+
   try {
     const entries = fs.readdirSync(folderPath, { withFileTypes: true });
     for (const entry of entries) {
+      if (results.length >= WALK_MAX_FILES) {
+        console.warn(`[YAAM] Walk truncated at ${WALK_MAX_FILES} files in ${folderPath}`);
+        break;
+      }
       const relPath = prefix ? `${prefix}/${entry.name}` : entry.name;
-      if (entry.isDirectory()) {
-        results.push(...walkAddonFolder(path.join(folderPath, entry.name), relPath));
+      if (entry.isSymbolicLink()) {
+        // Counted as a plain entry (as before) but never descended into.
+        results.push(relPath);
+      } else if (entry.isDirectory()) {
+        walkAddonFolder(path.join(folderPath, entry.name), relPath, depth + 1, visited, results);
       } else {
         results.push(relPath);
       }
@@ -1264,13 +1290,15 @@ export function listRemovedEntries(addonsPath: string): RemovedEntry[] {
   return results.sort((a, b) => b.mtimeMs - a.mtimeMs);
 }
 
-/** getDirSize that tolerates unreadable entries. */
-function getDirSizeSafe(dirPath: string): number {
+/** getDirSize that tolerates unreadable entries. Bounded against link loops. */
+function getDirSizeSafe(dirPath: string, depth = 0, visited: Set<string> = new Set()): number {
+  if (!canEnterDir(dirPath, depth, visited)) return 0;
   let total = 0;
   try {
     for (const entry of fs.readdirSync(dirPath, { withFileTypes: true })) {
       const full = path.join(dirPath, entry.name);
-      if (entry.isDirectory()) total += getDirSizeSafe(full);
+      if (entry.isSymbolicLink()) continue; // size of the target, not the link
+      if (entry.isDirectory()) total += getDirSizeSafe(full, depth + 1, visited);
       else {
         try { total += fs.statSync(full).size; } catch { /* skip */ }
       }

@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: MIT
 import * as fs from 'fs';
 import * as path from 'path';
+import { canEnterDir } from './shared/fsWalk';
 
 /** A single addon entry in a snapshot */
 export interface SnapshotAddon {
@@ -192,13 +193,15 @@ export function deleteAddonBackups(backupPaths: string[]): number {
 /**
  * Get the total size of a directory in bytes.
  */
-export function getDirSize(dirPath: string): number {
+export function getDirSize(dirPath: string, depth = 0, visited: Set<string> = new Set()): number {
+  if (!canEnterDir(dirPath, depth, visited)) return 0;
   let total = 0;
   const entries = fs.readdirSync(dirPath, { withFileTypes: true });
   for (const entry of entries) {
     const full = path.join(dirPath, entry.name);
+    if (entry.isSymbolicLink()) continue; // measure real files, not link targets
     if (entry.isDirectory()) {
-      total += getDirSize(full);
+      total += getDirSize(full, depth + 1, visited);
     } else {
       total += fs.statSync(full).size;
     }
@@ -206,15 +209,21 @@ export function getDirSize(dirPath: string): number {
   return total;
 }
 
-/** Recursively copy a directory */
-function copyDirSync(src: string, dest: string): void {
+/**
+ * Recursively copy a directory.
+ *
+ * Bounded against directory cycles: an unbounded copying walk does not just
+ * hang, it keeps writing until the disk is full.
+ */
+function copyDirSync(src: string, dest: string, depth = 0, visited: Set<string> = new Set()): void {
+  if (!canEnterDir(src, depth, visited)) return;
   fs.mkdirSync(dest, { recursive: true });
   const entries = fs.readdirSync(src, { withFileTypes: true });
   for (const entry of entries) {
     const srcPath = path.join(src, entry.name);
     const destPath = path.join(dest, entry.name);
     if (entry.isDirectory()) {
-      copyDirSync(srcPath, destPath);
+      copyDirSync(srcPath, destPath, depth + 1, visited);
     } else {
       fs.copyFileSync(srcPath, destPath);
     }

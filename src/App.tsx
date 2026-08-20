@@ -205,15 +205,36 @@ function App() {
       setAddons(results);
       const libs = results.filter((a) => a.isLibrary).length;
       addLog(`Found ${results.length} addons (${results.length - libs} addons, ${libs} libraries)`, 'success');
+      // The LOCAL scan is done here — stop showing "Scanning…".  What follows
+      // is network work, and tying the scan indicator to it made a stalled
+      // catalog fetch look like a scan that never finishes.
+      setLoading(false);
 
       // Load addon settings, saved vars, and addon catalog in parallel
       // Include sub-addon names so their SavedVariables aren't misattributed
       const addonNames = results.flatMap((a: AddonInfo) => [a.folderName, ...a.subAddons.map((s: AddonInfo) => s.folderName)]);
+      addLog('Fetching online catalog from api.mmoui.com …');
+      const catalogStart = Date.now();
       const [settings, svInfo, onlineList] = await Promise.all([
-        window.electronAPI.getAddonSettings(pathToScan).catch(() => null),
-        window.electronAPI.getSavedVarsInfo(pathToScan, addonNames).catch(() => ({ addonFiles: {} })),
-        window.electronAPI.fetchAddonCatalog(false).catch(() => []),
+        window.electronAPI.getAddonSettings(pathToScan).catch((err: unknown) => {
+          addLog(`Could not read addon settings: ${errMsg(err)}`, 'error');
+          return null;
+        }),
+        window.electronAPI.getSavedVarsInfo(pathToScan, addonNames).catch((err: unknown) => {
+          addLog(`Could not read SavedVariables: ${errMsg(err)}`, 'error');
+          return { addonFiles: {} };
+        }),
+        window.electronAPI.fetchAddonCatalog(false).catch((err: unknown) => {
+          // Silently swallowing this was why users saw an empty ESOUI panel
+          // with no explanation whatsoever.
+          addLog(`Online catalog unavailable: ${errMsg(err)}`, 'error');
+          addLog('No downloadable addons can be shown. Check firewall/antivirus, DNS or VPN — the same server is used by Minion.', 'error');
+          return [] as CatalogAddon[];
+        }),
       ]);
+      if (onlineList.length > 0) {
+        addLog(`Online catalog: ${onlineList.length} addons in ${((Date.now() - catalogStart) / 1000).toFixed(1)}s`, 'success');
+      }
 
       if (settings) setAddonSettings(settings);
       setSavedVarsInfo(svInfo);

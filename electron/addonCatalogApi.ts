@@ -2,13 +2,12 @@
 // SPDX-License-Identifier: MIT
 import * as https from 'https';
 import * as http from 'http';
-import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
-import AdmZip from 'adm-zip';
 import { CatalogAddon, CatalogCategory } from './shared/types';
-import { scanSpecificAddons } from './addonScanner';
-import { loadDatabase, saveDatabase, writeMarkerFile, getYaamDir } from './yaamDatabase';
+import { TIMEOUTS } from './shared/timeouts';
+import { getYaamDir } from './yaamDatabase';
+import { callFs } from './fsWorkerHost';
 
 const API_URL = 'https://api.mmoui.com/v3/game/ESO/filelist.json';
 const CATEGORY_API_URL = 'https://api.mmoui.com/v3/game/ESO/categorylist.json';
@@ -57,46 +56,175 @@ function transformAddon(raw: RawCatalogAddon): CatalogAddon {
 }
 
 /**
- * Fetch data from a URL as a string.
+ * Per-request network budget.  Callers pass what suits their endpoint; see
+ * shared/timeouts.ts for the values and the reasoning behind them.
  */
-function fetchUrl(url: string): Promise<string> {
+export interface FetchOptions {
+  /** TCP/TLS connection establishment. */
+  connectTimeoutMs?: number;
+  /** No socket activity on an established connection. */
+  idleTimeoutMs?: number;
+  /** Whole request including the response body.  Omit for downloads that may
+   *  legitimately run long — idle detection still covers a true stall. */
+  totalTimeoutMs?: number;
+  /** Remaining redirect hops. */
+  maxRedirects?: number;
+}
+
+const MAX_REDIRECTS = 5;
+
+/**
+ * Guard the connection-establishment phase.
+ *
+ * req.setTimeout() does NOT reliably cover it: while the socket is still in
+ * `connecting` state its callback is late or does not fire at all, so a
+ * firewall that DROPs SYN packets falls through to the OS retry timeout
+ * (tens of seconds, platform dependent).  This timer starts immediately and is
+ * cleared as soon as the connection is up.
+ */
+function guardConnect(req: http.ClientRequest, timeoutMs: number, onTimeout: () => void): () => void {
+  let timer: NodeJS.Timeout | undefined;
+  const clear = () => { if (timer) { clearTimeout(timer); timer = undefined; } };
+  req.on('socket', (socket) => {
+    if (!socket.connecting) return; // reused/keep-alive socket: already connected
+    timer = setTimeout(onTimeout, timeoutMs);
+    socket.once('connect', clear);
+    socket.once('close', clear);
+  });
+  return clear;
+}
+
+/**
+ * Fetch data from a URL as a string.
+ * Aborts on idle/total timeout and refuses to follow redirects endlessly.
+ */
+function fetchUrl(url: string, opts: FetchOptions = {}): Promise<string> {
+  const connectMs = opts.connectTimeoutMs ?? TIMEOUTS.net.connect;
+  const idleMs = opts.idleTimeoutMs ?? TIMEOUTS.net.idle;
+  const totalMs = opts.totalTimeoutMs ?? TIMEOUTS.net.small;
+  const maxRedirects = opts.maxRedirects ?? MAX_REDIRECTS;
+
   return new Promise((resolve, reject) => {
+    if (maxRedirects <= 0) {
+      reject(new Error(`Too many redirects for ${url}`));
+      return;
+    }
     const client = url.startsWith('https') ? https : http;
-    client.get(url, { headers: { 'User-Agent': 'YAAM/1.0' } }, (res) => {
-      // Follow redirects
+    let settled = false;
+    let deadline: NodeJS.Timeout | undefined;
+    let clearConnectGuard: (() => void) | undefined;
+    const finish = (action: () => void) => {
+      if (settled) return;
+      settled = true;
+      if (deadline) clearTimeout(deadline);
+      clearConnectGuard?.();
+      action();
+    };
+
+    const req = client.get(url, { headers: { 'User-Agent': 'YAAM/1.0' } }, (res) => {
+      clearConnectGuard?.();
+      // Follow redirects (bounded, and resolved against the current URL so
+      // relative Location headers work).
       if (res.statusCode && res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
-        fetchUrl(res.headers.location).then(resolve).catch(reject);
+        const next = new URL(res.headers.location, url).toString();
+        res.resume(); // drain so the socket can be released
+        finish(() => {
+          req.destroy();
+          fetchUrl(next, { ...opts, maxRedirects: maxRedirects - 1 }).then(resolve).catch(reject);
+        });
         return;
       }
       if (res.statusCode !== 200) {
-        reject(new Error(`HTTP ${res.statusCode} for ${url}`));
+        res.resume();
+        finish(() => {
+          req.destroy();
+          reject(new Error(`HTTP ${res.statusCode} for ${url}`));
+        });
         return;
       }
       let data = '';
+      // Decode as UTF-8 across chunk boundaries (implicit chunk.toString()
+      // would corrupt multi-byte characters split across two chunks).
+      res.setEncoding('utf-8');
       res.on('data', (chunk) => (data += chunk));
-      res.on('end', () => resolve(data));
-      res.on('error', reject);
-    }).on('error', reject);
+      res.on('end', () => finish(() => resolve(data)));
+      res.on('error', (err) => finish(() => { req.destroy(); reject(err); }));
+    });
+
+    clearConnectGuard = guardConnect(req, connectMs, () => {
+      finish(() => {
+        req.destroy();
+        reject(new Error(`Could not connect to ${new URL(url).host} within ${connectMs / 1000}s (firewall, DNS or VPN?)`));
+      });
+    });
+
+    deadline = setTimeout(() => {
+      finish(() => {
+        req.destroy();
+        reject(new Error(`Timeout after ${totalMs / 1000}s for ${url}`));
+      });
+    }, totalMs);
+
+    req.setTimeout(idleMs, () => {
+      finish(() => {
+        req.destroy();
+        reject(new Error(`No response within ${idleMs / 1000}s from ${url} (connection stalled)`));
+      });
+    });
+    req.on('error', (err) => finish(() => reject(err)));
   });
 }
 
 /**
  * Download a file from a URL, following redirects. Returns the path to the temp file.
  */
-function downloadFile(url: string, destPath: string, maxRedirects = 5, onProgress?: (received: number, total: number) => void): Promise<void> {
+function downloadFile(
+  url: string,
+  destPath: string,
+  onProgress?: (received: number, total: number) => void,
+  opts: FetchOptions = {}
+): Promise<void> {
+  const connectMs = opts.connectTimeoutMs ?? TIMEOUTS.net.connect;
+  const idleMs = opts.idleTimeoutMs ?? TIMEOUTS.net.idle;
+  const maxRedirects = opts.maxRedirects ?? MAX_REDIRECTS;
+
   return new Promise((resolve, reject) => {
     if (maxRedirects <= 0) {
       reject(new Error('Too many redirects'));
       return;
     }
     const client = url.startsWith('https') ? https : http;
-    client.get(url, { headers: { 'User-Agent': 'YAAM/1.0' } }, (res) => {
+    let settled = false;
+    let clearConnectGuard: (() => void) | undefined;
+    const fail = (err: Error) => {
+      if (settled) return;
+      settled = true;
+      clearConnectGuard?.();
+      req.destroy();
+      fs.unlink(destPath, () => {});
+      reject(err);
+    };
+    const succeed = () => {
+      if (settled) return;
+      settled = true;
+      clearConnectGuard?.();
+      resolve();
+    };
+
+    const req = client.get(url, { headers: { 'User-Agent': 'YAAM/1.0' } }, (res) => {
+      clearConnectGuard?.();
       if (res.statusCode && res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
-        downloadFile(res.headers.location, destPath, maxRedirects - 1, onProgress).then(resolve).catch(reject);
+        const next = new URL(res.headers.location, url).toString();
+        res.resume();
+        if (settled) return;
+        settled = true;
+        req.destroy();
+        downloadFile(next, destPath, onProgress, { ...opts, maxRedirects: maxRedirects - 1 }).then(resolve).catch(reject);
         return;
       }
       if (res.statusCode !== 200) {
-        reject(new Error(`HTTP ${res.statusCode} downloading from ${url}`));
+        res.resume();
+        fail(new Error(`HTTP ${res.statusCode} downloading from ${url}`));
         return;
       }
       const totalSize = parseInt(String(res.headers['content-length'] || '0'), 10);
@@ -108,17 +236,25 @@ function downloadFile(url: string, destPath: string, maxRedirects = 5, onProgres
           onProgress(received, totalSize);
         });
       }
+      res.on('error', fail);
       res.pipe(file);
       file.on('finish', () => {
-        file.close(() => resolve());
+        file.close(() => succeed());
       });
-      file.on('error', (err) => {
-        fs.unlink(destPath, () => {});
-        reject(err);
-      });
-    }).on('error', (err) => {
-      reject(err);
+      file.on('error', fail);
     });
+
+    // A download that stalls mid-stream must not hang the app forever.
+    // setTimeout() fires on socket inactivity, so a slow-but-progressing
+    // download is not killed — only a truly stuck one.  No overall deadline
+    // here: addon archives can legitimately take a while on a slow line.
+    clearConnectGuard = guardConnect(req, connectMs, () => {
+      fail(new Error(`Could not connect to ${new URL(url).host} within ${connectMs / 1000}s (firewall, DNS or VPN?)`));
+    });
+    req.setTimeout(idleMs, () => {
+      fail(new Error(`Download stalled (no data for ${idleMs / 1000}s) from ${url}`));
+    });
+    req.on('error', fail);
   });
 }
 
@@ -128,7 +264,8 @@ function downloadFile(url: string, destPath: string, maxRedirects = 5, onProgres
 export async function fetchAddonCatalog(forceRefresh = false): Promise<CatalogAddon[]> {
   if (cachedList && !forceRefresh) return cachedList;
 
-  const data = await fetchUrl(API_URL);
+  // The big one (~2.5 MB) — allow a longer overall budget.
+  const data = await fetchUrl(API_URL, { totalTimeoutMs: TIMEOUTS.net.catalog });
   const raw: RawCatalogAddon[] = JSON.parse(data);
   cachedList = raw.map(transformAddon);
   return cachedList;
@@ -240,7 +377,7 @@ export async function fetchCategories(forceRefresh = false): Promise<CatalogCate
   if (cachedCategories && !forceRefresh) return cachedCategories;
 
   try {
-    const data = await fetchUrl(CATEGORY_API_URL);
+    const data = await fetchUrl(CATEGORY_API_URL, { totalTimeoutMs: TIMEOUTS.net.small });
     const raw: { UICATID: string; UICATTitle: string; UICATFileCount: string; UICATParentIDs: string[] }[] = JSON.parse(data);
     cachedCategories = raw.map(r => ({
       id: r.UICATID,
@@ -266,7 +403,7 @@ export async function fetchAddonDetails(uid: string): Promise<{ description: str
   if (cached) return cached;
 
   const url = `https://api.mmoui.com/v3/game/ESO/filedetails/${encodeURIComponent(uid)}.json`;
-  const data = await fetchUrl(url);
+  const data = await fetchUrl(url, { totalTimeoutMs: TIMEOUTS.net.small });
   const arr: { UIDescription?: string; UIChangeLog?: string; UIMD5?: string; UIDownload?: string; UIFileName?: string }[] = JSON.parse(data);
   const entry = arr[0] || {};
   const result = {
@@ -295,7 +432,7 @@ function getDownloadsDir(addonsPath: string): string {
  */
 async function resolveDownloadUrl(addonId: string): Promise<string> {
   const pageUrl = `https://www.esoui.com/downloads/download${addonId}`;
-  const html = await fetchUrl(pageUrl);
+  const html = await fetchUrl(pageUrl, { totalTimeoutMs: TIMEOUTS.net.small });
 
   // Try iframe src first (most reliable)
   const iframeMatch = html.match(/<iframe[^>]+src=["']([^"']+cdn\.esoui\.com[^"']+\.zip[^"']*)["']/i);
@@ -308,20 +445,15 @@ async function resolveDownloadUrl(addonId: string): Promise<string> {
   throw new Error(`Could not find CDN download link on ${pageUrl}`);
 }
 
-/** MD5 hex digest of a file on disk. */
-function md5OfFile(filePath: string): string {
-  return crypto.createHash('md5').update(fs.readFileSync(filePath)).digest('hex');
-}
-
 /**
  * Download and install an addon from the online catalog.
- * Downloads the zip to AddOns/Downloads/, then extracts to AddOns/.
- * Returns the list of installed directory names and any missing dependencies.
  *
- * opts.overlayFor: install this catalog entry as an OVERLAY (language patch /
- * fix pack) into the named folder — the folder's main identity in the YAAM
- * database is preserved and the overlay is tracked in its overlays[] list
- * instead of hijacking the entry (the historic LangPatch problem).
+ * Split across the process boundary on purpose: the network part (details
+ * lookup, CDN resolve, download) stays here in the main process, where the
+ * catalog cache lives and where sockets are non-blocking anyway.  Everything
+ * that touches the AddOns tree — checksum checks, extraction, database and
+ * marker writes — runs in the filesystem worker, so a stuck folder produces a
+ * timeout instead of freezing the app.
  */
 export async function installAddon(
   addonId: string,
@@ -329,26 +461,16 @@ export async function installAddon(
   onProgress?: (phase: 'resolving' | 'downloading' | 'extracting', percent?: number) => void,
   opts?: { overlayFor?: string }
 ): Promise<{ installed: string[]; missingDeps: string[] }> {
-  const downloadsDir = getDownloadsDir(addonsPath);
-
   // Look up addon info from cache to build a descriptive filename
+  const catalogEntry = cachedList?.find((a) => a.id === addonId) ?? null;
   let zipName = `addon-${addonId}.zip`;
-  if (cachedList) {
-    const addonInfo = cachedList.find((a) => a.id === addonId);
-    if (addonInfo) {
-      // Sanitize name: remove characters not safe for filenames
-      const safeName = addonInfo.name.replace(/[<>:"\/\\|?*']/g, '_').replace(/_+/g, '_').trim();
-      const safeVersion = addonInfo.version.replace(/[<>:"\/\\|?*']/g, '_').trim();
-      zipName = `${safeName}-${safeVersion}.zip`;
-    }
+  if (catalogEntry) {
+    // Sanitize name: remove characters not safe for filenames
+    const safeName = catalogEntry.name.replace(/[<>:"\/\\|?*']/g, '_').replace(/_+/g, '_').trim();
+    const safeVersion = catalogEntry.version.replace(/[<>:"\/\\|?*']/g, '_').trim();
+    zipName = `${safeName}-${safeVersion}.zip`;
   }
-  const zipPath = path.join(downloadsDir, zipName);
 
-  // Resolve the download URL and the catalog's current checksum up front.
-  // We need the checksum to decide whether a cached ZIP is still valid — a ZIP
-  // is named "<Name>-<version>.zip", but the filename alone is not trustworthy:
-  // a stale/mislabeled archive (e.g. an r41 zip sitting under an "…r43.zip"
-  // name) would otherwise be silently reinstalled while the marker records r43.
   onProgress?.('resolving');
   let downloadUrl = '';
   let expectedMd5 = '';
@@ -360,290 +482,41 @@ export async function installAddon(
     // Offline or lookup failed — handled below (cached ZIP is trusted as a fallback).
   }
 
-  // A cached ZIP is reused only when its MD5 matches the catalog checksum.
-  // If we have no checksum (offline / lookup failed), fall back to trusting the
-  // cached file so offline reinstalls still work.
-  const cachedZipValid = fs.existsSync(zipPath)
-    && (expectedMd5 ? md5OfFile(zipPath) === expectedMd5 : true);
+  const { zipPath, cachedValid } = await callFs(
+    'prepareDownload',
+    [addonsPath, zipName, expectedMd5],
+    TIMEOUTS.fs.install
+  );
 
-  if (!cachedZipValid) {
-    if (fs.existsSync(zipPath)) {
-      // Stale/corrupt cache — drop it before re-downloading.
-      try { fs.unlinkSync(zipPath); } catch { /* ignore cleanup errors */ }
-    }
+  if (!cachedValid) {
     if (!downloadUrl) downloadUrl = await resolveDownloadUrl(addonId);
     onProgress?.('downloading', 0);
 
     // Download with one retry on MD5 mismatch (transient CDN corruption)
-    let lastMd5Error = '';
     for (let attempt = 0; attempt < 2; attempt++) {
-      await downloadFile(downloadUrl, zipPath, 5, (received, total) => {
+      await downloadFile(downloadUrl, zipPath, (received, total) => {
         onProgress?.('downloading', Math.round((received / total) * 100));
       });
 
-      // Verify MD5 if available
-      if (expectedMd5) {
-        const actualMd5 = md5OfFile(zipPath);
-        if (actualMd5 !== expectedMd5) {
-          try { fs.unlinkSync(zipPath); } catch { /* ignore cleanup errors */ }
-          lastMd5Error = `MD5 mismatch: expected ${expectedMd5}, got ${actualMd5}`;
-          if (attempt === 0) continue; // retry once
-          throw new Error(lastMd5Error);
-        }
+      const { ok, actualMd5 } = await callFs('verifyZip', [zipPath, expectedMd5], TIMEOUTS.fs.install);
+      if (ok) break;
+      if (attempt === 1) {
+        throw new Error(`MD5 mismatch: expected ${expectedMd5}, got ${actualMd5}`);
       }
-      break; // success
     }
   } else {
     onProgress?.('downloading', 100);
   }
 
-  // Extract ZIP using extractAllTo to avoid path sanitization issues
-  // with folder names containing hyphens, dots, or numbers (e.g. LibAddonMenu-2.0)
+  // Extraction reports as a single step; it is fast compared to the download
+  // and reporting sub-percentages would mean streaming progress out of the
+  // worker for no real gain.
   onProgress?.('extracting', 0);
-  const zip = new AdmZip(zipPath);
-
-  // Capture file manifest from ZIP before extraction (for detecting runtime-created files later)
-  const zipFilesByDir = new Map<string, string[]>();
-  for (const entry of zip.getEntries()) {
-    if (entry.isDirectory) continue;
-    const parts = entry.entryName.split('/');
-    if (parts.length >= 2) {
-      const dir = parts[0];
-      // Store path relative to the addon folder (strip top-level dir)
-      const relPath = parts.slice(1).join('/');
-      if (!zipFilesByDir.has(dir)) zipFilesByDir.set(dir, []);
-      zipFilesByDir.get(dir)!.push(relPath);
-    }
-  }
-
-  zip.extractAllTo(addonsPath, true);
-  onProgress?.('extracting', 100);
-
-  // Remove stale manifests of the OTHER extension left behind by packaging
-  // changes (author switched .addon ↔ .txt between releases — extraction never
-  // deletes files, so the old manifest would shadow the new one forever).
-  // The freshly extracted ZIP is authoritative for the manifest flavor.
-  for (const [dir, files] of zipFilesByDir) {
-    const shipsAddon = files.includes(`${dir}.addon`);
-    const shipsTxt = files.includes(`${dir}.txt`);
-    if (shipsAddon === shipsTxt) continue; // ships both or neither — leave as is
-    const stale = path.join(addonsPath, dir, shipsAddon ? `${dir}.txt` : `${dir}.addon`);
-    if (fs.existsSync(stale)) {
-      try {
-        fs.unlinkSync(stale);
-        console.log(`[YAAM] Removed stale manifest ${path.basename(stale)} in ${dir} (ZIP ships ${shipsAddon ? '.addon' : '.txt'})`);
-      } catch { /* non-fatal — the scanner's dual-manifest rule still picks the newer one */ }
-    }
-  }
-
-  // Directories shipped in the ZIP (works for both fresh installs and updates)
-  const shippedDirs = Array.from(zipFilesByDir.keys());
-
-  // Detect truly new directories (used only for missing-dep check below)
-  const afterDirs = fs.readdirSync(addonsPath, { withFileTypes: true })
-    .filter((d) => d.isDirectory())
-    .map((d) => d.name);
-
-  // Scan all shipped addon folders for version info and dependencies
-  const installedAddons = scanSpecificAddons(addonsPath, shippedDirs);
-
-  // Update central YAAM database with install metadata
-  // (done AFTER scanning so we can store the real local manifest version)
-  if (cachedList) {
-    const catalogEntry = cachedList.find((a) => a.id === addonId);
-    if (catalogEntry) {
-      const now = new Date().toISOString();
-      const localVersionByDir = new Map<string, string>();
-      for (const a of installedAddons) localVersionByDir.set(a.folderName, a.version);
-      // Sanity check: after an MD5-verified download the extracted manifest should
-      // report the catalog version. If it doesn't, the archive shipped a different
-      // version than the catalog advertises — surface it rather than silently
-      // recording a version we didn't actually install.
-      const primaryLocal = localVersionByDir.get(catalogEntry.name);
-      if (primaryLocal && catalogEntry.version && primaryLocal.trim() !== catalogEntry.version.trim()) {
-        console.warn(`[YAAM] Version divergence after install of ${catalogEntry.name}: manifest="${primaryLocal}" catalog="${catalogEntry.version}"`);
-      }
-      const db = loadDatabase(addonsPath);
-      let changed = false;
-      for (const dir of shippedDirs) {
-        const existing = db.addons[dir];
-
-        if (opts?.overlayFor === dir) {
-          // ── Overlay install (language patch / fix pack) ──
-          // The folder's MAIN identity stays untouched; the overlay is
-          // upserted into overlays[] with its own catalog version history.
-          const base = existing ?? {
-            esouid: '',
-            url: '',
-            catalogName: '',
-            catalogAuthor: '',
-            catalogVersion: '',
-            localVersion: '',
-            installedAt: now,
-            updatedAt: now,
-          };
-          const prev = base.overlays?.find((o) => o.esouid === catalogEntry.id);
-          base.overlays = [
-            ...(base.overlays ?? []).filter((o) => o.esouid !== catalogEntry.id),
-            {
-              esouid: catalogEntry.id,
-              catalogName: catalogEntry.name,
-              catalogVersion: catalogEntry.version,
-              catalogDate: catalogEntry.date,
-              installedAt: prev?.installedAt || now,
-              updatedAt: now,
-              installedFiles: zipFilesByDir.get(dir),
-              needsReapply: false,
-            },
-          ];
-          // Patches usually replace the folder's manifest — refresh the
-          // files-unchanged anchor so Tier-2 tracking of the ORIGINAL stays
-          // trusted (its installed version did not change).
-          base.localVersion = localVersionByDir.get(dir) || base.localVersion;
-          base.updatedAt = now;
-          db.addons[dir] = base;
-          writeMarkerFile(addonsPath, dir, base);
-          changed = true;
-          console.log(`[YAAM] Installed overlay #${catalogEntry.id} "${catalogEntry.name}" v${catalogEntry.version} into ${dir} (main identity preserved: #${base.esouid || 'untracked'})`);
-          continue;
-        }
-
-        // ── Normal install / update of the folder's main addon ──
-        // Keep tracked overlays; flag those whose files were just overwritten
-        // by this install so the UI can offer a re-apply.
-        const newFiles = new Set(zipFilesByDir.get(dir) ?? []);
-        const overlays = existing?.overlays?.map((o) => {
-          const overwritten = (o.installedFiles ?? []).some((f) => newFiles.has(f));
-          if (overwritten && !o.needsReapply) {
-            console.log(`[YAAM] Overlay "${o.catalogName}" in ${dir} was overwritten by main-addon install — flagged for re-apply`);
-          }
-          return overwritten ? { ...o, needsReapply: true } : o;
-        });
-        const entry = {
-          esouid: catalogEntry.id,
-          url: catalogEntry.infoUrl,
-          catalogName: catalogEntry.name,
-          catalogAuthor: catalogEntry.author,
-          catalogVersion: catalogEntry.version,
-          catalogDate: catalogEntry.date,
-          localVersion: localVersionByDir.get(dir) || existing?.localVersion || '',
-          installedAt: existing?.installedAt || now,
-          updatedAt: now,
-          installedFiles: zipFilesByDir.get(dir),
-          overlays: overlays?.length ? overlays : undefined,
-        };
-        db.addons[dir] = entry;
-        // Write per-folder .yaam.json marker for resilient tracking
-        writeMarkerFile(addonsPath, dir, entry);
-        changed = true;
-      }
-      if (changed) saveDatabase(db, addonsPath);
-    }
-  }
-
-  // Collect all required dependencies
-  const requiredDeps = new Set<string>();
-  for (const addon of installedAddons) {
-    for (const dep of addon.dependsOn) {
-      requiredDeps.add(dep.name);
-    }
-  }
-
-  // Check which deps are missing (use existing directory names as proxy)
-  const allDirNames = new Set(afterDirs);
-  const missingDeps = Array.from(requiredDeps).filter(
-    (depName) => !depName.startsWith('ZO_') && !allDirNames.has(depName)
+  const result = await callFs(
+    'extractAndRegister',
+    [zipPath, addonsPath, catalogEntry, opts],
+    TIMEOUTS.fs.install
   );
-
-  return { installed: shippedDirs, missingDeps };
-}
-
-/**
- * Preview .zip files in the top-level AddOns folder that would be moved.
- */
-export function previewCleanupDownloads(addonsPath: string): string[] {
-  const entries = fs.readdirSync(addonsPath, { withFileTypes: true });
-  return entries
-    .filter((e) => e.isFile() && e.name.toLowerCase().endsWith('.zip'))
-    .map((e) => e.name)
-    .sort();
-}
-
-/**
- * Move selected .zip files from the top-level AddOns folder into the Downloads subfolder.
- */
-export function cleanupDownloadsSelected(addonsPath: string, fileNames: string[]): { moved: string[] } {
-  const downloadsDir = getDownloadsDir(addonsPath);
-  const moved: string[] = [];
-  for (const name of fileNames) {
-    const src = path.join(addonsPath, name);
-    if (!fs.existsSync(src)) continue;
-    const dest = path.join(downloadsDir, name);
-    if (fs.existsSync(dest)) {
-      const ts = new Date().toISOString().replace(/[:.]/g, '-').replace('T', '_').slice(0, 19);
-      const ext = path.extname(name);
-      const base = path.basename(name, ext);
-      fs.renameSync(src, path.join(downloadsDir, `${base}_${ts}${ext}`));
-    } else {
-      fs.renameSync(src, dest);
-    }
-    moved.push(name);
-  }
-  return { moved };
-}
-
-/**
- * Undo a downloads cleanup: move the given .zip files from Downloads/ back
- * into the AddOns root (skips files that vanished or would overwrite).
- */
-export function moveDownloadsBack(addonsPath: string, fileNames: string[]): { restored: string[]; errors: string[] } {
-  const downloadsDir = getDownloadsDir(addonsPath);
-  const restored: string[] = [];
-  const errors: string[] = [];
-  for (const name of fileNames) {
-    const src = path.join(downloadsDir, name);
-    const dest = path.join(addonsPath, name);
-    if (!fs.existsSync(src)) continue;
-    if (fs.existsSync(dest)) {
-      errors.push(`${name}: already exists in AddOns/`);
-      continue;
-    }
-    try {
-      fs.renameSync(src, dest);
-      restored.push(name);
-    } catch (err) {
-      errors.push(`${name}: ${err instanceof Error ? err.message : String(err)}`);
-    }
-  }
-  return { restored, errors };
-}
-
-/**
- * Move any .zip files from the top-level AddOns folder into the Downloads subfolder.
- * Returns the list of moved file names.
- */
-export function cleanupDownloadsFolder(addonsPath: string): { moved: string[] } {
-  const downloadsDir = getDownloadsDir(addonsPath);
-  const moved: string[] = [];
-
-  const entries = fs.readdirSync(addonsPath, { withFileTypes: true });
-  for (const entry of entries) {
-    if (entry.isFile() && entry.name.toLowerCase().endsWith('.zip')) {
-      const src = path.join(addonsPath, entry.name);
-      const dest = path.join(downloadsDir, entry.name);
-      // If destination already exists, add a timestamp
-      if (fs.existsSync(dest)) {
-        const ts = new Date().toISOString().replace(/[:.]/g, '-').replace('T', '_').slice(0, 19);
-        const ext = path.extname(entry.name);
-        const base = path.basename(entry.name, ext);
-        const destRenamed = path.join(downloadsDir, `${base}_${ts}${ext}`);
-        fs.renameSync(src, destRenamed);
-      } else {
-        fs.renameSync(src, dest);
-      }
-      moved.push(entry.name);
-    }
-  }
-
-  return { moved };
+  onProgress?.('extracting', 100);
+  return result;
 }
