@@ -20,10 +20,20 @@ export interface HygieneDup {
   isDirectory: boolean;
 }
 
+interface BundledLib {
+  name: string;
+  standaloneVersion: string;
+  standaloneAddonVersion: number;
+  isLibrary: boolean;
+  embedded: { parent: string; relPath: string; version: string; addonVersion: number }[];
+  standaloneOutdated: boolean;
+}
+
 interface HygieneDialogProps {
   strayManifests: HygieneStray[];
   duplicates: HygieneDup[];
   unclaimedRootFiles: string[];
+  bundledLibs: BundledLib[];
   onConfirm: (actions: { repairs: string[]; removals: string[] }) => void;
   onCancel: () => void;
 }
@@ -38,6 +48,7 @@ const HygieneDialog: React.FC<HygieneDialogProps> = ({
   strayManifests,
   duplicates,
   unclaimedRootFiles,
+  bundledLibs,
   onConfirm,
   onCancel,
 }) => {
@@ -100,7 +111,7 @@ const HygieneDialog: React.FC<HygieneDialogProps> = ({
           <button ref={closeRef} className="restore-close-btn" onClick={onCancel} title="Close">✕</button>
         </div>
         <div className="restore-content" style={{ padding: '12px 16px', maxHeight: '60vh', overflowY: 'auto' }}>
-          {totalItems === 0 ? (
+          {totalItems === 0 && bundledLibs.length === 0 ? (
             <div style={{ opacity: 0.6, padding: '16px 0', textAlign: 'center' }}>
               No hygiene problems found — the AddOns folder is clean.
             </div>
@@ -193,6 +204,42 @@ const HygieneDialog: React.FC<HygieneDialogProps> = ({
                   </div>
                 </>
               )}
+
+              {bundledLibs.length > 0 && (() => {
+                const outdated = bundledLibs.filter((b) => b.standaloneOutdated);
+                const same = bundledLibs.filter((b) => !b.standaloneOutdated);
+                return (
+                  <>
+                    <div className="cleanup-section-label" style={{ marginTop: '12px' }}>
+                      Bundled libraries ({bundledLibs.length})
+                    </div>
+                    <div style={{ fontSize: '0.8rem', opacity: 0.7, margin: '4px 0 8px' }}>
+                      These libraries exist standalone AND inside other addons. Nothing is
+                      changed here — never delete an embedded copy, the host addon needs it.
+                    </div>
+                    <div className="cleanup-items">
+                      {outdated.map((b) => (
+                        <div key={b.name} className="cleanup-item" style={{ color: 'var(--red)' }}>
+                          <span>
+                            ⚠️ <strong>{b.name}</strong> — your standalone copy (v
+                            {b.standaloneVersion || '?'}) is OLDER than the one bundled in{' '}
+                            {b.embedded.map((e) => `${e.parent} (v${e.version || '?'})`).join(', ')}.
+                            Update {b.name} to avoid the host addon running against an outdated library.
+                          </span>
+                        </div>
+                      ))}
+                      {same.map((b) => (
+                        <div key={b.name} className="cleanup-item" style={{ opacity: 0.65 }}>
+                          <span>
+                            📚 {b.name} v{b.standaloneVersion || '?'} — also bundled in{' '}
+                            {b.embedded.map((e) => e.parent).join(', ')} (same version, nothing to do)
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  </>
+                );
+              })()}
             </>
           )}
         </div>

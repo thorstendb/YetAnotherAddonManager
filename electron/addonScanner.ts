@@ -5,6 +5,7 @@ import * as path from 'path';
 import { AddonInfo, DependencyRef, ColorSegment, YaamAddonEntry, compareVersionStrings } from './shared/types';
 import { loadDatabase, saveDatabase, YaamDatabase, readMarkerFile, writeMarkerFile, backupTrackingState } from './yaamDatabase';
 import { canEnterDir } from './shared/fsWalk';
+import { writeJsonAtomic } from './shared/atomicWrite';
 
 /**
  * Parse color codes from a string.
@@ -899,11 +900,102 @@ export interface HygieneDuplicate {
   isDirectory: boolean;
 }
 
+/** One place where a library is embedded inside another addon's folder. */
+export interface EmbeddedLibLocation {
+  /** Top-level addon whose folder contains the copy */
+  parent: string;
+  /** Path of the embedded copy, relative to the AddOns folder */
+  relPath: string;
+  version: string;
+  addonVersion: number;
+}
+
+/**
+ * A library that exists BOTH as its own top-level addon and embedded inside
+ * one or more other addons.
+ */
+export interface BundledLibReport {
+  /** Folder name of the library */
+  name: string;
+  standaloneVersion: string;
+  standaloneAddonVersion: number;
+  isLibrary: boolean;
+  embedded: EmbeddedLibLocation[];
+  /**
+   * The standalone copy is OLDER than at least one embedded copy.
+   *
+   * This is the only state that actually causes damage.  ESO loads whichever
+   * copy wins, and an addon manager that "deduplicates" by dropping the
+   * embedded copy (Minion does this) leaves the host addon running against a
+   * library older than the one it shipped with.  The fix is always to update
+   * the standalone library — never to delete the embedded one.
+   */
+  standaloneOutdated: boolean;
+}
+
+/**
+ * Find libraries that exist standalone AND embedded in other addons.
+ *
+ * Deliberately NOT reported: a sub-addon sitting inside the folder of the
+ * same-named top-level addon (HarvestMap/Modules/HarvestMap).  That is the
+ * author's own module layout, not a bundling conflict, and flagging it would
+ * put a warning on a perfectly healthy install.
+ */
+export function findBundledLibs(addonsPath: string): BundledLibReport[] {
+  const all = scanAddonsFolder(addonsPath);
+  const topLevel = new Map(all.map((a) => [a.folderName, a]));
+  const byName = new Map<string, BundledLibReport>();
+
+  for (const top of all) {
+    for (const sub of top.subAddons) {
+      // Same name as its own host -> the author's module layout, not a conflict.
+      if (sub.folderName === top.folderName) continue;
+      const standalone = topLevel.get(sub.folderName);
+      if (!standalone) continue; // only embedded, nothing to collide with
+
+      let report = byName.get(sub.folderName);
+      if (!report) {
+        report = {
+          name: standalone.folderName,
+          standaloneVersion: standalone.version,
+          standaloneAddonVersion: standalone.addonVersion,
+          isLibrary: standalone.isLibrary || sub.isLibrary,
+          embedded: [],
+          standaloneOutdated: false,
+        };
+        byName.set(sub.folderName, report);
+      }
+      report.embedded.push({
+        parent: top.folderName,
+        relPath: path.relative(addonsPath, sub.path),
+        version: sub.version,
+        addonVersion: sub.addonVersion,
+      });
+
+      // AddOnVersion is the reliable comparison: a monotonic integer ESO itself
+      // uses.  The Version string is author-formatted prose ("1.0 r43") and
+      // only worth consulting when the numeric header is missing.
+      const newer =
+        standalone.addonVersion && sub.addonVersion
+          ? sub.addonVersion > standalone.addonVersion
+          : compareVersionStrings(sub.version, standalone.version) > 0;
+      if (newer) report.standaloneOutdated = true;
+    }
+  }
+
+  return Array.from(byName.values()).sort((a, b) => {
+    if (a.standaloneOutdated !== b.standaloneOutdated) return a.standaloneOutdated ? -1 : 1;
+    return a.name.localeCompare(b.name);
+  });
+}
+
 export interface HygienePreview {
   strayManifests: HygieneStrayManifest[];
   duplicates: HygieneDuplicate[];
   /** Root-level files not claimed by any stray manifest (e.g. README.md, esologo.dds) */
   unclaimedRootFiles: string[];
+  /** Libraries present both standalone and embedded in other addons (informational) */
+  bundledLibs: BundledLibReport[];
 }
 
 const DUPLICATE_RE = /^(.+?) (\d+)(\.[^.]+)?$/;
@@ -969,8 +1061,15 @@ function collectDuplicates(root: string, dir: string, depth: number, results: Hy
  * invisible to ESO and to the normal YAAM scan.
  */
 export function previewFolderHygiene(addonsPath: string): HygienePreview {
-  const result: HygienePreview = { strayManifests: [], duplicates: [], unclaimedRootFiles: [] };
+  const result: HygienePreview = { strayManifests: [], duplicates: [], unclaimedRootFiles: [], bundledLibs: [] };
   if (!fs.existsSync(addonsPath)) return result;
+
+  // Informational only — nothing here is auto-repairable, see findBundledLibs().
+  try {
+    result.bundledLibs = findBundledLibs(addonsPath);
+  } catch (err) {
+    console.error('[YAAM] Bundled-library scan failed:', err);
+  }
 
   let rootEntries: fs.Dirent[];
   try {
@@ -1144,7 +1243,7 @@ export function applyFolderHygiene(
     // these items for restore (intermediate dirs are scaffolding, not items).
     if (out.undo.removals.length > 0) {
       try {
-        fs.writeFileSync(path.join(removedRoot, '_meta.json'), JSON.stringify({ removals: out.undo.removals }, null, 2), 'utf-8');
+        writeJsonAtomic(path.join(removedRoot, '_meta.json'), { removals: out.undo.removals });
       } catch { /* listing falls back to first-level entries */ }
     }
   }

@@ -4,6 +4,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import AdmZip from 'adm-zip';
 import { AddonSettingsData, SavedVarsInfo } from './shared/types';
+import { writeFileAtomic } from './shared/atomicWrite';
 
 /**
  * Resolve the "live" directory from an AddOns path.
@@ -263,7 +264,7 @@ export function setAddonSetting(
     newLines.push(`${addonName} ${enabled ? '1' : '0'}`);
   }
 
-  fs.writeFileSync(settingsPath, newLines.join('\r\n'), 'utf-8');
+  writeFileAtomic(settingsPath, newLines.join('\r\n'));
   return { backupPath };
 }
 
@@ -336,7 +337,7 @@ export function batchSetAddonSettings(
   }
 
   const output = lines.join('\r\n');
-  fs.writeFileSync(settingsPath, output, 'utf-8');
+  writeFileAtomic(settingsPath, output);
 
   // Verify: re-read and check the written content matches
   const verification = fs.readFileSync(settingsPath, 'utf-8');
@@ -544,7 +545,7 @@ export function cleanupSettingsSelected(
         newLines.push(line);
       }
     }
-    fs.writeFileSync(settingsPath, newLines.join('\r\n'), 'utf-8');
+    writeFileAtomic(settingsPath, newLines.join('\r\n'));
   }
 
   // Cleanup selected SavedVariables
@@ -623,7 +624,7 @@ export function cleanupSettings(
       }
     }
 
-    fs.writeFileSync(settingsPath, newLines.join('\r\n'), 'utf-8');
+    writeFileAtomic(settingsPath, newLines.join('\r\n'));
   }
 
   // Cleanup orphaned SavedVariables
@@ -983,7 +984,7 @@ export function importProfile(
       // Ensure the master addon toggle is enabled
       settingsContent = settingsContent.replace(/^#AddOnsEnabled\s+0$/m, '#AddOnsEnabled 1');
 
-      fs.writeFileSync(settingsPath, settingsContent, 'utf-8');
+      writeFileAtomic(settingsPath, settingsContent);
       restoredSettings.push('AddOnSettings.txt');
     } catch (err: unknown) {
       errors.push(`AddOnSettings.txt: ${err instanceof Error ? err.message : String(err)}`);
@@ -997,7 +998,7 @@ export function importProfile(
       if (fs.existsSync(userSettingsPath)) {
         backupFile(userSettingsPath, getBackupDir(addonsPath, 'UserSettings'));
       }
-      fs.writeFileSync(userSettingsPath, data.userSettings, 'utf-8');
+      writeFileAtomic(userSettingsPath, data.userSettings);
       restoredSettings.push('UserSettings.txt');
     } catch (err: unknown) {
       errors.push(`UserSettings.txt: ${err instanceof Error ? err.message : String(err)}`);
@@ -1034,7 +1035,7 @@ export function importProfile(
       }
       try {
         const buffer = Buffer.from(base64Content, 'base64');
-        fs.writeFileSync(path.join(svDir, fileName), buffer);
+        writeFileAtomic(path.join(svDir, fileName), buffer);
         restoredSettings.push(`SavedVariables/${fileName}`);
       } catch (err: unknown) {
         errors.push(`SavedVariables/${fileName}: ${err instanceof Error ? err.message : String(err)}`);
@@ -1074,7 +1075,7 @@ export function importProfile(
         if (!resolvedDest.startsWith(folderPath + path.sep) || relFile.includes('..')) continue;
         try {
           fs.mkdirSync(path.dirname(destPath), { recursive: true });
-          fs.writeFileSync(destPath, Buffer.from(base64Content, 'base64'));
+          writeFileAtomic(destPath, Buffer.from(base64Content, 'base64'));
         } catch (err: unknown) {
           errors.push(`Runtime data ${folderName}/${relFile}: ${err instanceof Error ? err.message : String(err)}`);
         }
@@ -1277,7 +1278,7 @@ export function importProfileFromZip(
           .replace(/^#AcknowledgedOutOfDateAddonsVersion\s+\d+$/m, `#AcknowledgedOutOfDateAddonsVersion ${Math.max(currentVersion, currentAckVersion)}`);
       }
       settingsContent = settingsContent.replace(/^#AddOnsEnabled\s+0$/m, '#AddOnsEnabled 1');
-      fs.writeFileSync(settingsPath, settingsContent, 'utf-8');
+      writeFileAtomic(settingsPath, settingsContent);
       restoredSettings.push('AddOnSettings.txt');
     } catch (err: unknown) {
       errors.push(`AddOnSettings.txt: ${err instanceof Error ? err.message : String(err)}`);
@@ -1291,7 +1292,7 @@ export function importProfileFromZip(
       if (fs.existsSync(userSettingsPath)) {
         backupFile(userSettingsPath, getBackupDir(addonsPath, 'UserSettings'));
       }
-      fs.writeFileSync(userSettingsPath, profile.userSettings, 'utf-8');
+      writeFileAtomic(userSettingsPath, profile.userSettings);
       restoredSettings.push('UserSettings.txt');
     } catch (err: unknown) {
       errors.push(`UserSettings.txt: ${err instanceof Error ? err.message : String(err)}`);
@@ -1358,7 +1359,7 @@ export function importProfileFromZip(
             fs.mkdirSync(destPath, { recursive: true });
           } else {
             fs.mkdirSync(path.dirname(destPath), { recursive: true });
-            fs.writeFileSync(destPath, entry.getData());
+            writeFileAtomic(destPath, entry.getData());
           }
         }
         restoredFromZip.add(folderName);

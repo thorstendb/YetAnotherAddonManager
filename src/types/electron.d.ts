@@ -27,6 +27,7 @@ declare global {
       getConfig: () => Promise<AppConfig>;
       setAddonPath: (addonPath: string) => Promise<AppConfig>;
       scanAddons: (addonPath: string) => Promise<AddonInfo[]>;
+      detectCloudSync: (targetPath: string) => Promise<string | null>;
       selectFolder: () => Promise<string | null>;
       cleanupUnused: (addonPath: string) => Promise<{ moved: string[]; addons: AddonInfo[] }>;
       deleteAddon: (addonPath: string, folderName: string) => Promise<AddonInfo[]>;
@@ -39,7 +40,7 @@ declare global {
         addonId: string,
         addonsPath: string,
         opts?: { overlayFor?: string }
-      ) => Promise<{ installed: string[]; missingDeps: string[]; error?: string }>;
+      ) => Promise<{ installed: string[]; missingDeps: string[]; conflictsSwept: string[]; staleRemoved: string[]; error?: string }>;
       getAddonSettings: (addonsPath: string) => Promise<AddonSettingsData>;
       setAddonSetting: (
         addonsPath: string,
@@ -153,6 +154,14 @@ declare global {
         strayManifests: { file: string; addonName: string; title: string; version: string; addonVersion: number; relatedFiles: string[]; folderExists: boolean; folderVersion: string; rootIsStale: boolean }[];
         duplicates: { relPath: string; originalRelPath: string; isDirectory: boolean }[];
         unclaimedRootFiles: string[];
+        bundledLibs: {
+          name: string;
+          standaloneVersion: string;
+          standaloneAddonVersion: number;
+          isLibrary: boolean;
+          embedded: { parent: string; relPath: string; version: string; addonVersion: number }[];
+          standaloneOutdated: boolean;
+        }[];
       }>;
       applyFolderHygiene: (
         addonsPath: string,

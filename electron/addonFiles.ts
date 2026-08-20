@@ -16,6 +16,9 @@ import AdmZip from 'adm-zip';
 import { CatalogAddon } from './shared/types';
 import { scanSpecificAddons } from './addonScanner';
 import { loadDatabase, saveDatabase, writeMarkerFile } from './yaamDatabase';
+import { canEnterDir } from './shared/fsWalk';
+import { writeJsonAtomic } from './shared/atomicWrite';
+import { threadId } from 'worker_threads';
 
 /**
  * Get the Downloads subfolder inside the AddOns folder, creating it if needed.
@@ -69,6 +72,152 @@ export function verifyZip(zipPath: string, expectedMd5: string): { ok: boolean; 
   return { ok: true, actualMd5 };
 }
 
+/** Same pattern the hygiene scanner uses for Finder/iCloud conflict copies. */
+const CONFLICT_COPY_RE = /^(.+?) (\d+)(\.[^.]+)?$/;
+
+/**
+ * Extract a ZIP differentially and atomically.
+ *
+ * Differential: an entry whose on-disk content is already byte-identical is
+ * skipped.  Measured on this project's real Downloads folder, ~75% of all
+ * files are unchanged between two releases — skipping them shrinks the write
+ * window that cloud sync clients (iCloud, OneDrive) can collide with.
+ *
+ * Atomic: changed files are written to a temp name and renamed over the
+ * target.  An in-place overwrite of a large file is NOT atomic — a sync
+ * client can pick up the half-written state and turn it into a conflict copy
+ * ("file 2.lua"), which is exactly the damage found in the field.
+ *
+ * All entry paths are validated against the extraction root first (zip-slip);
+ * a traversal entry aborts the whole install before anything is written.
+ */
+function extractZipDifferential(zip: AdmZip, addonsPath: string): { written: number; unchanged: number } {
+  const root = path.resolve(addonsPath);
+  const entries = zip.getEntries();
+
+  // Validation pass — refuse the archive outright before touching the disk.
+  for (const entry of entries) {
+    const dest = path.resolve(root, entry.entryName);
+    if (dest !== root && !dest.startsWith(root + path.sep)) {
+      throw new Error(`ZIP entry escapes the AddOns folder: ${entry.entryName}`);
+    }
+  }
+
+  let written = 0;
+  let unchanged = 0;
+  for (const entry of entries) {
+    const dest = path.resolve(root, entry.entryName);
+    if (entry.isDirectory) {
+      fs.mkdirSync(dest, { recursive: true });
+      continue;
+    }
+    const data = entry.getData();
+    try {
+      const st = fs.statSync(dest);
+      // Size check first — only read the file when it could actually match.
+      if (st.isFile() && st.size === data.length && data.equals(fs.readFileSync(dest))) {
+        unchanged++;
+        continue;
+      }
+    } catch { /* target missing — plain new file */ }
+
+    fs.mkdirSync(path.dirname(dest), { recursive: true });
+    const tmp = `${dest}.${process.pid}.yaamtmp`;
+    try {
+      fs.writeFileSync(tmp, data);
+      fs.renameSync(tmp, dest);
+    } catch (err) {
+      try { fs.unlinkSync(tmp); } catch { /* best effort */ }
+      throw err;
+    }
+    written++;
+  }
+  return { written, unchanged };
+}
+
+/**
+ * Sweep freshly written addon folders for cloud-sync conflict copies.
+ *
+ * When the AddOns folder lives inside a synced location (iCloud "Documents",
+ * OneDrive), the sync client reacts to our writes and can materialize
+ * "file 2.lua"-style conflict copies — 354 of them were found on a real
+ * install, regenerating with every update.  ESO never loads these (manifests
+ * reference exact names), so removing them is always safe.
+ *
+ * A name is only treated as a conflict copy when the original exists next to
+ * it AND the ZIP itself does not ship a file of that name — an addon that
+ * legitimately ships "Icon 2.dds" is left alone.
+ *
+ * Copies are moved (never deleted) into the same Removed/_hygiene/<stamp>/
+ * structure the hygiene dialog uses, so the existing restore UI covers them.
+ */
+function sweepConflictCopies(
+  addonsPath: string,
+  zipFilesByDir: Map<string, string[]>
+): string[] {
+  const swept: string[] = [];
+  const moves: { src: string; rel: string }[] = [];
+
+  const collect = (dir: string, relBase: string, shipped: Set<string>, depth: number, visited: Set<string>) => {
+    if (!canEnterDir(dir, depth, visited)) return;
+    let entries: fs.Dirent[];
+    try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+    const names = new Set(entries.map((e) => e.name));
+    for (const e of entries) {
+      if (e.name.startsWith('.')) continue;
+      const rel = relBase ? `${relBase}/${e.name}` : e.name;
+      const m = CONFLICT_COPY_RE.exec(e.name);
+      if (m) {
+        const original = m[1] + (m[3] ?? '');
+        if (names.has(original) && !shipped.has(rel)) {
+          moves.push({ src: path.join(dir, e.name), rel });
+          continue; // whole subtree goes with it
+        }
+      }
+      if (e.isDirectory()) collect(path.join(dir, e.name), rel, shipped, depth + 1, visited);
+    }
+  };
+
+  for (const [dir, files] of zipFilesByDir) {
+    const shipped = new Set(files.map((f) => `${dir}/${f}`));
+    // Also whitelist the directories the ZIP creates
+    for (const f of files) {
+      const parts = f.split('/');
+      for (let i = 1; i < parts.length; i++) shipped.add(`${dir}/${parts.slice(0, i).join('/')}`);
+    }
+    collect(path.join(addonsPath, dir), dir, shipped, 0, new Set());
+
+    // A conflict copy of the WHOLE addon folder ("SomeAddon 2/") sits next to
+    // it in the AddOns root — cover that too.
+    let rootEntries: fs.Dirent[];
+    try { rootEntries = fs.readdirSync(addonsPath, { withFileTypes: true }); } catch { continue; }
+    for (const e of rootEntries) {
+      const m = CONFLICT_COPY_RE.exec(e.name);
+      if (m && m[1] + (m[3] ?? '') === dir && !zipFilesByDir.has(e.name)) {
+        moves.push({ src: path.join(addonsPath, e.name), rel: e.name });
+      }
+    }
+  }
+
+  if (moves.length === 0) return swept;
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+  const removedRoot = path.join(path.dirname(addonsPath), 'Removed', '_hygiene', stamp);
+  for (const { src, rel } of moves) {
+    try {
+      const dest = path.join(removedRoot, rel);
+      fs.mkdirSync(path.dirname(dest), { recursive: true });
+      fs.renameSync(src, dest);
+      swept.push(rel);
+    } catch { /* locked by the sync client — the hygiene scan offers it later */ }
+  }
+  if (swept.length > 0) {
+    try {
+      writeJsonAtomic(path.join(removedRoot, '_meta.json'), { removals: swept });
+    } catch { /* listing falls back to first-level entries */ }
+  }
+  return swept;
+}
+
 /**
  * Extract an addon ZIP into the AddOns folder and record it in the YAAM
  * database.  Returns the installed directory names and any missing
@@ -84,9 +233,7 @@ export function extractAndRegister(
   addonsPath: string,
   catalogEntry: CatalogAddon | null,
   opts?: { overlayFor?: string }
-): { installed: string[]; missingDeps: string[] } {
-  // Extract ZIP using extractAllTo to avoid path sanitization issues
-  // with folder names containing hyphens, dots, or numbers (e.g. LibAddonMenu-2.0)
+): { installed: string[]; missingDeps: string[]; unchanged: number; conflictsSwept: string[]; staleRemoved: string[] } {
   const zip = new AdmZip(zipPath);
 
   // Capture file manifest from ZIP before extraction (for detecting runtime-created files later)
@@ -103,7 +250,11 @@ export function extractAndRegister(
     }
   }
 
-  zip.extractAllTo(addonsPath, true);
+  // Snapshot the previous install manifests BEFORE writing — needed below to
+  // remove files the new release no longer ships.
+  const prevDb = loadDatabase(addonsPath);
+
+  const { unchanged } = extractZipDifferential(zip, addonsPath);
 
   // Remove stale manifests of the OTHER extension left behind by packaging
   // changes (author switched .addon ↔ .txt between releases — extraction never
@@ -121,6 +272,51 @@ export function extractAndRegister(
       } catch { /* non-fatal — the scanner's dual-manifest rule still picks the newer one */ }
     }
   }
+
+  // Remove files the PREVIOUS release shipped but the new one does not.
+  // Extraction never deletes, so without this every update leaves a mixed
+  // state behind: new files next to orphans of the old version (old modules,
+  // renamed lua files) that ESO may still load via a stale manifest.  Only
+  // files recorded in OUR OWN install manifest are candidates — runtime files
+  // and user additions are never listed there, and overlay-installed files
+  // are explicitly protected.
+  const staleRemoved: string[] = [];
+  if (!opts?.overlayFor) {
+    for (const [dir, files] of zipFilesByDir) {
+      const prev = prevDb.addons[dir];
+      if (!prev?.installedFiles?.length) continue;
+      const newFiles = new Set(files);
+      const overlayFiles = new Set<string>();
+      for (const o of prev.overlays ?? []) {
+        for (const f of o.installedFiles ?? []) overlayFiles.add(f);
+      }
+      for (const rel of prev.installedFiles) {
+        if (newFiles.has(rel) || overlayFiles.has(rel)) continue;
+        const target = path.join(addonsPath, dir, rel);
+        // resolve-guard: installedFiles comes from our own marker, but the
+        // marker lives in a folder other tools write to — never trust it blindly.
+        if (!path.resolve(target).startsWith(path.resolve(addonsPath, dir) + path.sep)) continue;
+        try {
+          if (fs.existsSync(target) && fs.statSync(target).isFile()) {
+            fs.unlinkSync(target);
+            staleRemoved.push(`${dir}/${rel}`);
+            // Prune now-empty parent directories up to the addon root.
+            let parent = path.dirname(target);
+            const stop = path.resolve(addonsPath, dir);
+            while (parent !== stop && fs.readdirSync(parent).length === 0) {
+              fs.rmdirSync(parent);
+              parent = path.dirname(parent);
+            }
+          }
+        } catch { /* non-fatal — the file simply stays */ }
+      }
+    }
+  }
+
+  // Clean up conflict copies a cloud sync client may have created — both
+  // pre-existing ones and those materializing right now in reaction to the
+  // writes above.
+  const conflictsSwept = sweepConflictCopies(addonsPath, zipFilesByDir);
 
   // Directories shipped in the ZIP (works for both fresh installs and updates)
   const shippedDirs = Array.from(zipFilesByDir.keys());
@@ -240,9 +436,7 @@ export function extractAndRegister(
     (depName) => !depName.startsWith('ZO_') && !allDirNames.has(depName)
   );
 
-  return { installed: shippedDirs, missingDeps };
-
-  return { installed: shippedDirs, missingDeps };
+  return { installed: shippedDirs, missingDeps, unchanged, conflictsSwept, staleRemoved };
 }
 
 /**

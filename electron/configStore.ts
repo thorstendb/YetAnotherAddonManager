@@ -4,6 +4,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 import { AppConfig } from './shared/types';
+import { writeJsonAtomic } from './shared/atomicWrite';
 
 const CONFIG_FILE = 'yaam.config.json';
 
@@ -77,5 +78,5 @@ export function loadConfig(): AppConfig {
 
 export function saveConfig(config: AppConfig): void {
   const configPath = getConfigPath();
-  fs.writeFileSync(configPath, JSON.stringify(config, null, 2), 'utf-8');
+  writeJsonAtomic(configPath, config);
 }

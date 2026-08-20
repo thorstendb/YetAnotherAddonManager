@@ -3,6 +3,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { canEnterDir } from './shared/fsWalk';
+import { writeJsonAtomic } from './shared/atomicWrite';
 
 /** A single addon entry in a snapshot */
 export interface SnapshotAddon {
@@ -95,7 +96,7 @@ export function saveSnapshotIfChanged(
   const dir = getSnapshotsDir(addonsPath);
   const ts = snapshot.timestamp.replace(/[:.]/g, '-').replace('T', '_').slice(0, 19);
   const filePath = path.join(dir, `snapshot_${ts}.json`);
-  fs.writeFileSync(filePath, JSON.stringify(snapshot, null, 2), 'utf-8');
+  writeJsonAtomic(filePath, snapshot);
 
   return snapshot;
 }

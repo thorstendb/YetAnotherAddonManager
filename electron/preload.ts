@@ -11,6 +11,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.invoke(IPC_CHANNELS.SET_ADDON_PATH, addonPath),
   scanAddons: (addonPath: string): Promise<AddonInfo[]> =>
     ipcRenderer.invoke(IPC_CHANNELS.SCAN_ADDONS, addonPath),
+  detectCloudSync: (targetPath: string): Promise<string | null> =>
+    ipcRenderer.invoke(IPC_CHANNELS.DETECT_CLOUD_SYNC, targetPath),
   selectFolder: (): Promise<string | null> =>
     ipcRenderer.invoke(IPC_CHANNELS.SELECT_FOLDER),
   cleanupUnused: (addonPath: string): Promise<{ moved: string[]; addons: AddonInfo[] }> =>

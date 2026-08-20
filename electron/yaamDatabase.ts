@@ -3,6 +3,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import type { YaamMarker, YaamOverlayEntry } from './shared/types';
+import { writeJsonAtomic } from './shared/atomicWrite';
 
 /**
  * Per-addon metadata stored in the central YAAM database.
@@ -73,23 +74,6 @@ export function loadDatabase(addonsPath: string): YaamDatabase {
     console.error('Failed to load YAAM database:', err);
   }
   return { schemaVersion: CURRENT_SCHEMA, addons: {} };
-}
-
-/**
- * Write a JSON file atomically: serialize to a temp file in the same directory,
- * then rename over the target.  rename() is atomic within a filesystem, so a
- * reader either sees the old file or the complete new one — never a truncated
- * mix.  This is what makes it safe to kill a stuck worker mid-scan.
- */
-function writeJsonAtomic(targetPath: string, data: unknown): void {
-  const tmpPath = `${targetPath}.${process.pid}.tmp`;
-  try {
-    fs.writeFileSync(tmpPath, JSON.stringify(data, null, 2), 'utf-8');
-    fs.renameSync(tmpPath, targetPath);
-  } catch (err) {
-    try { if (fs.existsSync(tmpPath)) fs.unlinkSync(tmpPath); } catch { /* best effort */ }
-    throw err;
-  }
 }
 
 /** Save the database to disk. */

@@ -679,6 +679,7 @@ export const IPC_CHANNELS = {
   GET_CONFIG: 'get-config',
   SET_ADDON_PATH: 'set-addon-path',
   SCAN_ADDONS: 'scan-addons',
+  DETECT_CLOUD_SYNC: 'detect-cloud-sync',
   SELECT_FOLDER: 'select-folder',
   CLEANUP_UNUSED: 'cleanup-unused',
   DELETE_ADDON: 'delete-addon',

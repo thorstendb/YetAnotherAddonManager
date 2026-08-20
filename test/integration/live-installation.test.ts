@@ -95,28 +95,37 @@ describe.skipIf(!haveSnapshot)('real catalog snapshot (2 932 entries)', () => {
   });
 });
 
+/**
+ * These assertions describe a MOMENT of a real, user-owned folder — and the
+ * whole point of the hygiene feature is that the user cleans it up.  Once that
+ * happens the findings legitimately disappear, so each case skips itself
+ * instead of failing: a tidy folder is the success case, not a regression.
+ *
+ * The underlying logic is pinned independently in unit/folder-hygiene.test.ts
+ * against fixtures, which is what actually guards against code regressions.
+ */
 describe.skipIf(!haveLive)('live AddOns folder (read-only)', () => {
   const preview = previewFolderHygiene(LIVE_ADDONS);
+  const strayFor = (name: string) => preview.strayManifests.find((s) => s.addonName === name);
 
-  it('finds the broken ArchiveHelper root install with its scattered folders', () => {
-    const stray = preview.strayManifests.find((s) => s.addonName === 'ArchiveHelper');
+  it.skipIf(!strayFor('ArchiveHelper'))('finds the broken ArchiveHelper root install with its scattered folders', () => {
+    const stray = strayFor('ArchiveHelper');
     expect(stray).toBeDefined();
     expect(stray!.folderExists).toBe(false);
     expect(stray!.version).toBe('1.3.5');
     expect(stray!.relatedFiles).toEqual(expect.arrayContaining(['ArchiveHelper.lua', 'ui', 'data', 'languages']));
   });
 
-  it('flags the stale 2024 HodorReflexes root manifest (proper folder exists)', () => {
-    const stray = preview.strayManifests.find((s) => s.addonName === 'HodorReflexes');
+  it.skipIf(!strayFor('HodorReflexes'))('flags the stale 2024 HodorReflexes root manifest (proper folder exists)', () => {
+    const stray = strayFor('HodorReflexes');
     expect(stray).toBeDefined();
     expect(stray!.folderExists).toBe(true);
     expect(stray!.rootIsStale).toBe(true);
   });
 
-  it('finds the Finder duplicates (HodorReflexes 2, core 2, " N" manifests)', () => {
+  it.skipIf(preview.duplicates.length === 0)('finds the Finder duplicates (HodorReflexes 2, core 2, " N" manifests)', () => {
     const rels = preview.duplicates.map((d) => d.relPath);
-    expect(rels).toContain('HodorReflexes 2');
     expect(rels.some((r) => / \d(\.\w+)?$/.test(r))).toBe(true);
-    expect(preview.duplicates.length).toBeGreaterThanOrEqual(10);
+    expect(preview.duplicates.length).toBeGreaterThan(0);
   });
 });

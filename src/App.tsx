@@ -125,6 +125,14 @@ function App() {
     strayManifests: HygieneStray[];
     duplicates: HygieneDup[];
     unclaimedRootFiles: string[];
+    bundledLibs: {
+      name: string;
+      standaloneVersion: string;
+      standaloneAddonVersion: number;
+      isLibrary: boolean;
+      embedded: { parent: string; relPath: string; version: string; addonVersion: number }[];
+      standaloneOutdated: boolean;
+    }[];
   } | null>(null);
 
   // Theme state: persisted in localStorage
@@ -196,6 +204,20 @@ function App() {
     return cleanup;
   }, []);
 
+  /** Paths whose cloud-sync status was already logged this session. */
+  const cloudLoggedRef = useRef<Set<string>>(new Set());
+
+  /** Log the cleanup work an install did — red for conflict copies (they mean
+   *  a sync client interfered), plain info for removed leftovers. */
+  const logInstallCleanup = useCallback((r: { conflictsSwept?: string[]; staleRemoved?: string[] }) => {
+    if (r.conflictsSwept?.length) {
+      addLog(`Removed ${r.conflictsSwept.length} cloud-sync conflict cop${r.conflictsSwept.length === 1 ? 'y' : 'ies'}: ${r.conflictsSwept.slice(0, 5).join(', ')}${r.conflictsSwept.length > 5 ? ', …' : ''} (restorable via Removed)`, 'error');
+    }
+    if (r.staleRemoved?.length) {
+      addLog(`Cleaned ${r.staleRemoved.length} leftover file(s) from the previous version: ${r.staleRemoved.slice(0, 5).join(', ')}${r.staleRemoved.length > 5 ? ', …' : ''}`, 'info');
+    }
+  }, [addLog]);
+
   const scanPath = useCallback(async (pathToScan: string) => {
     if (!pathToScan) return;
     setLoading(true);
@@ -203,6 +225,18 @@ function App() {
     try {
       const results = await window.electronAPI.scanAddons(pathToScan);
       setAddons(results);
+
+      // One-time diagnostic context per folder: is this a cloud-synced path?
+      // Info only — the install pipeline already writes atomically and cleans
+      // conflict copies, so there is nothing the user must do.
+      if (!cloudLoggedRef.current.has(pathToScan)) {
+        cloudLoggedRef.current.add(pathToScan);
+        window.electronAPI.detectCloudSync(pathToScan).then((provider) => {
+          if (provider) {
+            addLog(`AddOns folder is synced by ${provider} — YAAM writes atomically and cleans up conflict copies automatically`, 'info');
+          }
+        }).catch(() => {});
+      }
       const libs = results.filter((a) => a.isLibrary).length;
       addLog(`Found ${results.length} addons (${results.length - libs} addons, ${libs} libraries)`, 'success');
       // The LOCAL scan is done here — stop showing "Scanning…".  What follows
@@ -1294,7 +1328,23 @@ function App() {
     try {
       const preview = await window.electronAPI.previewFolderHygiene(addonPath);
       const total = preview.strayManifests.length + preview.duplicates.length + preview.unclaimedRootFiles.length;
-      if (total === 0) {
+
+      // Bundled libraries are reported even when nothing is repairable — an
+      // outdated standalone copy is the one state that causes real damage.
+      const outdated = preview.bundledLibs.filter((b) => b.standaloneOutdated);
+      for (const b of outdated) {
+        addLog(
+          `Bundled library: your standalone ${b.name} (v${b.standaloneVersion || '?'}) is OLDER than the copy in ` +
+          `${b.embedded.map((e) => `${e.parent} (v${e.version || '?'})`).join(', ')} — update ${b.name}`,
+          'error'
+        );
+      }
+      if (preview.bundledLibs.length > outdated.length) {
+        const same = preview.bundledLibs.length - outdated.length;
+        addLog(`Bundled libraries: ${same} also present inside other addons at the same version (nothing to do)`, 'info');
+      }
+
+      if (total === 0 && preview.bundledLibs.length === 0) {
         addLog('Folder hygiene: no problems found — the AddOns folder is clean', 'success');
         return;
       }
@@ -1927,6 +1977,7 @@ function App() {
                 return false;
               } else {
                 addLog(`${overlayFor ? `Applied overlay "${catalogAddon.name}"` : `Updated "${addon.folderName}"`} (${result.installed.join(', ')})`, 'success');
+                logInstallCleanup(result);
                 setRecentlyUpdated((prev) => new Set(prev).add(catalogAddon.id));
                 // Remove from catalog diff — this addon is now up to date
                 setCatalogChangedIds(prev => {
@@ -2346,6 +2397,7 @@ function App() {
           if (result.missingDeps.length > 0) {
             addLog(`Missing dependencies: ${result.missingDeps.join(', ')}`, 'warn');
           }
+          logInstallCleanup(result);
           // Remove from catalog diff — this addon is now up to date
           setCatalogChangedIds(prev => {
             if (!prev.has(catalogAddon.id)) return prev;
@@ -2939,6 +2991,7 @@ function App() {
           strayManifests={hygienePreview.strayManifests}
           duplicates={hygienePreview.duplicates}
           unclaimedRootFiles={hygienePreview.unclaimedRootFiles}
+          bundledLibs={hygienePreview.bundledLibs}
           onConfirm={handleHygieneConfirm}
           onCancel={() => setHygienePreview(null)}
         />

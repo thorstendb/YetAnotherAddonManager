@@ -8,6 +8,7 @@ import { IPC_CHANNELS } from './shared/types';
 import { loadConfig, saveConfig } from './configStore';
 import { cleanupUnusedLibraries, deleteAddon, deleteAddonAndExclusiveRefs, previewUnusedLibraries, cleanupSelectedLibraries, reconcileYaamMetadata, ReconcileMatch, commitBaseline, BaselineEntry, previewFolderHygiene, applyFolderHygiene, undoFolderHygiene, HygieneUndoInfo, listRemovedEntries, restoreRemovedEntry } from './addonScanner';
 import { callFs, shutdownFsWorker } from './fsWorkerHost';
+import { detectCloudProvider } from './cloudDetect';
 import { TIMEOUTS } from './shared/timeouts';
 import { fetchAddonCatalog, fetchAddonDetails, fetchCategories, installAddon, updateCatalogSnapshot, commitCatalogSnapshot } from './addonCatalogApi';
 import { setAddonSetting, batchSetAddonSettings, getSavedVarsInfo, deleteSavedVars, cleanupSettings, undoCleanupSettings, listSavedVarsBackups, restoreSavedVarsFile, exportProfile, importProfile, exportProfileAsZip, previewProfileZip, importProfileFromZip, ExportData, previewCleanupSettings, cleanupSettingsSelected } from './settingsManager';
@@ -233,6 +234,14 @@ ipcMain.handle(IPC_CHANNELS.SAVE_UI_SETTINGS, async (_event, settings: { logHeig
   return config;
 });
 
+ipcMain.handle(IPC_CHANNELS.DETECT_CLOUD_SYNC, async (_event, targetPath: string) => {
+  try {
+    return detectCloudProvider(targetPath);
+  } catch {
+    return null;
+  }
+});
+
 ipcMain.handle(IPC_CHANNELS.SCAN_ADDONS, async (_event, addonPath: string) => {
   // Runs in the filesystem worker so a blocking syscall (OneDrive "Files
   // On-Demand", dead network share) can be timed out and aborted instead of
@@ -437,7 +446,8 @@ ipcMain.handle(IPC_CHANNELS.FETCH_CATEGORIES, async () => {
 });
 
 ipcMain.handle(IPC_CHANNELS.INSTALL_ADDON, async (_event, addonId: string, addonsPath: string, opts?: { overlayFor?: string }) => {
-  const allResults: { installed: string[]; missingDeps: string[] } = { installed: [], missingDeps: [] };
+  const allResults: { installed: string[]; missingDeps: string[]; conflictsSwept: string[]; staleRemoved: string[] } =
+    { installed: [], missingDeps: [], conflictsSwept: [], staleRemoved: [] };
   const processedIds = new Set<string>();
   const idsToProcess = [addonId];
 
@@ -461,6 +471,8 @@ ipcMain.handle(IPC_CHANNELS.INSTALL_ADDON, async (_event, addonId: string, addon
         sendProgress(phase, percent);
       }, currentId === addonId ? opts : undefined);
       allResults.installed.push(...result.installed);
+      allResults.conflictsSwept.push(...result.conflictsSwept);
+      allResults.staleRemoved.push(...result.staleRemoved);
 
       // Resolve missing deps → queue for install
       if (result.missingDeps.length > 0) {

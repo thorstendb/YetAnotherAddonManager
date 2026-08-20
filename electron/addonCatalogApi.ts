@@ -8,6 +8,7 @@ import { CatalogAddon, CatalogCategory } from './shared/types';
 import { TIMEOUTS } from './shared/timeouts';
 import { getYaamDir } from './yaamDatabase';
 import { callFs } from './fsWorkerHost';
+import { writeFileAtomic } from './shared/atomicWrite';
 
 const API_URL = 'https://api.mmoui.com/v3/game/ESO/filelist.json';
 const CATEGORY_API_URL = 'https://api.mmoui.com/v3/game/ESO/categorylist.json';
@@ -312,7 +313,7 @@ function saveCatalogSnapshot(addonsPath: string, catalog: CatalogAddon[]): void 
   }
   try {
     const snapshotPath = path.join(getYaamDir(addonsPath), SNAPSHOT_FILE);
-    fs.writeFileSync(snapshotPath, JSON.stringify(snapshot), 'utf-8');
+    writeFileAtomic(snapshotPath, JSON.stringify(snapshot));
   } catch (err) {
     console.error('Failed to save catalog snapshot:', err);
   }
@@ -460,7 +461,7 @@ export async function installAddon(
   addonsPath: string,
   onProgress?: (phase: 'resolving' | 'downloading' | 'extracting', percent?: number) => void,
   opts?: { overlayFor?: string }
-): Promise<{ installed: string[]; missingDeps: string[] }> {
+): Promise<{ installed: string[]; missingDeps: string[]; unchanged: number; conflictsSwept: string[]; staleRemoved: string[] }> {
   // Look up addon info from cache to build a descriptive filename
   const catalogEntry = cachedList?.find((a) => a.id === addonId) ?? null;
   let zipName = `addon-${addonId}.zip`;
