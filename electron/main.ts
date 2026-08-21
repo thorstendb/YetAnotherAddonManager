@@ -223,13 +223,14 @@ ipcMain.handle(IPC_CHANNELS.SET_ADDON_PATH, async (_event, addonPath: string) =>
   return config;
 });
 
-ipcMain.handle(IPC_CHANNELS.SAVE_UI_SETTINGS, async (_event, settings: { logHeight?: number; panelWidths?: number[]; fontScale?: number; fontFamily?: string; skipCleanupConfirm?: boolean }) => {
+ipcMain.handle(IPC_CHANNELS.SAVE_UI_SETTINGS, async (_event, settings: { logHeight?: number; panelWidths?: number[]; fontScale?: number; fontFamily?: string; skipCleanupConfirm?: boolean; autoUpdateOnStart?: boolean }) => {
   const config = loadConfig();
   if (settings.logHeight !== undefined) config.logHeight = settings.logHeight;
   if (settings.panelWidths !== undefined) config.panelWidths = settings.panelWidths;
   if (settings.fontScale !== undefined) config.fontScale = settings.fontScale;
   if (settings.fontFamily !== undefined) config.fontFamily = settings.fontFamily;
   if (settings.skipCleanupConfirm !== undefined) config.skipCleanupConfirm = settings.skipCleanupConfirm;
+  if (settings.autoUpdateOnStart !== undefined) config.autoUpdateOnStart = settings.autoUpdateOnStart;
   saveConfig(config);
   return config;
 });
@@ -530,7 +531,7 @@ ipcMain.handle(
       return await callFs('batchSetAddonSettings', [addonsPath, changes], TIMEOUTS.fs.settings);
     } catch (err: unknown) {
       console.error('Batch set addon settings error:', err);
-      return { backupPath: '', applied: 0, error: errMsg(err) };
+      return { backupPath: '', applied: 0, skipped: [], error: errMsg(err) };
     }
   }
 );

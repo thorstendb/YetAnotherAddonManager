@@ -7,10 +7,22 @@ import RichText, { stripBBCode } from './RichText';
 import ImagePreview from './ImagePreview';
 import { shortenCharName } from '../App';
 
+/** Modifier keys that were held while selecting a row. */
+export interface SelectMods {
+  /** Ctrl / Cmd — add or remove this row instead of replacing the selection */
+  toggle?: boolean;
+  /** Shift — select everything between the anchor row and this one */
+  range?: boolean;
+  /** Shift+arrow — add this row to the selection without removing anything */
+  extend?: boolean;
+  /** Right click — leave an existing multi-selection alone if this row is part of it */
+  keepIfSelected?: boolean;
+}
+
 interface AddonTreeItemProps {
   addon: AddonInfo;
   isSelected: boolean;
-  onSelect: (folderName: string) => void;
+  onSelect: (folderName: string, mods?: SelectMods) => void;
   isUnreferenced?: boolean;
   isNotInCatalog?: boolean;
   isCatalogMismatch?: boolean;
@@ -156,16 +168,21 @@ const AddonTreeItem: React.FC<AddonTreeItemProps> = ({
     || addon.savedVariables.length > 0 || addon.files.length > 0
     || !!catalogAddon;
 
-  const handleClick = () => {
-    onSelect(addon.folderName);
-    if (hasDetails) {
-      setExpanded((prev) => !prev);
-    }
+  // Clicking the row only selects — expanding is reserved for the chevron, so
+  // selecting an entry never reflows the panel underneath the pointer.
+  const handleClick = (e: React.MouseEvent) => {
+    onSelect(addon.folderName, { toggle: e.metaKey || e.ctrlKey, range: e.shiftKey });
+  };
+
+  /** Chevron click: toggle only.  Selection comes from the row click below it. */
+  const handleChevronClick = () => {
+    if (hasDetails) setExpanded((prev) => !prev);
   };
 
   const handleRightClick = (e: React.MouseEvent) => {
     e.preventDefault();
-    onSelect(addon.folderName);
+    // Right-clicking inside a multi-selection must not collapse it to one row
+    onSelect(addon.folderName, { keepIfSelected: true });
     onContextMenu(e, addon);
   };
 
@@ -311,7 +328,11 @@ const AddonTreeItem: React.FC<AddonTreeItemProps> = ({
         onClick={handleClick}
         onContextMenu={handleRightClick}
       >
-        <span className={`tree-chevron ${expanded ? 'expanded' : ''} ${!hasDetails ? 'hidden' : ''}`}>
+        <span
+          className={`tree-chevron ${expanded ? 'expanded' : ''} ${!hasDetails ? 'hidden' : ''}`}
+          onClick={handleChevronClick}
+          title={expanded ? 'Collapse' : 'Expand'}
+        >
           ▶
         </span>
         {totalChars > 0 && (

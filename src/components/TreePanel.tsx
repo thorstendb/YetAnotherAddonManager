@@ -18,14 +18,19 @@ interface TreePanelProps {
   hasPendingChanges?: boolean;
   onSave?: () => void;
   onCollapseAll?: () => void;
+  /** Rows of this column that are part of the selection (shown from 2 upwards) */
+  selectedCount?: number;
 }
 
-const TreePanel: React.FC<TreePanelProps> = ({ title, count, children, scrollRef, flex, onKeyDown, searchQuery, onSearchChange, characters, characterFilter, onCharacterFilterChange, hasPendingChanges, onSave, onCollapseAll }) => {
+const TreePanel: React.FC<TreePanelProps> = ({ title, count, children, scrollRef, flex, onKeyDown, searchQuery, onSearchChange, characters, characterFilter, onCharacterFilterChange, hasPendingChanges, onSave, onCollapseAll, selectedCount = 0 }) => {
   return (
     <div className="tree-panel" style={flex != null ? { flex } : undefined}>
       <div className="tree-panel-header">
         <span>{title}</span>
         <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+          {selectedCount > 1 && (
+            <span className="count selected-count" title="Selected entries in this column">{selectedCount} selected</span>
+          )}
           {onCollapseAll && (
             <button className="collapse-all-btn" onClick={onCollapseAll} title="Collapse all">⏶</button>
           )}

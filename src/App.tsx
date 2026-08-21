@@ -6,7 +6,7 @@ import { classifyDirOwnership, findHijackedManifestOverlay, hasOverlayStyleName 
 import PathBar from './components/PathBar';
 import StatusBar from './components/StatusBar';
 import TreePanel from './components/TreePanel';
-import AddonTreeItem from './components/AddonTreeItem';
+import AddonTreeItem, { SelectMods } from './components/AddonTreeItem';
 // SearchBar removed — per-panel search is built into TreePanel
 import ContextMenu, { ContextMenuItem } from './components/ContextMenu';
 import LogPanel, { LogEntry } from './components/LogPanel';
@@ -35,6 +35,9 @@ function errMsg(err: unknown): string {
  */
 const MTIME_UPDATE_SLACK_SECONDS = 48 * 3600;
 
+/** Shared empty set — keeps "nothing related" a stable memo result. */
+const EMPTY_NAMES: ReadonlySet<string> = new Set<string>();
+
 /** Entry sent to the main process by the baseline commit (mirrors BaselineEntry). */
 type BaselineEntryUI = {
   folderName: string;
@@ -57,7 +60,35 @@ function App() {
   const [addonPath, setAddonPath] = useState('');
   const [addons, setAddons] = useState<AddonInfo[]>([]);
   const [loading, setLoading] = useState(false);
-  const [selectedAddon, setSelectedAddon] = useState<string | null>(null);
+  // Multi-selection: `selection` holds every selected folder, `selectionLead`
+  // is the last clicked row — the anchor for Shift ranges and the cursor the
+  // arrow keys move.  The lead may sit outside the selection after a Ctrl+click
+  // deselected it.
+  const [selection, setSelection] = useState<ReadonlySet<string>>(EMPTY_NAMES);
+  const [selectionLead, setSelectionLead] = useState<string | null>(null);
+  /** Selection in the Online column.  Lives here, not in OnlineBrowser, so all
+   *  three columns can pin what an online selection points at — and so a plain
+   *  click in one column can replace the selection made in another. */
+  const [catalogSelection, setCatalogSelection] = useState<ReadonlySet<string>>(EMPTY_NAMES);
+  const [catalogLead, setCatalogLead] = useState<string | null>(null);
+
+  const selectOnly = useCallback((name: string | null) => {
+    setSelection(name ? new Set([name]) : EMPTY_NAMES);
+    setSelectionLead(name);
+    // A plain selection in the local columns replaces the one in the catalog
+    setCatalogSelection(EMPTY_NAMES);
+    setCatalogLead(null);
+  }, []);
+
+  const clearSelection = useCallback(() => {
+    setSelection(EMPTY_NAMES);
+    setSelectionLead(null);
+  }, []);
+
+  const clearCatalogSelection = useCallback(() => {
+    setCatalogSelection(EMPTY_NAMES);
+    setCatalogLead(null);
+  }, []);
   const [addonSearchQuery, setAddonSearchQuery] = useState('');
   const [libSearchQuery, setLibSearchQuery] = useState('');
   const [addonCharFilter, setAddonCharFilter] = useState<string>('');
@@ -101,6 +132,10 @@ function App() {
   const [fontScale, setFontScale] = useState(120);
   const [fontFamily, setFontFamily] = useState("'Segoe UI', sans-serif");
   const [skipCleanupConfirm, setSkipCleanupConfirm] = useState(false);
+  const [autoUpdateOnStart, setAutoUpdateOnStart] = useState(false);
+  /** Guards the start-up auto-update so it runs at most once per session */
+  const autoUpdateDoneRef = useRef(false);
+  const [catalogDiffReady, setCatalogDiffReady] = useState(false);
   const [cleanupDialog, setCleanupDialog] = useState<{
     type: CleanupType;
     items: string[];
@@ -175,6 +210,7 @@ function App() {
       if (config.fontScale) setFontScale(config.fontScale);
       if (config.fontFamily) setFontFamily(config.fontFamily);
       if (config.skipCleanupConfirm) setSkipCleanupConfirm(config.skipCleanupConfirm);
+      if (config.autoUpdateOnStart) setAutoUpdateOnStart(config.autoUpdateOnStart);
       if (config.welcomeAccepted) {
         setWelcomeAccepted(true);
         addLog('YAAM started', 'info');
@@ -290,6 +326,9 @@ function App() {
       // Update catalog snapshot and compute diff (detects catalog-side changes)
       if (onlineList.length > 0 && pathToScan) {
         window.electronAPI.updateCatalogSnapshot(pathToScan).then(diff => {
+          // Tier 0 lands last; the start-up auto-update waits for it so it does
+          // not run against a half-finished picture of what needs updating
+          setCatalogDiffReady(true);
           if (diff) {
             // Store changed IDs for Tier 0 update detection
             const changedIds = new Set(diff.changed.map(([id]) => id));
@@ -303,7 +342,7 @@ function App() {
               addLog(`Catalog changes since last session: ${diff.changed.length} updated, ${diff.added.length} new`, 'info');
             }
           }
-        }).catch(() => {});
+        }).catch(() => setCatalogDiffReady(true));
       }
 
       // Reconcile central YAAM addon database with catalog matches
@@ -480,6 +519,16 @@ function App() {
     }
     return set;
   }, [addons]);
+
+  /**
+   * Top-level folders only — a catalog entry counts as INSTALLED just for these.
+   * A folder that exists only inside another addon (authors who pack two addons
+   * into one archive, e.g. PriceTooltip shipping PriceTooltipNote) is a bundled
+   * copy, not an installation of that catalog entry, and must not claim its
+   * identity: the standalone release was never downloaded, and deleting the
+   * folder would mean reaching into somebody else's addon.
+   */
+  const topLevelDirNames = useMemo(() => new Set(addons.map((a) => a.folderName)), [addons]);
 
   // Set of addons NOT found in the catalog and without their own download URL
   // (computed after catalog lookup maps below, but declared here for readability)
@@ -784,6 +833,26 @@ function App() {
     return map;
   }, [addons]);
 
+  /**
+   * Every folder the game tracks separately for this row: the addon itself plus
+   * its sub-addons.  ESO writes one AddOnSettings.txt line per manifest, so a
+   * row like HarvestMap or Arkadius' Trade Tools has an entry of its own AND one
+   * per module.  Enabling only the parent leaves the modules switched off —
+   * which is exactly what "enable doesn't quite work" looks like in game.
+   */
+  const settingsFoldersFor = useCallback(
+    (folderName: string): string[] => {
+      const addon = addonMap.get(folderName);
+      if (!addon || addon.subAddons.length === 0) return [folderName];
+      const names = new Set(addon.subAddons.map((s) => s.folderName));
+      // A container folder has no manifest, so the game knows no entry under
+      // that name — unless one of its children happens to carry it
+      if (!addon.isContainer || names.has(folderName)) names.add(folderName);
+      return [...names];
+    },
+    [addonMap]
+  );
+
   // Get character settings for a specific addon - always returns ALL characters
   // Merges base settings with any pending (unsaved) changes
   const getCharacterSettingsForAddon = useCallback(
@@ -791,21 +860,23 @@ function App() {
       if (!addonSettings) return undefined;
       const charNames = Object.keys(addonSettings.characters);
       if (charNames.length === 0) return undefined;
-      // The game treats addons with no entry in AddOnSettings.txt as enabled.
-      // Fallback chain: pending change → character entry → #Default entry → true
-      const defaultValue = folderName in addonSettings.defaults ? addonSettings.defaults[folderName] : true;
+      const folders = settingsFoldersFor(folderName);
       const result: Record<string, boolean> = {};
       for (const [charName, charAddons] of Object.entries(addonSettings.characters)) {
-        const key = `${charName}\0${folderName}`;
-        if (pendingCharSettings.has(key)) {
-          result[charName] = pendingCharSettings.get(key)!;
-        } else {
-          result[charName] = folderName in charAddons ? charAddons[folderName] : defaultValue;
-        }
+        // Enabled only when every folder of the row is — a row whose modules are
+        // switched off is not "on", and the checkbox must not claim otherwise.
+        result[charName] = folders.every((name) => {
+          const key = `${charName}\0${name}`;
+          if (pendingCharSettings.has(key)) return pendingCharSettings.get(key)!;
+          // The game treats addons with no entry in AddOnSettings.txt as enabled.
+          // Fallback chain: pending change → character entry → #Default entry → true
+          if (name in charAddons) return charAddons[name];
+          return name in addonSettings.defaults ? addonSettings.defaults[name] : true;
+        });
       }
       return result;
     },
-    [addonSettings, pendingCharSettings]
+    [addonSettings, pendingCharSettings, settingsFoldersFor]
   );
 
   // Toggle a character's addon setting — local only, no disk write.
@@ -813,23 +884,26 @@ function App() {
   // so the Save button auto-disables when all changes are reverted.
   const handleToggleCharSetting = useCallback(
     (addonName: string, character: string, enabled: boolean) => {
+      const folders = settingsFoldersFor(addonName);
       setPendingCharSettings((prev) => {
         const next = new Map(prev);
-        const key = `${character}\0${addonName}`;
-        // Determine the on-disk (original) value
-        // The game treats missing entries as enabled; consult #Default as fallback
-        const defaultValue = addonSettings?.defaults[addonName] ?? true;
-        const origValue = addonSettings?.characters[character]?.[addonName] ?? defaultValue;
-        if (enabled === origValue) {
-          // Reverted to original — no longer pending
-          next.delete(key);
-        } else {
-          next.set(key, enabled);
+        for (const name of folders) {
+          const key = `${character}\0${name}`;
+          // Determine the on-disk (original) value
+          // The game treats missing entries as enabled; consult #Default as fallback
+          const defaultValue = addonSettings?.defaults[name] ?? true;
+          const origValue = addonSettings?.characters[character]?.[name] ?? defaultValue;
+          if (enabled === origValue) {
+            // Reverted to original — no longer pending
+            next.delete(key);
+          } else {
+            next.set(key, enabled);
+          }
         }
         return next;
       });
     },
-    [addonSettings]
+    [addonSettings, settingsFoldersFor]
   );
 
   // Save all pending character settings to disk (single batch write)
@@ -847,6 +921,12 @@ function App() {
         addLog(`Save failed: ${res.error}`, 'error');
       } else {
         addLog(`Saved ${res.applied} character setting change(s). Note: The game must be closed or at the login screen — /reloadui is not enough.`, 'success');
+        // A change whose character section is missing from AddOnSettings.txt
+        // cannot be written — saying nothing would report a success the game
+        // never sees
+        if (res.skipped?.length) {
+          addLog(`Not written (no such section in AddOnSettings.txt): ${res.skipped.join(', ')}`, 'warn');
+        }
       }
       // Refresh settings from disk
       const newSettings = await window.electronAPI.getAddonSettings(addonPath);
@@ -951,35 +1031,198 @@ function App() {
     return Object.keys(addonSettings.characters).sort();
   }, [addonSettings]);
 
-  const filteredAddons = useMemo(() => {
-    let list = filterAddons(regularAddons, addonSearchQuery);
-    if (addonCharFilter && addonSettings) {
-      const charAddons = addonSettings.characters[addonCharFilter];
-      if (charAddons) {
-        list = list.filter((a) => {
-          if (a.folderName in charAddons) return charAddons[a.folderName];
-          // Not in character section: consult #Default, then treat as enabled
-          return a.folderName in addonSettings.defaults ? addonSettings.defaults[a.folderName] : true;
-        });
-      }
-    }
-    return list.sort((a, b) => a.title.localeCompare(b.title));
-  }, [filterAddons, regularAddons, addonSearchQuery, addonCharFilter, addonSettings]);
+  // Drop addons that are disabled for the selected character
+  const applyCharFilter = useCallback(
+    (list: AddonInfo[], charFilter: string): AddonInfo[] => {
+      if (!charFilter || !addonSettings) return list;
+      const charAddons = addonSettings.characters[charFilter];
+      if (!charAddons) return list;
+      return list.filter((a) => {
+        if (a.folderName in charAddons) return charAddons[a.folderName];
+        // Not in character section: consult #Default, then treat as enabled
+        return a.folderName in addonSettings.defaults ? addonSettings.defaults[a.folderName] : true;
+      });
+    },
+    [addonSettings]
+  );
+
+  const byTitle = useCallback((a: AddonInfo, b: AddonInfo) => a.title.localeCompare(b.title), []);
+
+  const filteredAddons = useMemo(
+    () => [...applyCharFilter(filterAddons(regularAddons, addonSearchQuery), addonCharFilter)].sort(byTitle),
+    [filterAddons, applyCharFilter, byTitle, regularAddons, addonSearchQuery, addonCharFilter]
+  );
 
   // Libraries: all sorted by name (unreferenced still get ⚠ marker)
-  const filteredLibraries = useMemo(() => {
-    let list = filterAddons(libraries, libSearchQuery);
-    if (libCharFilter && addonSettings) {
-      const charAddons = addonSettings.characters[libCharFilter];
-      if (charAddons) {
-        list = list.filter((a) => {
-          if (a.folderName in charAddons) return charAddons[a.folderName];
-          return a.folderName in addonSettings.defaults ? addonSettings.defaults[a.folderName] : true;
-        });
+  const filteredLibraries = useMemo(
+    () => [...applyCharFilter(filterAddons(libraries, libSearchQuery), libCharFilter)].sort(byTitle),
+    [filterAddons, applyCharFilter, byTitle, libraries, libSearchQuery, libCharFilter]
+  );
+
+  // ── Dependency expansion for search hits ──────────────────────────────────
+  // Typing into either search box also surfaces the *transitive* dependency
+  // closure of the hits: deps that are addons belong in the AddOns column,
+  // deps that are libraries in the Libraries column — so a search on one side
+  // pulls the matching entries into the other side as well.
+  const addonSearchActive = addonSearchQuery.trim() !== '';
+  const libSearchActive = libSearchQuery.trim() !== '';
+  const searchActive = addonSearchActive || libSearchActive;
+
+  /** Resolve a DependsOn name to the tree row that provides it (bundled
+   *  sub-addons resolve to their parent, which is the row actually shown). */
+  const resolveDepTarget = useCallback(
+    (name: string): AddonInfo | undefined => {
+      const hit = addonMap.get(name);
+      if (!hit) return undefined;
+      return hit.parentAddon ? addonMap.get(hit.parentAddon) ?? hit : hit;
+    },
+    [addonMap]
+  );
+
+  /**
+   * Transitive dependency closure: everything `roots` need, directly or via
+   * further dependencies.  Breadth-first over required + optional deps (incl.
+   * those declared by sub-addons).  `seen` starts with the roots, so they are
+   * never reported as their own dependency and cycles terminate.
+   */
+  const collectDependencies = useCallback(
+    (roots: AddonInfo[]): AddonInfo[] => {
+      const seen = new Set(roots.map((r) => r.folderName));
+      const queue = [...roots];
+      const found: AddonInfo[] = [];
+      while (queue.length > 0) {
+        const cur = queue.shift()!;
+        const deps = [
+          ...cur.dependsOn,
+          ...cur.optionalDependsOn,
+          ...cur.subAddons.flatMap((s) => [...s.dependsOn, ...s.optionalDependsOn]),
+        ];
+        for (const dep of deps) {
+          const target = resolveDepTarget(dep.name);
+          if (!target || seen.has(target.folderName)) continue;
+          seen.add(target.folderName);
+          found.push(target);
+          queue.push(target);
+        }
       }
+      return found;
+    },
+    [resolveDepTarget]
+  );
+
+  /**
+   * Transitive dependents: everything that needs `roots`, directly or through a
+   * chain of libraries.  Walks `referencedByMap` (dep name → referencing
+   * top-level folders) backwards; deps may name either folder or title, so
+   * both are looked up.
+   */
+  const collectDependents = useCallback(
+    (roots: AddonInfo[]): AddonInfo[] => {
+      const seen = new Set(roots.map((r) => r.folderName));
+      const queue = [...roots];
+      const found: AddonInfo[] = [];
+      while (queue.length > 0) {
+        const cur = queue.shift()!;
+        const aliases = cur.title && cur.title !== cur.folderName ? [cur.folderName, cur.title] : [cur.folderName];
+        for (const alias of aliases) {
+          for (const refFolder of referencedByMap.get(alias) ?? []) {
+            if (seen.has(refFolder)) continue;
+            seen.add(refFolder);
+            const ref = addonMap.get(refFolder);
+            if (!ref) continue;
+            found.push(ref);
+            queue.push(ref);
+          }
+        }
+      }
+      return found;
+    },
+    [referencedByMap, addonMap]
+  );
+
+  const { dependencyAddons, dependencyLibs } = useMemo(() => {
+    if (!searchActive) return { dependencyAddons: [] as AddonInfo[], dependencyLibs: [] as AddonInfo[] };
+    const found = collectDependencies([
+      ...(addonSearchActive ? filteredAddons : []),
+      ...(libSearchActive ? filteredLibraries : []),
+    ]);
+    return {
+      dependencyAddons: found.filter((a) => !a.isLibrary).sort(byTitle),
+      dependencyLibs: found.filter((a) => a.isLibrary).sort(byTitle),
+    };
+  }, [searchActive, addonSearchActive, libSearchActive, filteredAddons, filteredLibraries, collectDependencies, byTitle]);
+
+  // ── Related rows for the current selection ────────────────────────────────
+  // One rule for all three columns: whatever the selection is related to gets
+  // pinned to the top of every column that can show it.  "Related" means the
+  // transitive dependencies of the selection, the AddOns that (transitively)
+  // need a selected library, and — for a selection made in the catalog — the
+  // locally installed rows of those catalog entries, which is how the installed
+  // version of an online entry shows up next to it.
+  const selectedItems = useMemo(
+    () => [...selection].map((n) => addonMap.get(n)).filter((a): a is AddonInfo => !!a),
+    [selection, addonMap]
+  );
+
+  /** Local rows by catalog id — the catalog → installed direction. */
+  const localByCatalogId = useMemo(() => {
+    const map = new Map<string, AddonInfo[]>();
+    for (const a of addons) {
+      const ca = getCatalogAddon(a);
+      if (!ca) continue;
+      const list = map.get(ca.id);
+      if (list) list.push(a);
+      else map.set(ca.id, [a]);
     }
-    return list.sort((a, b) => a.title.localeCompare(b.title));
-  }, [filterAddons, libraries, libSearchQuery, libCharFilter, addonSettings]);
+    return map;
+  }, [addons, getCatalogAddon]);
+
+  /** Installed rows behind the catalog selection (empty when not installed). */
+  const catalogSelectionRows = useMemo(
+    () => [...catalogSelection].flatMap((id) => localByCatalogId.get(id) ?? []),
+    [catalogSelection, localByCatalogId]
+  );
+
+  /** What the divider tooltips call the current selection. */
+  const selectionLabel = (() => {
+    const total = selectedItems.length + catalogSelection.size;
+    if (total !== 1) return `${total} selected entries`;
+    return selectedItems[0]?.title ?? catalogSelectionRows[0]?.title ?? 'the selected entry';
+  })();
+
+  /** Local folder names related to the selection, minus the selection itself. */
+  const relatedNames = useMemo(() => {
+    const roots = [...selectedItems, ...catalogSelectionRows];
+    if (roots.length === 0) return EMPTY_NAMES;
+    const related = new Set<string>();
+    // The installed counterpart of a catalog selection is related in itself
+    for (const row of catalogSelectionRows) related.add(row.folderName);
+    for (const dep of collectDependencies(roots)) related.add(dep.folderName);
+    const libRoots = roots.filter((a) => a.isLibrary);
+    if (libRoots.length > 0) {
+      for (const ref of collectDependents(libRoots)) related.add(ref.folderName);
+    }
+    // A row that is itself selected stays where it is
+    for (const name of selection) related.delete(name);
+    return related;
+  }, [selectedItems, catalogSelectionRows, selection, collectDependencies, collectDependents]);
+
+  /**
+   * The same set projected onto the catalog, for the Online column.  The rows
+   * selected in the local columns are included here — their catalog entry is
+   * exactly the online counterpart the user wants to see next to them, the
+   * mirror image of pinning the installed row for a catalog selection.
+   */
+  const relatedCatalogIds = useMemo(() => {
+    if (relatedNames.size === 0 && selection.size === 0) return EMPTY_NAMES;
+    const ids = new Set<string>();
+    for (const name of [...relatedNames, ...selection]) {
+      const row = addonMap.get(name);
+      const ca = row && getCatalogAddon(row);
+      if (ca && !catalogSelection.has(ca.id)) ids.add(ca.id);
+    }
+    return ids;
+  }, [relatedNames, selection, addonMap, getCatalogAddon, catalogSelection]);
 
   // Version comparison: uses shared compareVersionStrings from types.ts
   // Handles semver, date-based, revision suffixes, pre-release tags, etc.
@@ -1431,6 +1674,138 @@ function App() {
     return set;
   }, [addons, getCatalogAddon, updatableCatalogIds, replacementCandidates]);
 
+  // --- Tree row order (updatable group → rest → dependencies of the hits) ---
+
+  /**
+   * Build the render order for one column:
+   *   related → updatable → rest → search dependencies
+   * each group separated from the previous one by a divider line.
+   *  - `related`: rows tied to the selection in the *other* column (needed
+   *    libraries / dependent addons), pinned to the very top.
+   *  - `updatable` / `rest`: the direct search hits, updatables grouped on top.
+   *  - `deps`: dependencies pulled in by a search in *either* column.
+   * A column whose own search box is empty while the other one is searching
+   * switches to dependency-only mode — otherwise the deps would drown in the
+   * full, unfiltered list.
+   */
+  const buildColumn = useCallback(
+    (hits: AddonInfo[], ownSearchActive: boolean, deps: AddonInfo[], charFilter: string, relatedNames: ReadonlySet<string>) => {
+      const base = !searchActive || ownSearchActive ? hits : [];
+      const depRows = applyCharFilter(deps, charFilter);
+      // Pinning wins over every other group, so a row is never listed twice
+      const related = [...base, ...depRows].filter((a) => relatedNames.has(a.folderName)).sort(byTitle);
+      const pinned = new Set(related.map((a) => a.folderName));
+      const remaining = base.filter((a) => !pinned.has(a.folderName));
+      const updatable = remaining.filter((a) => updatableFolders.has(a.folderName));
+      const rest = remaining.filter((a) => !updatableFolders.has(a.folderName));
+      const depRest = depRows.filter((a) => !pinned.has(a.folderName));
+      return {
+        related,
+        updatable,
+        rest,
+        deps: depRest,
+        all: [...related, ...updatable, ...rest, ...depRest],
+      };
+    },
+    [searchActive, applyCharFilter, updatableFolders, byTitle]
+  );
+
+  // Both columns get the same related set — each one keeps only the rows it
+  // actually shows, which is what splits it into libraries and AddOns.
+  const addonColumn = useMemo(
+    () => buildColumn(filteredAddons, addonSearchActive, dependencyAddons, addonCharFilter, relatedNames),
+    [buildColumn, filteredAddons, addonSearchActive, dependencyAddons, addonCharFilter, relatedNames]
+  );
+
+  const libColumn = useMemo(
+    () => buildColumn(filteredLibraries, libSearchActive, dependencyLibs, libCharFilter, relatedNames),
+    [buildColumn, filteredLibraries, libSearchActive, dependencyLibs, libCharFilter, relatedNames]
+  );
+
+  // --- Selection ---
+
+  /**
+   * Click-to-select for one column.  `items` is that column's rendered order,
+   * which is what a Shift range has to follow.  The selection itself spans both
+   * columns, so a plain click in one column clears the other one.
+   */
+  const makeSelectHandler = useCallback(
+    (items: AddonInfo[]) => (name: string, mods: SelectMods = {}) => {
+      if (mods.range && selectionLead) {
+        const from = items.findIndex((i) => i.folderName === selectionLead);
+        const to = items.findIndex((i) => i.folderName === name);
+        if (from >= 0 && to >= 0) {
+          const [lo, hi] = from <= to ? [from, to] : [to, from];
+          const range = items.slice(lo, hi + 1).map((i) => i.folderName);
+          // Ctrl+Shift grows the selection, plain Shift replaces it.  The
+          // anchor stays put either way so the range can be resized.
+          setSelection((prev) => new Set(mods.toggle ? [...prev, ...range] : range));
+          return;
+        }
+      }
+      if (mods.toggle) {
+        setSelection((prev) => {
+          const next = new Set(prev);
+          if (next.has(name)) next.delete(name);
+          else next.add(name);
+          return next;
+        });
+        setSelectionLead(name);
+        return;
+      }
+      if (mods.keepIfSelected && selection.has(name)) return;
+      selectOnly(name);
+    },
+    [selection, selectionLead, selectOnly]
+  );
+
+  const selectAddonRow = useMemo(() => makeSelectHandler(addonColumn.all), [makeSelectHandler, addonColumn]);
+  const selectLibRow = useMemo(() => makeSelectHandler(libColumn.all), [makeSelectHandler, libColumn]);
+
+  /**
+   * Same algebra for the Online column.  Its rendered order can only be known
+   * inside OnlineBrowser, so a Shift range gets it passed in as `ordered`.
+   */
+  const selectCatalogRow = useCallback(
+    (id: string, mods: SelectMods = {}, ordered: string[] = []) => {
+      if (mods.range && catalogLead) {
+        const from = ordered.indexOf(catalogLead);
+        const to = ordered.indexOf(id);
+        if (from >= 0 && to >= 0) {
+          const [lo, hi] = from <= to ? [from, to] : [to, from];
+          const range = ordered.slice(lo, hi + 1);
+          setCatalogSelection((prev) => new Set(mods.toggle ? [...prev, ...range] : range));
+          return;
+        }
+      }
+      if (mods.toggle || mods.extend) {
+        setCatalogSelection((prev) => {
+          const next = new Set(prev);
+          if (mods.toggle && next.has(id)) next.delete(id);
+          else next.add(id);
+          return next;
+        });
+        setCatalogLead(id);
+        return;
+      }
+      if (mods.keepIfSelected && catalogSelection.has(id)) return;
+      setCatalogSelection(new Set([id]));
+      setCatalogLead(id);
+      clearSelection();
+    },
+    [catalogLead, catalogSelection, clearSelection]
+  );
+
+  /** Selected rows currently visible in each column — shown in the headers. */
+  const addonSelectedCount = useMemo(
+    () => addonColumn.all.filter((a) => selection.has(a.folderName)).length,
+    [addonColumn, selection]
+  );
+  const libSelectedCount = useMemo(
+    () => libColumn.all.filter((a) => selection.has(a.folderName)).length,
+    [libColumn, selection]
+  );
+
   // --- Navigation ---
 
   const handleNavigate = useCallback(
@@ -1441,7 +1816,10 @@ function App() {
         const navTarget = target.parentAddon
           ? addonMap.get(target.parentAddon) || target
           : target;
-        setSelectedAddon(navTarget.folderName);
+        // Navigation, not a click: keep whatever is selected in the catalog —
+        // jumping to the local row of an online entry must not unselect it
+        setSelection(new Set([navTarget.folderName]));
+        setSelectionLead(navTarget.folderName);
         requestAnimationFrame(() => {
           const el = document.querySelector(`[data-addon-id="${navTarget.folderName}"]`);
           if (el) {
@@ -1455,6 +1833,9 @@ function App() {
 
   // Navigate to an addon in the catalog Browse tree
   const handleNavigateCatalog = useCallback((addonId: string) => {
+    // Select it there too, but leave the local selection that triggered this
+    setCatalogSelection(new Set([addonId]));
+    setCatalogLead(addonId);
     // Toggle: setting a new value triggers the useEffect in OnlineBrowser
     setCatalogHighlightId(null);
     requestAnimationFrame(() => setCatalogHighlightId(addonId));
@@ -1500,7 +1881,7 @@ function App() {
         }
         const updated = await window.electronAPI.deleteAddon(addonPath, folderName);
         setAddons(updated);
-        setSelectedAddon(null);
+        clearSelection();
         const revertAction = backupPath ? {
           label: '↩ Undo',
           onClick: async () => {
@@ -1578,7 +1959,7 @@ function App() {
         }
         const result = await window.electronAPI.deleteAddonAndRefs(addonPath, folderName);
         setAddons(result.addons);
-        setSelectedAddon(null);
+        clearSelection();
         const deletedNames = [folderName, ...result.removedLibs];
         const msg = result.removedLibs.length > 0
           ? `Deleted "${folderName}" + exclusive libs: ${result.removedLibs.join(', ')}`
@@ -2049,6 +2430,37 @@ function App() {
     }
   }, [addons, addonPath, catalogById, getCatalogAddon, addLog, scanPath, replacementCandidates, overlayUpdates]);
 
+  /**
+   * Opt-in auto-update: install everything pending right after the start-up
+   * scan.  Runs once per session and waits for the catalog diff, so it sees the
+   * complete picture rather than a half-built one.
+   *
+   * Scope is deliberately the definite updates only — the same set the tree
+   * marks with ⬆️.  Replacement suggestions (a DIFFERENT catalog entry taking
+   * over a folder), addons whose versions cannot be compared, and folders a
+   * language patch has taken over all stay a manual decision: each of them can
+   * silently swap out or overwrite something the user wanted to keep.
+   */
+  useEffect(() => {
+    if (!autoUpdateOnStart || autoUpdateDoneRef.current) return;
+    if (!addonPath || loading || updatingAll) return;
+    if (addons.length === 0 || catalogAddons.length === 0 || !catalogDiffReady) return;
+    autoUpdateDoneRef.current = true;
+    const ids = [...updatableCatalogIds];
+    if (ids.length === 0) {
+      addLog('Auto-update: everything is up to date', 'info');
+      return;
+    }
+    const skipped = replacementCandidates.size + mightUpdateCount + layeredItems.length;
+    addLog(`Auto-update: installing ${ids.length} pending update(s)...`);
+    if (skipped > 0) {
+      addLog(`Auto-update: ${skipped} ambiguous item(s) left for Update All — replacements, unclear versions, patched folders`, 'info');
+    }
+    handleUpdateAllConfirm(ids);
+  }, [autoUpdateOnStart, addonPath, loading, updatingAll, addons.length, catalogAddons.length,
+      catalogDiffReady, updatableCatalogIds, replacementCandidates, mightUpdateCount, layeredItems,
+      addLog, handleUpdateAllConfirm]);
+
   const handleCleanupSettings = useCallback(async () => {
     if (!addonPath || addons.length === 0) return;
     const existingNames = addons.flatMap((a) => [a.folderName, ...a.subAddons.map(s => s.folderName)]);
@@ -2382,7 +2794,9 @@ function App() {
         let overlayFor: string | undefined;
         for (const dir of catalogAddon.directories) {
           const ownership = dirOwnership.get(dir);
-          if (ownership?.overlays.some((o) => o.id === catalogAddon.id) && installedDirNames.has(dir)) {
+          // Only a real top-level folder can be overlaid — extraction writes to
+          // AddOns/<dir>, so a bundled copy nested in another addon is no target
+          if (ownership?.overlays.some((o) => o.id === catalogAddon.id) && topLevelDirNames.has(dir)) {
             overlayFor = dir;
             break;
           }
@@ -2431,7 +2845,7 @@ function App() {
         setInstallingAddon(null);
       }
     },
-    [addonPath, addons, addLog, scanPath, dirOwnership, installedDirNames]
+    [addonPath, addons, addLog, scanPath, dirOwnership, topLevelDirNames]
   );
 
   // Simple delete (no savedvars) for inline delete button
@@ -2556,50 +2970,81 @@ function App() {
       return (e: React.KeyboardEvent<HTMLDivElement>) => {
         if (items.length === 0) return;
         const key = e.key;
-        if (!['ArrowDown', 'ArrowUp', 'Enter', 'Escape'].includes(key)) return;
+        if (!['ArrowDown', 'ArrowUp', 'ArrowLeft', 'ArrowRight', 'Enter', 'Escape'].includes(key)) return;
         e.preventDefault();
 
         if (key === 'Escape') {
-          setSelectedAddon(null);
+          clearSelection();
           return;
         }
 
-        const currentIdx = selectedAddon ? items.findIndex((a) => a.folderName === selectedAddon) : -1;
+        const currentIdx = selectionLead ? items.findIndex((a) => a.folderName === selectionLead) : -1;
+
+        /**
+         * Move the cursor to `idx` (wrapping) and scroll it into view.  Plain
+         * arrows replace the selection, Shift+arrow grows it.
+         */
+        const moveTo = (idx: number) => {
+          const target = items[(idx + items.length) % items.length];
+          if (e.shiftKey) {
+            setSelection((prev) => new Set([...prev, target.folderName]));
+            setSelectionLead(target.folderName);
+          } else {
+            selectOnly(target.folderName);
+          }
+          const el = scrollRef.current?.querySelector(`[data-addon-id="${target.folderName}"]`);
+          el?.scrollIntoView({ block: 'nearest' });
+        };
+
+        /** The selected entry's chevron — the element that owns expand/collapse. */
+        const selectedChevron = () =>
+          currentIdx >= 0
+            ? (scrollRef.current?.querySelector(
+                `[data-addon-id="${items[currentIdx].folderName}"] .tree-item-row .tree-chevron`
+              ) as HTMLElement | null)
+            : null;
 
         if (key === 'ArrowDown') {
-          const nextIdx = currentIdx < items.length - 1 ? currentIdx + 1 : 0;
-          const next = items[nextIdx];
-          setSelectedAddon(next.folderName);
-          const el = scrollRef.current?.querySelector(`[data-addon-id="${next.folderName}"]`);
-          el?.scrollIntoView({ block: 'nearest' });
+          moveTo(currentIdx + 1);
         } else if (key === 'ArrowUp') {
-          const prevIdx = currentIdx > 0 ? currentIdx - 1 : items.length - 1;
-          const prev = items[prevIdx];
-          setSelectedAddon(prev.folderName);
-          const el = scrollRef.current?.querySelector(`[data-addon-id="${prev.folderName}"]`);
-          el?.scrollIntoView({ block: 'nearest' });
+          moveTo(currentIdx > 0 ? currentIdx - 1 : items.length - 1);
+        } else if (key === 'ArrowRight' || key === 'ArrowLeft') {
+          // Tree convention: Right opens a closed entry, Left closes an open
+          // one — and once there is nothing left to open/close, the keys move
+          // the selection down/up instead.  The expansion state lives inside
+          // AddonTreeItem, so it is read off the chevron and toggled by
+          // clicking it.
+          const chevron = selectedChevron();
+          const collapsible = !!chevron && !chevron.classList.contains('hidden');
+          const isExpanded = collapsible && chevron!.classList.contains('expanded');
+          if (key === 'ArrowRight') {
+            if (collapsible && !isExpanded) chevron!.click();
+            else moveTo(currentIdx + 1);
+          } else {
+            if (isExpanded) chevron!.click();
+            else moveTo(currentIdx > 0 ? currentIdx - 1 : items.length - 1);
+          }
         } else if (key === 'Enter') {
           if (currentIdx >= 0) {
-            // Simulate a click on the tree row to toggle expand/collapse
-            const el = scrollRef.current?.querySelector(`[data-addon-id="${items[currentIdx].folderName}"] .tree-item-row`) as HTMLElement | null;
-            el?.click();
+            selectedChevron()?.click();
           } else if (items.length > 0) {
-            setSelectedAddon(items[0].folderName);
+            selectOnly(items[0].folderName);
           }
         }
       };
     },
-    [selectedAddon]
+    [selectionLead, selectOnly, clearSelection]
   );
 
+  // Arrow keys follow the rendered order, dependency rows included
   const handleAddonsKeyDown = useMemo(
-    () => makeTreeKeyHandler(filteredAddons, addonsScrollRef),
-    [makeTreeKeyHandler, filteredAddons, addonsScrollRef]
+    () => makeTreeKeyHandler(addonColumn.all, addonsScrollRef),
+    [makeTreeKeyHandler, addonColumn, addonsScrollRef]
   );
 
   const handleLibsKeyDown = useMemo(
-    () => makeTreeKeyHandler(filteredLibraries, libsScrollRef),
-    [makeTreeKeyHandler, filteredLibraries, libsScrollRef]
+    () => makeTreeKeyHandler(libColumn.all, libsScrollRef),
+    [makeTreeKeyHandler, libColumn, libsScrollRef]
   );
 
   // Welcome dialog handlers
@@ -2626,6 +3071,16 @@ function App() {
         const hasSV = !!(savedVarsInfo.addonFiles[addon.folderName]?.length);
         const catalogAddon = getCatalogAddon(addon);
         const items: ContextMenuItem[] = [];
+        // Multi-selection is a view/navigation aid for now — the actions below
+        // still run on the clicked entry only.  Say so instead of letting the
+        // user assume a bulk delete.
+        if (selection.size > 1 && selection.has(addon.folderName)) {
+          items.push({
+            label: `${selection.size} selected — actions apply to "${addon.title}"`,
+            onClick: () => {},
+            disabled: true,
+          });
+        }
         // Open in Explorer / Finder
         items.push({
           label: `Open in ${navigator.platform.startsWith('Mac') ? 'Finder' : 'Explorer'}`,
@@ -2725,22 +3180,21 @@ function App() {
         />
       </div>
       <div className="main-content">
-        <TreePanel title="AddOns" count={filteredAddons.length} scrollRef={addonsScrollRef} flex={panelWidths[0]} onKeyDown={handleAddonsKeyDown} searchQuery={addonSearchQuery} onSearchChange={setAddonSearchQuery} characters={characterNames} characterFilter={addonCharFilter} onCharacterFilterChange={setAddonCharFilter} hasPendingChanges={pendingCharSettings.size > 0} onSave={handleSaveCharSettings} onCollapseAll={() => setAddonCollapseAll(c => c + 1)}>
-          {filteredAddons.length === 0 && !loading ? (
+        <TreePanel title="AddOns" count={addonColumn.all.length} scrollRef={addonsScrollRef} flex={panelWidths[0]} onKeyDown={handleAddonsKeyDown} searchQuery={addonSearchQuery} onSearchChange={setAddonSearchQuery} characters={characterNames} characterFilter={addonCharFilter} onCharacterFilterChange={setAddonCharFilter} hasPendingChanges={pendingCharSettings.size > 0} onSave={handleSaveCharSettings} onCollapseAll={() => setAddonCollapseAll(c => c + 1)} selectedCount={addonSelectedCount}>
+          {addonColumn.all.length === 0 && !loading ? (
             <div className="empty-state">
               <div className="icon">📦</div>
-              <p>{addonSearchQuery ? 'No matching AddOns' : 'No AddOns found'}</p>
-              {!addonSearchQuery && <p>Set the AddOns folder path above</p>}
+              <p>{searchActive ? 'No matching AddOns' : 'No AddOns found'}</p>
+              {!searchActive && <p>Set the AddOns folder path above</p>}
             </div>
           ) : (() => {
-            const updatable = filteredAddons.filter(a => updatableFolders.has(a.folderName));
-            const rest = filteredAddons.filter(a => !updatableFolders.has(a.folderName));
+            const { related, updatable, rest, deps } = addonColumn;
             const renderItem = (addon: AddonInfo) => (
               <div key={addon.folderName} data-addon-id={addon.folderName}>
                 <AddonTreeItem
                   addon={addon}
-                  isSelected={selectedAddon === addon.folderName}
-                  onSelect={setSelectedAddon}
+                  isSelected={selection.has(addon.folderName)}
+                  onSelect={selectAddonRow}
                   isNotInCatalog={notInCatalog.has(addon.folderName)}
                   isCatalogMismatch={catalogMismatch.has(addon.folderName)}
                   characterSettings={getCharacterSettingsForAddon(addon.folderName)}
@@ -2781,30 +3235,37 @@ function App() {
             );
             return (
               <>
+                {related.map(renderItem)}
+                {related.length > 0 && updatable.length + rest.length + deps.length > 0 && (
+                  <div className="tree-related-spacer" title={`AddOns that need ${selectionLabel}`} />
+                )}
                 {updatable.map(renderItem)}
                 {updatable.length > 0 && rest.length > 0 && <div className="tree-update-spacer" />}
                 {rest.map(renderItem)}
+                {deps.length > 0 && related.length + updatable.length + rest.length > 0 && (
+                  <div className="tree-dep-spacer" title="Dependencies of the search results" />
+                )}
+                {deps.map(renderItem)}
               </>
             );
           })()}
         </TreePanel>
         <div className="panel-resize-handle" onMouseDown={(e) => handlePanelResizeStart(0, e)} title="Drag to resize" />
-        <TreePanel title="Libraries" count={filteredLibraries.length} scrollRef={libsScrollRef} flex={panelWidths[1]} onKeyDown={handleLibsKeyDown} searchQuery={libSearchQuery} onSearchChange={setLibSearchQuery} characters={characterNames} characterFilter={libCharFilter} onCharacterFilterChange={setLibCharFilter} hasPendingChanges={pendingCharSettings.size > 0} onSave={handleSaveCharSettings} onCollapseAll={() => setLibCollapseAll(c => c + 1)}>
-          {filteredLibraries.length === 0 && !loading ? (
+        <TreePanel title="Libraries" count={libColumn.all.length} scrollRef={libsScrollRef} flex={panelWidths[1]} onKeyDown={handleLibsKeyDown} searchQuery={libSearchQuery} onSearchChange={setLibSearchQuery} characters={characterNames} characterFilter={libCharFilter} onCharacterFilterChange={setLibCharFilter} hasPendingChanges={pendingCharSettings.size > 0} onSave={handleSaveCharSettings} onCollapseAll={() => setLibCollapseAll(c => c + 1)} selectedCount={libSelectedCount}>
+          {libColumn.all.length === 0 && !loading ? (
             <div className="empty-state">
               <div className="icon">📚</div>
-              <p>{libSearchQuery ? 'No matching Libraries' : 'No Libraries found'}</p>
-              {!libSearchQuery && <p>Set the AddOns folder path above</p>}
+              <p>{searchActive ? 'No matching Libraries' : 'No Libraries found'}</p>
+              {!searchActive && <p>Set the AddOns folder path above</p>}
             </div>
           ) : (() => {
-            const updatable = filteredLibraries.filter(a => updatableFolders.has(a.folderName));
-            const rest = filteredLibraries.filter(a => !updatableFolders.has(a.folderName));
+            const { related, updatable, rest, deps } = libColumn;
             const renderItem = (lib: AddonInfo) => (
               <div key={lib.folderName} data-addon-id={lib.folderName}>
                 <AddonTreeItem
                   addon={lib}
-                  isSelected={selectedAddon === lib.folderName}
-                  onSelect={setSelectedAddon}
+                  isSelected={selection.has(lib.folderName)}
+                  onSelect={selectLibRow}
                   isUnreferenced={unreferencedLibs.has(lib.folderName)}
                   isNotInCatalog={notInCatalog.has(lib.folderName)}
                   isCatalogMismatch={catalogMismatch.has(lib.folderName)}
@@ -2847,9 +3308,17 @@ function App() {
             );
             return (
               <>
+                {related.map(renderItem)}
+                {related.length > 0 && updatable.length + rest.length + deps.length > 0 && (
+                  <div className="tree-related-spacer" title={`Libraries needed by ${selectionLabel}`} />
+                )}
                 {updatable.map(renderItem)}
                 {updatable.length > 0 && rest.length > 0 && <div className="tree-update-spacer" />}
                 {rest.map(renderItem)}
+                {deps.length > 0 && related.length + updatable.length + rest.length > 0 && (
+                  <div className="tree-dep-spacer" title="Dependencies of the search results" />
+                )}
+                {deps.map(renderItem)}
               </>
             );
           })()}
@@ -2858,6 +3327,7 @@ function App() {
         <OnlineBrowser
           flex={panelWidths[2]}
           installedDirNames={installedDirNames}
+          topLevelDirNames={topLevelDirNames}
           localAddons={addons}
           knownAddonNames={knownAddonNames}
           onInstall={handleInstallAddon}
@@ -2873,6 +3343,11 @@ function App() {
           checkUpdateAvailable={isUpdateAvailable}
           updatableCatalogIds={updatableCatalogIds}
           overlayTargets={overlayTargetNames}
+          selectedIds={catalogSelection}
+          leadId={catalogLead}
+          onSelectRow={selectCatalogRow}
+          onClearSelection={clearCatalogSelection}
+          relatedIds={relatedCatalogIds}
         />
       </div>
       <div className="log-resize-handle" onMouseDown={handleLogResizeStart} title="Drag to resize" />
@@ -2930,11 +3405,18 @@ function App() {
           fontScale={fontScale}
           fontFamily={fontFamily}
           skipCleanupConfirm={skipCleanupConfirm}
+          autoUpdateOnStart={autoUpdateOnStart}
           onApply={(s) => {
             setFontScale(s.fontScale);
             setFontFamily(s.fontFamily);
             setSkipCleanupConfirm(s.skipCleanupConfirm);
-            window.electronAPI.saveUiSettings({ fontScale: s.fontScale, fontFamily: s.fontFamily, skipCleanupConfirm: s.skipCleanupConfirm });
+            setAutoUpdateOnStart(s.autoUpdateOnStart);
+            window.electronAPI.saveUiSettings({
+              fontScale: s.fontScale,
+              fontFamily: s.fontFamily,
+              skipCleanupConfirm: s.skipCleanupConfirm,
+              autoUpdateOnStart: s.autoUpdateOnStart,
+            });
           }}
           onCleanupMarkers={addonPath ? async () => {
             const res = await window.electronAPI.cleanupYaamMarkers(addonPath);

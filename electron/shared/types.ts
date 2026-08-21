@@ -60,6 +60,9 @@ export interface AddonInfo {
   parentAddon?: string;
   /** Manifest file type ('txt' or 'addon') */
   manifestType: 'txt' | 'addon';
+  /** Folder without a manifest of its own that holds the real addons in
+   *  subAddons (ArkadiusTradeTools/ArkadiusTradeTools/…, HarvestMapData/Modules/…) */
+  isContainer?: boolean;
   /** PC-specific dependencies (already merged into dependsOn on PC) */
   pcDependsOn: DependencyRef[];
   /**
@@ -572,6 +575,8 @@ export interface AppConfig {
   fontFamily?: string;
   /** Skip cleanup confirmation dialogs */
   skipCleanupConfirm?: boolean;
+  /** Install all pending updates right after the start-up scan, without asking */
+  autoUpdateOnStart?: boolean;
   /** Saved window bounds for restore on next launch */
   windowBounds?: { x: number; y: number; width: number; height: number; isMaximized?: boolean };
 }

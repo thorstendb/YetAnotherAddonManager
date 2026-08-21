@@ -51,7 +51,7 @@ declare global {
       batchSetAddonSettings: (
         addonsPath: string,
         changes: { character: string; addonName: string; enabled: boolean }[]
-      ) => Promise<{ backupPath: string; applied: number; error?: string }>;
+      ) => Promise<{ backupPath: string; applied: number; skipped: string[]; error?: string }>;
       getSavedVarsInfo: (addonsPath: string, addonNames: string[]) => Promise<SavedVarsInfo>;
       deleteSavedVars: (
         addonsPath: string,
@@ -69,7 +69,7 @@ declare global {
       cleanupDownloads: (
         addonsPath: string
       ) => Promise<{ moved: string[]; error?: string }>;
-      saveUiSettings: (settings: { logHeight?: number; panelWidths?: number[]; fontScale?: number; fontFamily?: string; skipCleanupConfirm?: boolean }) => Promise<AppConfig>;
+      saveUiSettings: (settings: { logHeight?: number; panelWidths?: number[]; fontScale?: number; fontFamily?: string; skipCleanupConfirm?: boolean; autoUpdateOnStart?: boolean }) => Promise<AppConfig>;
 
       onInstallProgress: (callback: (data: { addonId: string; phase: string; percent?: number; current?: number; total?: number }) => void) => () => void;
       onExportProgress: (callback: (data: { phase: string; percent: number }) => void) => () => void;

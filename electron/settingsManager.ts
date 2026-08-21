@@ -279,12 +279,12 @@ export function setAddonSetting(
 export function batchSetAddonSettings(
   addonsPath: string,
   changes: { character: string; addonName: string; enabled: boolean }[]
-): { backupPath: string; applied: number; error?: string } {
+): { backupPath: string; applied: number; skipped: string[]; error?: string } {
   const settingsPath = getSettingsPath(addonsPath);
   if (!fs.existsSync(settingsPath)) {
     throw new Error('AddOnSettings.txt not found');
   }
-  if (changes.length === 0) return { backupPath: '', applied: 0 };
+  if (changes.length === 0) return { backupPath: '', applied: 0, skipped: [] };
 
   const backupPath = backupFile(settingsPath, getBackupDir(addonsPath, 'AddOnSettings'));
 
@@ -292,6 +292,9 @@ export function batchSetAddonSettings(
   let lines = content.split(/\r?\n/);
 
   let applied = 0;
+  // Changes whose character section does not exist in the file — counting them
+  // as applied would report a success the game never sees
+  const skipped: string[] = [];
 
   for (const { character, addonName, enabled } of changes) {
     const sectionHeader = character === '#Default' ? '#Default' : `#${character}`;
@@ -329,11 +332,14 @@ export function batchSetAddonSettings(
     }
 
     if (!found && currentSection === sectionHeader) {
+      // Target section is the last one in the file — append at the end
       newLines.push(`${addonName} ${enabled ? '1' : '0'}`);
+      found = true;
     }
 
     lines = newLines;
-    applied++;
+    if (found) applied++;
+    else skipped.push(`${character}/${addonName}`);
   }
 
   const output = lines.join('\r\n');
@@ -344,10 +350,10 @@ export function batchSetAddonSettings(
   if (verification.length !== output.length) {
     // Restore from backup
     fs.copyFileSync(backupPath, settingsPath);
-    return { backupPath, applied: 0, error: 'Write verification failed – backup restored' };
+    return { backupPath, applied: 0, skipped, error: 'Write verification failed – backup restored' };
   }
 
-  return { backupPath, applied };
+  return { backupPath, applied, skipped };
 }
 
 /**

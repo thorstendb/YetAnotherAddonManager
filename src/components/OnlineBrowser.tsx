@@ -5,13 +5,21 @@ import { AddonInfo, CatalogAddon, CharacterSettings, ADDON_CATEGORIES, getCatego
 import ImagePreview from './ImagePreview';
 import RichText, { stripBBCode } from './RichText';
 import { shortenCharName } from '../App';
+import type { SelectMods } from './AddonTreeItem';
+import { classifyInstallState } from '../../electron/shared/installState';
 
 function errMsg(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
+/** Shared empty set — keeps the default props stable across renders. */
+const EMPTY_IDS: ReadonlySet<string> = new Set<string>();
+
 interface OnlineBrowserProps {
+  /** Every installed folder name, sub-addon folders included */
   installedDirNames: Set<string>;
+  /** Only top-level folders — what actually counts as "this entry is installed" */
+  topLevelDirNames?: Set<string>;
   localAddons: AddonInfo[];
   knownAddonNames: Set<string>;
   /** Central install handler from App — one code path for ALL install surfaces
@@ -33,12 +41,21 @@ interface OnlineBrowserProps {
   updatableCatalogIds?: Set<string>;
   /** Overlay-classified catalog entries: id → name of the original addon they patch */
   overlayTargets?: Map<string, string>;
+  /** Selection state — owned by App so it can be related to the other columns */
+  selectedIds?: ReadonlySet<string>;
+  leadId?: string | null;
+  /** `ordered` is this column's rendered order, needed for Shift ranges */
+  onSelectRow?: (id: string, mods: SelectMods, ordered: string[]) => void;
+  onClearSelection?: () => void;
+  /** Catalog entries related to the selection — pinned above a divider */
+  relatedIds?: ReadonlySet<string>;
 }
 
 type SortField = 'name' | 'downloads' | 'monthly' | 'date' | 'favorites';
 
 const OnlineBrowser: React.FC<OnlineBrowserProps> = ({
   installedDirNames,
+  topLevelDirNames = installedDirNames,
   localAddons,
   knownAddonNames,
   onInstall,
@@ -55,6 +72,11 @@ const OnlineBrowser: React.FC<OnlineBrowserProps> = ({
   checkUpdateAvailable,
   updatableCatalogIds: updatableCatalogIdsProp,
   overlayTargets,
+  selectedIds = EMPTY_IDS,
+  leadId = null,
+  onSelectRow,
+  onClearSelection,
+  relatedIds = EMPTY_IDS,
 }) => {
   const [allAddons, setAllAddons] = useState<CatalogAddon[]>([]);
   const [loading, setLoading] = useState(false);
@@ -63,7 +85,6 @@ const OnlineBrowser: React.FC<OnlineBrowserProps> = ({
   const [categoryFilter, setCategoryFilter] = useState('');
   const [sortField, setSortField] = useState<SortField>('downloads');
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
-  const [focusedId, setFocusedId] = useState<string | null>(null);
   const [depsExpandedIds, setDepsExpandedIds] = useState<Set<string>>(new Set());
   const [optDepsExpandedIds, setOptDepsExpandedIds] = useState<Set<string>>(new Set());
   const [charsExpandedIds, setCharsExpandedIds] = useState<Set<string>>(new Set());
@@ -85,7 +106,7 @@ const OnlineBrowser: React.FC<OnlineBrowserProps> = ({
     setSearchQuery('');
     setCategoryFilter('');
     setExpandedIds(prev => new Set(prev).add(highlightAddonId));
-    setFocusedId(highlightAddonId);
+    // Selecting it is App's job — it owns the selection across all columns
     // Scroll to the element after render
     requestAnimationFrame(() => {
       const el = scrollRef.current?.querySelector(`[data-catalog-id="${highlightAddonId}"]`);
@@ -203,9 +224,9 @@ const OnlineBrowser: React.FC<OnlineBrowserProps> = ({
       list = list.filter((a) => a.categoryId === categoryFilter);
     }
 
-    // Installed-only filter (primary directory must be installed)
+    // Installed-only filter (primary directory must be installed on its own)
     if (showInstalledOnly) {
-      list = list.filter((a) => a.directories.length > 0 && installedDirNames.has(a.directories[0]));
+      list = list.filter((a) => a.directories.length > 0 && topLevelDirNames.has(a.directories[0]));
     }
 
     // Search filter
@@ -239,7 +260,7 @@ const OnlineBrowser: React.FC<OnlineBrowserProps> = ({
     }
 
     return sorted;
-  }, [allAddons, categoryFilter, searchQuery, sortField, showInstalledOnly, installedDirNames]);
+  }, [allAddons, categoryFilter, searchQuery, sortField, showInstalledOnly, topLevelDirNames]);
 
   // All installs route through the central App handler so every surface gets
   // identical behavior: backup before update, undo log action, overlay-aware
@@ -261,17 +282,36 @@ const OnlineBrowser: React.FC<OnlineBrowserProps> = ({
   };
 
   /** Primary install: the addon's first/main directory is a top-level local folder */
-  const isInstalled = (addon: CatalogAddon) => {
-    if (addon.directories.length === 0) return false;
-    return installedDirNames.has(addon.directories[0]);
-  };
+  /** Installed: the addon's main dir exists as a FOLDER OF ITS OWN in AddOns/ */
+  const isInstalled = (addon: CatalogAddon) =>
+    classifyInstallState(addon.directories, topLevelDirNames, installedDirNames) === 'installed';
 
-  /** Bundled: the addon's main dir is NOT installed, but some bundled dir (library) is */
-  const isBundledOnly = (addon: CatalogAddon) => {
-    if (addon.directories.length === 0) return false;
-    if (installedDirNames.has(addon.directories[0])) return false;
-    return addon.directories.some((dir) => installedDirNames.has(dir));
-  };
+  /** Bundled: a dir of this entry is present, but owned by another addon */
+  const isBundledOnly = (addon: CatalogAddon) =>
+    classifyInstallState(addon.directories, topLevelDirNames, installedDirNames) === 'bundled';
+
+  /** Sub-addon folder → the top-level addon whose folder holds it. */
+  const bundledHostByDir = useMemo(() => {
+    const map = new Map<string, AddonInfo>();
+    for (const a of localAddons) {
+      for (const sub of a.subAddons) {
+        if (!map.has(sub.folderName)) map.set(sub.folderName, a);
+      }
+    }
+    return map;
+  }, [localAddons]);
+
+  /** Name of the addon a bundled copy sits in — for the 🟡 tooltip. */
+  const bundledHostName = useCallback(
+    (addon: CatalogAddon): string | undefined => {
+      for (const dir of addon.directories) {
+        const host = bundledHostByDir.get(dir);
+        if (host) return host.title || host.folderName;
+      }
+      return undefined;
+    },
+    [bundledHostByDir]
+  );
 
   // Build a map from directory name -> local AddonInfo for dependency lookup
   const localAddonByDir = useMemo(() => {
@@ -323,6 +363,22 @@ const OnlineBrowser: React.FC<OnlineBrowserProps> = ({
   // AddOns/Libraries panels (same matching priority chain).
   const updatableAddonIds = updatableCatalogIdsProp ?? new Set<string>();
 
+  // Rendered order: entries related to the selection on top, then updatables,
+  // then the rest.  Keyboard navigation and Shift ranges follow this, not the
+  // raw filter order.
+  const { relatedRows, updatableRows, restRows, orderedAddons } = useMemo(() => {
+    const related = filteredAddons.filter((a) => relatedIds.has(a.id));
+    const remaining = filteredAddons.filter((a) => !relatedIds.has(a.id));
+    const updatable = remaining.filter((a) => updatableAddonIds.has(a.id));
+    const rest = remaining.filter((a) => !updatableAddonIds.has(a.id));
+    return {
+      relatedRows: related,
+      updatableRows: updatable,
+      restRows: rest,
+      orderedAddons: [...related, ...updatable, ...rest],
+    };
+  }, [filteredAddons, relatedIds, updatableAddonIds]);
+
   // Get combined dependencies for an online addon (from its locally installed dirs)
   const getDepsForOnlineAddon = useCallback(
     (addon: CatalogAddon) => {
@@ -365,54 +421,77 @@ const OnlineBrowser: React.FC<OnlineBrowserProps> = ({
     [localAddonByDir]
   );
 
+  /** The rendered order, as plain ids — what a Shift range has to follow. */
+  const orderedIds = useMemo(() => orderedAddons.map((a) => a.id), [orderedAddons]);
+
+  /** Click-to-select, mirroring the local trees (Ctrl toggles, Shift ranges). */
+  const handleRowClick = useCallback(
+    (id: string, e: React.MouseEvent) => {
+      onSelectRow?.(id, { toggle: e.metaKey || e.ctrlKey, range: e.shiftKey }, orderedIds);
+    },
+    [onSelectRow, orderedIds]
+  );
+
   // Keyboard navigation for online browsing
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLDivElement>) => {
-      if (filteredAddons.length === 0) return;
+      if (orderedAddons.length === 0) return;
       const key = e.key;
-      if (!['ArrowDown', 'ArrowUp', 'Enter', 'Escape'].includes(key)) return;
+      if (!['ArrowDown', 'ArrowUp', 'ArrowLeft', 'ArrowRight', 'Enter', 'Escape'].includes(key)) return;
       e.preventDefault();
 
       if (key === 'Escape') {
-        setExpandedIds(new Set());
-        setFocusedId(null);
+        // Same as the local trees: clear the selection (collapse-all has its
+        // own button in the header)
+        onClearSelection?.();
         return;
       }
 
-      const currentIdx = focusedId ? filteredAddons.findIndex((a) => a.id === focusedId) : -1;
+      const currentIdx = leadId ? orderedAddons.findIndex((a) => a.id === leadId) : -1;
+
+      /**
+       * Move the cursor to `idx` (wrapping) and scroll it into view.  Plain
+       * arrows replace the selection, Shift+arrow grows it.
+       */
+      const moveTo = (idx: number) => {
+        const target = orderedAddons[(idx + orderedAddons.length) % orderedAddons.length];
+        onSelectRow?.(target.id, e.shiftKey ? { extend: true } : {}, orderedIds);
+        requestAnimationFrame(() => {
+          const el = scrollRef.current?.querySelector(`[data-catalog-id="${target.id}"]`);
+          el?.scrollIntoView({ block: 'nearest' });
+        });
+      };
 
       if (key === 'ArrowDown') {
-        const nextIdx = currentIdx < filteredAddons.length - 1 ? currentIdx + 1 : 0;
-        const next = filteredAddons[nextIdx];
-        setFocusedId(next.id);
-        requestAnimationFrame(() => {
-          const el = scrollRef.current?.querySelector(`[data-catalog-id="${next.id}"]`);
-          el?.scrollIntoView({ block: 'nearest' });
-        });
+        moveTo(currentIdx + 1);
       } else if (key === 'ArrowUp') {
-        const prevIdx = currentIdx > 0 ? currentIdx - 1 : filteredAddons.length - 1;
-        const prev = filteredAddons[prevIdx];
-        setFocusedId(prev.id);
-        requestAnimationFrame(() => {
-          const el = scrollRef.current?.querySelector(`[data-catalog-id="${prev.id}"]`);
-          el?.scrollIntoView({ block: 'nearest' });
-        });
+        moveTo(currentIdx > 0 ? currentIdx - 1 : orderedAddons.length - 1);
+      } else if (key === 'ArrowRight' || key === 'ArrowLeft') {
+        // Right opens the focused entry, Left closes it — and once there is
+        // nothing left to open/close, they move the focus down/up instead.
+        const id = currentIdx >= 0 ? orderedAddons[currentIdx].id : null;
+        const isExpanded = id !== null && expandedIds.has(id);
+        if (key === 'ArrowRight') {
+          if (id !== null && !isExpanded) setExpandedIds(prev => new Set(prev).add(id));
+          else moveTo(currentIdx + 1);
+        } else {
+          if (isExpanded) setExpandedIds(prev => { const next = new Set(prev); next.delete(id!); return next; });
+          else moveTo(currentIdx > 0 ? currentIdx - 1 : orderedAddons.length - 1);
+        }
       } else if (key === 'Enter') {
         if (currentIdx >= 0) {
-          const id = filteredAddons[currentIdx].id;
+          const id = orderedAddons[currentIdx].id;
           setExpandedIds(prev => {
             const next = new Set(prev);
             if (next.has(id)) next.delete(id); else next.add(id);
             return next;
           });
-        } else if (filteredAddons.length > 0) {
-          const id = filteredAddons[0].id;
-          setExpandedIds(prev => new Set(prev).add(id));
-          setFocusedId(id);
+        } else if (orderedAddons.length > 0) {
+          onSelectRow?.(orderedAddons[0].id, {}, orderedIds);
         }
       }
     },
-    [filteredAddons, focusedId]
+    [orderedAddons, orderedIds, leadId, expandedIds, onSelectRow, onClearSelection]
   );
 
   return (
@@ -420,9 +499,11 @@ const OnlineBrowser: React.FC<OnlineBrowserProps> = ({
       <div className="tree-panel-header">
         <span>Online Browse</span>
         <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+          {selectedIds.size > 1 && (
+            <span className="count selected-count" title="Selected entries in this column">{selectedIds.size} selected</span>
+          )}
           <button className="collapse-all-btn" onClick={() => {
             setExpandedIds(new Set());
-            setFocusedId(null);
             setDepsExpandedIds(new Set());
             setOptDepsExpandedIds(new Set());
             setCharsExpandedIds(new Set());
@@ -503,11 +584,13 @@ const OnlineBrowser: React.FC<OnlineBrowserProps> = ({
             <p>No matching addons</p>
           </div>
         ) : (() => {
-          const updatable = filteredAddons.filter(a => updatableAddonIds.has(a.id));
-          const rest = filteredAddons.filter(a => !updatableAddonIds.has(a.id));
           const renderAddon = (addon: CatalogAddon) => {
             const installed = isInstalled(addon);
             const bundledOnly = !installed && isBundledOnly(addon);
+            const host = bundledOnly ? bundledHostName(addon) : undefined;
+            const bundledNote = host
+              ? `Not installed — a copy ships inside "${host}". Installing puts a second, separate copy next to it.`
+              : 'Not installed (shared library present)';
             const localVer = installed ? getLocalVersion(addon) : undefined;
             const hasUpdate = updatableAddonIds.has(addon.id);
             const isLocalNewer = installed && localVer && addon.version
@@ -518,23 +601,30 @@ const OnlineBrowser: React.FC<OnlineBrowserProps> = ({
             const catName = getCategoryName(addon.categoryId);
             const deps = getDepsForOnlineAddon(addon);
             const optDeps = getOptDepsForOnlineAddon(addon);
-            // Get character settings for first installed dir
+            // Get character settings for first installed dir (a bundled dir has
+            // character settings of its own, so this one may be nested)
             const installedDir = addon.directories.find((dir) => installedDirNames.has(dir));
+            // Deleting must only ever target a folder that sits in AddOns/ itself
+            const deletableDir = addon.directories.find((dir) => topLevelDirNames.has(dir));
             const charSettings = installedDir && getCharacterSettings ? getCharacterSettings(installedDir) : undefined;
             const hasChars = charSettings && Object.keys(charSettings).length > 0;
 
             return (
               <div key={addon.id} className="tree-item" data-catalog-id={addon.id} style={hasUpdate ? { background: 'var(--bg-update)' } : undefined}>
                 <div
-                  className={`tree-item-row ${isExpanded ? 'selected' : ''} ${hasUpdate ? 'has-update' : ''}`}
-                  onClick={() => setExpandedIds(prev => {
-                    const next = new Set(prev);
-                    if (isExpanded) next.delete(addon.id); else next.add(addon.id);
-                    return next;
-                  })}
+                  className={`tree-item-row ${selectedIds.has(addon.id) ? 'selected' : ''} ${hasUpdate ? 'has-update' : ''}`}
+                  onClick={(e) => handleRowClick(addon.id, e)}
                 >
-                  <span className={`tree-chevron ${isExpanded ? 'expanded' : ''}`}>▶</span>
-                  <span className="tree-icon" title={installed ? 'Installed locally' : bundledOnly ? 'Not installed (shared library present)' : 'Not installed'}>{installed ? '🟢' : bundledOnly ? '🟡' : '⚪'}</span>
+                  <span
+                    className={`tree-chevron ${isExpanded ? 'expanded' : ''}`}
+                    onClick={() => setExpandedIds(prev => {
+                      const next = new Set(prev);
+                      if (isExpanded) next.delete(addon.id); else next.add(addon.id);
+                      return next;
+                    })}
+                    title={isExpanded ? 'Collapse' : 'Expand'}
+                  >▶</span>
+                  <span className="tree-icon" title={installed ? 'Installed locally' : bundledOnly ? bundledNote : 'Not installed'}>{installed ? '🟢' : bundledOnly ? '🟡' : '⚪'}</span>
                   {addon.categoryId && (
                     <img
                       className="tree-cat-icon"
@@ -568,14 +658,14 @@ const OnlineBrowser: React.FC<OnlineBrowserProps> = ({
                         handleInstall(addon);
                       }}
                       disabled={isCurrentlyInstalling}
-                      title={isLocalNewer ? `Downgrade to catalog version (v${addon.version})` : installed ? 'Reinstall' : bundledOnly ? 'Install (bundled library already present)' : 'Install'}
+                      title={isLocalNewer ? `Downgrade to catalog version (v${addon.version})` : installed ? 'Reinstall' : bundledOnly ? bundledNote : 'Install'}
                     >
                       {isCurrentlyInstalling ? '⏳' : isLocalNewer ? '⬇️' : installed ? '🔄' : '📥'}
                     </button>
-                    {installed && onDelete && installedDir && (
+                    {installed && onDelete && deletableDir && (
                       <button
                         className="row-btn row-btn-delete"
-                        onClick={(e) => { e.stopPropagation(); onDelete(installedDir); }}
+                        onClick={(e) => { e.stopPropagation(); onDelete(deletableDir); }}
                         title="Delete addon"
                       >
                         🗑️
@@ -913,9 +1003,13 @@ const OnlineBrowser: React.FC<OnlineBrowserProps> = ({
           };
           return (
             <>
-              {updatable.map(renderAddon)}
-              {updatable.length > 0 && rest.length > 0 && <div className="tree-update-spacer" />}
-              {rest.map(renderAddon)}
+              {relatedRows.map(renderAddon)}
+              {relatedRows.length > 0 && updatableRows.length + restRows.length > 0 && (
+                <div className="tree-related-spacer" title="Related to the selection: installed counterpart and dependencies" />
+              )}
+              {updatableRows.map(renderAddon)}
+              {updatableRows.length > 0 && restRows.length > 0 && <div className="tree-update-spacer" />}
+              {restRows.map(renderAddon)}
             </>
           );
         })()}
@@ -943,7 +1037,7 @@ const OnlineBrowser: React.FC<OnlineBrowserProps> = ({
                 </div>
               </div>
               {(() => {
-                const installed = infoAddon.directories.some(dir => installedDirNames.has(dir));
+                const installed = infoAddon.directories.some(dir => topLevelDirNames.has(dir));
                 const localAddonForBtn = installedDir ? localAddons.find(a => a.folderName === installedDir) : undefined;
                 const hasUpdate = installed && localAddonForBtn && checkUpdateAvailable
                   ? checkUpdateAvailable(localAddonForBtn, infoAddon) : false;

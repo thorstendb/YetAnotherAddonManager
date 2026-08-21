@@ -355,6 +355,67 @@ function collectSubAddons(
 }
 
 /**
+ * Some authors ship a folder that HOLDS addons instead of being one:
+ *   ArkadiusTradeTools/ArkadiusTradeTools/ArkadiusTradeTools.txt
+ *   HarvestMapData/Modules/HarvestMapAD/HarvestMapAD.txt
+ * There is no <Folder>/<Folder>.txt, so the plain rule skips the folder — and
+ * with it every addon inside.  The game finds those manifests, so YAAM has to
+ * as well: this list drives the installed markers in the catalog, dependency
+ * resolution and, worst of all, the SavedVariables cleanup — a missing entry
+ * means the SavedVariables of a perfectly healthy addon get offered for
+ * deletion (reported for Arkadius' Trade Tools and HarvestMapData).
+ *
+ * Represented as a container row: the folder itself, carrying what it holds in
+ * `subAddons`.  A child with the folder's own name is the main addon and lends
+ * the row its title, version and dependencies — which is what makes update
+ * detection work for the Arkadius shape.
+ *
+ * Returns null for folders that hold no manifest at all (plain data folders).
+ */
+function buildContainerAddon(folderPath: string, folderName: string): AddonInfo | null {
+  const subAddons: AddonInfo[] = [];
+  // selfName '' on purpose: for a container, a child named like the folder is
+  // the main addon — exactly the case the same-name guard skips elsewhere.
+  collectSubAddons(folderPath, '', folderName, subAddons);
+  if (subAddons.length === 0) return null;
+
+  const main = subAddons.find((s) => s.folderName === folderName);
+  const allSavedVariableNames: string[] = [];
+  for (const sub of subAddons) allSavedVariableNames.push(...sub.savedVariables);
+
+  return {
+    folderName,
+    title: main?.title || folderName,
+    titleSegments: main?.titleSegments ?? [{ text: folderName }],
+    author: main?.author ?? '',
+    authorSegments: main?.authorSegments ?? [],
+    version: main?.version ?? '',
+    addonVersion: main?.addonVersion ?? 0,
+    apiVersion: main?.apiVersion ?? '',
+    description: main?.description ?? '',
+    descriptionSegments: main?.descriptionSegments ?? [],
+    isLibrary: main ? main.isLibrary : subAddons.every((s) => s.isLibrary),
+    dependsOn: main?.dependsOn ?? [],
+    optionalDependsOn: main?.optionalDependsOn ?? [],
+    // The folder has no manifest, so it owns no SavedVariables itself — but the
+    // full list below must cover the children, or cleanup eats their files.
+    savedVariables: [],
+    contributors: main?.contributors ?? '',
+    contributorsSegments: main?.contributorsSegments ?? [],
+    files: main?.files ?? [],
+    path: folderPath,
+    downloadUrl: main?.downloadUrl ?? '',
+    catalogId: main?.catalogId ?? '',
+    subAddons,
+    parentAddon: undefined,
+    manifestType: main?.manifestType ?? 'txt',
+    pcDependsOn: main?.pcDependsOn ?? [],
+    allSavedVariableNames,
+    isContainer: true,
+  };
+}
+
+/**
  * Scan an AddOns directory and return parsed info for all addons found.
  *
  * Each top-level subfolder may contain a .txt or .addon manifest file
@@ -389,6 +450,10 @@ export function scanAddonsFolder(addonsPath: string): AddonInfo[] {
       } catch (err) {
         console.error(`Failed to parse manifest for ${folderName}:`, err);
       }
+    } else {
+      // No manifest of its own — may still be a folder holding addons
+      const container = buildContainerAddon(folderPath, folderName);
+      if (container) addons.push(container);
     }
   }
 
@@ -641,6 +706,11 @@ export function scanSpecificAddons(addonsPath: string, folderNames: string[]): A
       try {
         addons.push(parseManifest(manifestPath, folderName, undefined, addonsPath));
       } catch { /* skip unparseable */ }
+    } else {
+      // Same container rule as the full scan — this feeds the post-install
+      // version record, so the two must agree on what an addon folder is
+      const container = buildContainerAddon(folderPath, folderName);
+      if (container) addons.push(container);
     }
   }
   return addons;

@@ -48,7 +48,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   batchSetAddonSettings: (
     addonsPath: string,
     changes: { character: string; addonName: string; enabled: boolean }[]
-  ): Promise<{ backupPath: string; applied: number; error?: string }> =>
+  ): Promise<{ backupPath: string; applied: number; skipped: string[]; error?: string }> =>
     ipcRenderer.invoke(IPC_CHANNELS.BATCH_SET_ADDON_SETTINGS, addonsPath, changes),
   getSavedVarsInfo: (addonsPath: string, addonNames: string[]): Promise<SavedVarsInfo> =>
     ipcRenderer.invoke(IPC_CHANNELS.GET_SAVED_VARS_INFO, addonsPath, addonNames),
@@ -72,7 +72,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     addonsPath: string
   ): Promise<{ moved: string[]; error?: string }> =>
     ipcRenderer.invoke(IPC_CHANNELS.CLEANUP_DOWNLOADS, addonsPath),
-  saveUiSettings: (settings: { logHeight?: number; panelWidths?: number[]; fontSize?: number; fontFamily?: string; skipCleanupConfirm?: boolean }): Promise<AppConfig> =>
+  saveUiSettings: (settings: { logHeight?: number; panelWidths?: number[]; fontSize?: number; fontFamily?: string; skipCleanupConfirm?: boolean; autoUpdateOnStart?: boolean }): Promise<AppConfig> =>
     ipcRenderer.invoke(IPC_CHANNELS.SAVE_UI_SETTINGS, settings),
 
   onInstallProgress: (callback: (data: { addonId: string; phase: string; percent?: number; current?: number; total?: number }) => void) => {

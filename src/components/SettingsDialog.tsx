@@ -6,7 +6,8 @@ interface SettingsDialogProps {
   fontScale: number;
   fontFamily: string;
   skipCleanupConfirm: boolean;
-  onApply: (settings: { fontScale: number; fontFamily: string; skipCleanupConfirm: boolean }) => void;
+  autoUpdateOnStart: boolean;
+  onApply: (settings: { fontScale: number; fontFamily: string; skipCleanupConfirm: boolean; autoUpdateOnStart: boolean }) => void;
   onCleanupMarkers?: () => void;
   onClose: () => void;
 }
@@ -17,6 +18,7 @@ const SettingsDialog: React.FC<SettingsDialogProps> = ({
   fontScale,
   fontFamily,
   skipCleanupConfirm,
+  autoUpdateOnStart,
   onApply,
   onCleanupMarkers,
   onClose,
@@ -25,6 +27,7 @@ const SettingsDialog: React.FC<SettingsDialogProps> = ({
   const [localFontScale, setLocalFontScale] = useState(fontScale);
   const [localFontFamily, setLocalFontFamily] = useState(fontFamily);
   const [localSkipCleanup, setLocalSkipCleanup] = useState(skipCleanupConfirm);
+  const [localAutoUpdate, setLocalAutoUpdate] = useState(autoUpdateOnStart);
   const [systemFonts, setSystemFonts] = useState<string[]>([]);
 
   useEffect(() => {
@@ -43,7 +46,12 @@ const SettingsDialog: React.FC<SettingsDialogProps> = ({
   }, []);
 
   const handleApply = () => {
-    onApply({ fontScale: localFontScale, fontFamily: localFontFamily, skipCleanupConfirm: localSkipCleanup });
+    onApply({
+      fontScale: localFontScale,
+      fontFamily: localFontFamily,
+      skipCleanupConfirm: localSkipCleanup,
+      autoUpdateOnStart: localAutoUpdate,
+    });
     onClose();
   };
 
@@ -51,6 +59,7 @@ const SettingsDialog: React.FC<SettingsDialogProps> = ({
     setLocalFontScale(100);
     setLocalFontFamily(DEFAULT_FONT);
     setLocalSkipCleanup(false);
+    setLocalAutoUpdate(false);
   };
 
   // Extract the primary font name from a CSS font-family string for display
@@ -109,6 +118,21 @@ const SettingsDialog: React.FC<SettingsDialogProps> = ({
               />
               <span className="settings-label" style={{ minWidth: 0 }}>Cleanup without confirmation</span>
             </label>
+          </div>
+          <div style={{ borderTop: '1px solid var(--border)', margin: '12px 0', paddingTop: '12px' }}>
+            <label className="settings-row" style={{ cursor: 'pointer', userSelect: 'none', marginBottom: 0 }}>
+              <input
+                type="checkbox"
+                checked={localAutoUpdate}
+                onChange={(e) => setLocalAutoUpdate(e.target.checked)}
+              />
+              <span className="settings-label" style={{ minWidth: 0 }}>Update all addons on startup</span>
+            </label>
+            <div style={{ marginTop: 6, fontSize: '0.857rem', color: 'var(--text-secondary)' }}>
+              Installs every pending update right after the start-up scan, the same set the ⬆️ badge marks.
+              Ambiguous cases stay manual: replacement suggestions, addons whose version cannot be compared,
+              and folders a language patch has taken over.
+            </div>
           </div>
           {onCleanupMarkers && (
             <div style={{ borderTop: '1px solid var(--border)', margin: '12px 0', paddingTop: '12px' }}>
