@@ -7,7 +7,8 @@ interface SettingsDialogProps {
   fontFamily: string;
   skipCleanupConfirm: boolean;
   autoUpdateOnStart: boolean;
-  onApply: (settings: { fontScale: number; fontFamily: string; skipCleanupConfirm: boolean; autoUpdateOnStart: boolean }) => void;
+  showDependencies: boolean;
+  onApply: (settings: { fontScale: number; fontFamily: string; skipCleanupConfirm: boolean; autoUpdateOnStart: boolean; showDependencies: boolean }) => void;
   onCleanupMarkers?: () => void;
   onClose: () => void;
 }
@@ -19,6 +20,7 @@ const SettingsDialog: React.FC<SettingsDialogProps> = ({
   fontFamily,
   skipCleanupConfirm,
   autoUpdateOnStart,
+  showDependencies,
   onApply,
   onCleanupMarkers,
   onClose,
@@ -28,6 +30,7 @@ const SettingsDialog: React.FC<SettingsDialogProps> = ({
   const [localFontFamily, setLocalFontFamily] = useState(fontFamily);
   const [localSkipCleanup, setLocalSkipCleanup] = useState(skipCleanupConfirm);
   const [localAutoUpdate, setLocalAutoUpdate] = useState(autoUpdateOnStart);
+  const [localShowDeps, setLocalShowDeps] = useState(showDependencies);
   const [systemFonts, setSystemFonts] = useState<string[]>([]);
 
   useEffect(() => {
@@ -51,6 +54,7 @@ const SettingsDialog: React.FC<SettingsDialogProps> = ({
       fontFamily: localFontFamily,
       skipCleanupConfirm: localSkipCleanup,
       autoUpdateOnStart: localAutoUpdate,
+      showDependencies: localShowDeps,
     });
     onClose();
   };
@@ -60,6 +64,7 @@ const SettingsDialog: React.FC<SettingsDialogProps> = ({
     setLocalFontFamily(DEFAULT_FONT);
     setLocalSkipCleanup(false);
     setLocalAutoUpdate(false);
+    setLocalShowDeps(true);
   };
 
   // Extract the primary font name from a CSS font-family string for display
@@ -118,6 +123,21 @@ const SettingsDialog: React.FC<SettingsDialogProps> = ({
               />
               <span className="settings-label" style={{ minWidth: 0 }}>Cleanup without confirmation</span>
             </label>
+          </div>
+          <div style={{ borderTop: '1px solid var(--border)', margin: '12px 0', paddingTop: '12px' }}>
+            <label className="settings-row" style={{ cursor: 'pointer', userSelect: 'none', marginBottom: 0 }}>
+              <input
+                type="checkbox"
+                checked={localShowDeps}
+                onChange={(e) => setLocalShowDeps(e.target.checked)}
+              />
+              <span className="settings-label" style={{ minWidth: 0 }}>Show dependencies across columns</span>
+            </label>
+            <div style={{ marginTop: 6, fontSize: '0.857rem', color: 'var(--text-secondary)' }}>
+              Relates the three columns: a search also surfaces the dependencies of its hits, and selecting an
+              entry pins the libraries it needs, the AddOns that need it, and its counterpart in the catalog to
+              the top of the other columns. Off, every column keeps to itself.
+            </div>
           </div>
           <div style={{ borderTop: '1px solid var(--border)', margin: '12px 0', paddingTop: '12px' }}>
             <label className="settings-row" style={{ cursor: 'pointer', userSelect: 'none', marginBottom: 0 }}>

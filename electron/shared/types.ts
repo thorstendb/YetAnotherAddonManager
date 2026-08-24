@@ -577,6 +577,10 @@ export interface AppConfig {
   skipCleanupConfirm?: boolean;
   /** Install all pending updates right after the start-up scan, without asking */
   autoUpdateOnStart?: boolean;
+  /** Relate the three columns via dependencies: search pulls the dependency
+   *  closure into the other columns, a selection pins what it needs / needs it.
+   *  Absent means on — this is the default behaviour. */
+  showDependencies?: boolean;
   /** Saved window bounds for restore on next launch */
   windowBounds?: { x: number; y: number; width: number; height: number; isMaximized?: boolean };
 }

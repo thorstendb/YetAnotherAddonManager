@@ -69,7 +69,7 @@ declare global {
       cleanupDownloads: (
         addonsPath: string
       ) => Promise<{ moved: string[]; error?: string }>;
-      saveUiSettings: (settings: { logHeight?: number; panelWidths?: number[]; fontScale?: number; fontFamily?: string; skipCleanupConfirm?: boolean; autoUpdateOnStart?: boolean }) => Promise<AppConfig>;
+      saveUiSettings: (settings: { logHeight?: number; panelWidths?: number[]; fontScale?: number; fontFamily?: string; skipCleanupConfirm?: boolean; autoUpdateOnStart?: boolean; showDependencies?: boolean }) => Promise<AppConfig>;
 
       onInstallProgress: (callback: (data: { addonId: string; phase: string; percent?: number; current?: number; total?: number }) => void) => () => void;
       onExportProgress: (callback: (data: { phase: string; percent: number }) => void) => () => void;

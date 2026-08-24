@@ -133,6 +133,8 @@ function App() {
   const [fontFamily, setFontFamily] = useState("'Segoe UI', sans-serif");
   const [skipCleanupConfirm, setSkipCleanupConfirm] = useState(false);
   const [autoUpdateOnStart, setAutoUpdateOnStart] = useState(false);
+  /** Relate the three columns to each other via dependencies (on by default) */
+  const [showDependencies, setShowDependencies] = useState(true);
   /** Guards the start-up auto-update so it runs at most once per session */
   const autoUpdateDoneRef = useRef(false);
   const [catalogDiffReady, setCatalogDiffReady] = useState(false);
@@ -211,6 +213,8 @@ function App() {
       if (config.fontFamily) setFontFamily(config.fontFamily);
       if (config.skipCleanupConfirm) setSkipCleanupConfirm(config.skipCleanupConfirm);
       if (config.autoUpdateOnStart) setAutoUpdateOnStart(config.autoUpdateOnStart);
+      // Defaults to on — only an explicit false turns it off
+      if (config.showDependencies !== undefined) setShowDependencies(config.showDependencies);
       if (config.welcomeAccepted) {
         setWelcomeAccepted(true);
         addLog('YAAM started', 'info');
@@ -1064,9 +1068,16 @@ function App() {
   // closure of the hits: deps that are addons belong in the AddOns column,
   // deps that are libraries in the Libraries column — so a search on one side
   // pulls the matching entries into the other side as well.
+  //
+  // Switched off (Settings → "Show dependencies across columns"), every column
+  // keeps to itself: a search filters only its own column and a selection moves
+  // nothing anywhere.
   const addonSearchActive = addonSearchQuery.trim() !== '';
   const libSearchActive = libSearchQuery.trim() !== '';
-  const searchActive = addonSearchActive || libSearchActive;
+  /** Someone is searching — decides how an empty column explains itself */
+  const anySearchActive = addonSearchActive || libSearchActive;
+  /** …and that search reaches into the other columns, feature permitting */
+  const searchActive = anySearchActive && showDependencies;
 
   /** Resolve a DependsOn name to the tree row that provides it (bundled
    *  sub-addons resolve to their parent, which is the row actually shown). */
@@ -1192,6 +1203,7 @@ function App() {
 
   /** Local folder names related to the selection, minus the selection itself. */
   const relatedNames = useMemo(() => {
+    if (!showDependencies) return EMPTY_NAMES;
     const roots = [...selectedItems, ...catalogSelectionRows];
     if (roots.length === 0) return EMPTY_NAMES;
     const related = new Set<string>();
@@ -1205,7 +1217,7 @@ function App() {
     // A row that is itself selected stays where it is
     for (const name of selection) related.delete(name);
     return related;
-  }, [selectedItems, catalogSelectionRows, selection, collectDependencies, collectDependents]);
+  }, [showDependencies, selectedItems, catalogSelectionRows, selection, collectDependencies, collectDependents]);
 
   /**
    * The same set projected onto the catalog, for the Online column.  The rows
@@ -1214,6 +1226,7 @@ function App() {
    * mirror image of pinning the installed row for a catalog selection.
    */
   const relatedCatalogIds = useMemo(() => {
+    if (!showDependencies) return EMPTY_NAMES;
     if (relatedNames.size === 0 && selection.size === 0) return EMPTY_NAMES;
     const ids = new Set<string>();
     for (const name of [...relatedNames, ...selection]) {
@@ -1222,7 +1235,7 @@ function App() {
       if (ca && !catalogSelection.has(ca.id)) ids.add(ca.id);
     }
     return ids;
-  }, [relatedNames, selection, addonMap, getCatalogAddon, catalogSelection]);
+  }, [showDependencies, relatedNames, selection, addonMap, getCatalogAddon, catalogSelection]);
 
   // Version comparison: uses shared compareVersionStrings from types.ts
   // Handles semver, date-based, revision suffixes, pre-release tags, etc.
@@ -3184,8 +3197,8 @@ function App() {
           {addonColumn.all.length === 0 && !loading ? (
             <div className="empty-state">
               <div className="icon">📦</div>
-              <p>{searchActive ? 'No matching AddOns' : 'No AddOns found'}</p>
-              {!searchActive && <p>Set the AddOns folder path above</p>}
+              <p>{anySearchActive ? 'No matching AddOns' : 'No AddOns found'}</p>
+              {!anySearchActive && <p>Set the AddOns folder path above</p>}
             </div>
           ) : (() => {
             const { related, updatable, rest, deps } = addonColumn;
@@ -3255,8 +3268,8 @@ function App() {
           {libColumn.all.length === 0 && !loading ? (
             <div className="empty-state">
               <div className="icon">📚</div>
-              <p>{searchActive ? 'No matching Libraries' : 'No Libraries found'}</p>
-              {!searchActive && <p>Set the AddOns folder path above</p>}
+              <p>{anySearchActive ? 'No matching Libraries' : 'No Libraries found'}</p>
+              {!anySearchActive && <p>Set the AddOns folder path above</p>}
             </div>
           ) : (() => {
             const { related, updatable, rest, deps } = libColumn;
@@ -3406,16 +3419,19 @@ function App() {
           fontFamily={fontFamily}
           skipCleanupConfirm={skipCleanupConfirm}
           autoUpdateOnStart={autoUpdateOnStart}
+          showDependencies={showDependencies}
           onApply={(s) => {
             setFontScale(s.fontScale);
             setFontFamily(s.fontFamily);
             setSkipCleanupConfirm(s.skipCleanupConfirm);
             setAutoUpdateOnStart(s.autoUpdateOnStart);
+            setShowDependencies(s.showDependencies);
             window.electronAPI.saveUiSettings({
               fontScale: s.fontScale,
               fontFamily: s.fontFamily,
               skipCleanupConfirm: s.skipCleanupConfirm,
               autoUpdateOnStart: s.autoUpdateOnStart,
+              showDependencies: s.showDependencies,
             });
           }}
           onCleanupMarkers={addonPath ? async () => {

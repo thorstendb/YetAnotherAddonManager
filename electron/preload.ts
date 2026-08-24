@@ -72,7 +72,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     addonsPath: string
   ): Promise<{ moved: string[]; error?: string }> =>
     ipcRenderer.invoke(IPC_CHANNELS.CLEANUP_DOWNLOADS, addonsPath),
-  saveUiSettings: (settings: { logHeight?: number; panelWidths?: number[]; fontSize?: number; fontFamily?: string; skipCleanupConfirm?: boolean; autoUpdateOnStart?: boolean }): Promise<AppConfig> =>
+  saveUiSettings: (settings: { logHeight?: number; panelWidths?: number[]; fontSize?: number; fontFamily?: string; skipCleanupConfirm?: boolean; autoUpdateOnStart?: boolean; showDependencies?: boolean }): Promise<AppConfig> =>
     ipcRenderer.invoke(IPC_CHANNELS.SAVE_UI_SETTINGS, settings),
 
   onInstallProgress: (callback: (data: { addonId: string; phase: string; percent?: number; current?: number; total?: number }) => void) => {
