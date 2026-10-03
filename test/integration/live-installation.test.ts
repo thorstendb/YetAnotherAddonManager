@@ -3,7 +3,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 import { previewFolderHygiene } from '../../electron/addonScanner';
-import { classifyDirOwnership, findHijackedManifestOverlay, isOverlayStyleEntry } from '../../electron/shared/overlays';
+import { buildDependencyResolver, classifyDirOwnership, findHijackedManifestOverlay, isOverlayStyleEntry } from '../../electron/shared/overlays';
 import { CatalogAddon } from '../../electron/shared/types';
 
 /**
@@ -45,6 +45,17 @@ function loadCatalog(): CatalogAddon[] {
 
 describe.skipIf(!haveSnapshot)('real catalog snapshot (2 932 entries)', () => {
   const catalog = loadCatalog();
+
+  it('resolves DependsOn folders to the library itself, not forks or patches bundling it', () => {
+    const deps = buildDependencyResolver(catalog);
+    // Provision's TeamFormation ships an old LibAddonMenu-2.0 copy
+    expect(deps.get('LibAddonMenu-2.0')?.id).toBe('7');
+    // "Adjust Language Pt-BR" writes into the LibQuestData folder
+    expect(deps.get('LibQuestData')?.id).toBe('2625');
+    expect(deps.get('LibFoodDrinkBuff')?.id).toBe('1902');
+    // Fr Localization must never be pulled in for PersonalAssistant
+    expect(deps.get('PersonalAssistant')?.id).toBe('3512');
+  });
   const ownership = classifyDirOwnership(catalog);
 
   it('resolves the AsylumNotifier folder to original #1847 with LangPatch #2855 as overlay', () => {

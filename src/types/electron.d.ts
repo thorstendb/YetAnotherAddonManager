@@ -145,7 +145,9 @@ declare global {
       restoreRemoved: (addonsPath: string, relPath: string) => Promise<{ restored: boolean; target: string; error?: string }>;
       moveDownloadsBack: (addonsPath: string, fileNames: string[]) => Promise<{ restored: string[]; errors: string[] }>;
       updateCatalogSnapshot: (addonsPath: string) => Promise<{ changed: [string, { oldVersion: string; newVersion: string }][]; added: string[]; removed: string[] } | null>;
-      commitCatalogSnapshot: (addonsPath: string) => Promise<boolean>;
+      /** holdIds: catalog entries to keep at their previous snapshot state
+       *  (installed addons whose update is still pending) */
+      commitCatalogSnapshot: (addonsPath: string, holdIds?: string[]) => Promise<boolean>;
       commitBaseline: (
         addonsPath: string,
         entries: { folderName: string; esouid: string; url: string; name: string; author: string; catalogVersion: string; catalogDate?: number; localVersion: string; overlays?: { esouid: string; catalogName: string; catalogVersion: string; catalogDate?: number }[] }[]

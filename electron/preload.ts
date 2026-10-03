@@ -226,6 +226,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
     undo: { hygieneDir: string; removals: string[]; repairs: { addonName: string; movedItems: string[] }[] }
   ): Promise<{ restored: number; errors: string[] }> =>
     ipcRenderer.invoke(IPC_CHANNELS.UNDO_FOLDER_HYGIENE, addonsPath, undo),
-  commitCatalogSnapshot: (addonsPath: string): Promise<boolean> =>
-    ipcRenderer.invoke(IPC_CHANNELS.COMMIT_CATALOG_SNAPSHOT, addonsPath),
+  commitCatalogSnapshot: (addonsPath: string, holdIds?: string[]): Promise<boolean> =>
+    ipcRenderer.invoke(IPC_CHANNELS.COMMIT_CATALOG_SNAPSHOT, addonsPath, holdIds),
 });

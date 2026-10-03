@@ -76,6 +76,10 @@ export interface AddonInfo {
   yaamMarker?: YaamMarker;
   /** Files found in the addon folder that were NOT part of the original install (runtime-created) */
   runtimeFiles?: string[];
+  /** Files YAAM installed from the catalog ZIP that are gone from disk
+   *  (deleted by another manager, antivirus or a cloud sync) — the folder is
+   *  incomplete although its version says "current" */
+  missingFiles?: string[];
   /** Manifest file mtime (epoch seconds).  Extraction rewrites it, so it
    *  approximates the install time — a stateless update hint:
    *  catalog published later than this → likely newer than what's on disk. */

@@ -567,11 +567,18 @@ export function scanAddonsFolder(addonsPath: string): AddonInfo[] {
     if (entry?.esouid) {
       addon.yaamMeta = entry;
     }
-    // Detect runtime-created files if we have an install manifest
+    // Compare the folder against the install manifest: extra files are
+    // runtime-created, missing ones mean the install is damaged — unless the
+    // manifest no longer matches the install anchor: then the folder was
+    // replaced outside YAAM and the list describes a release that is gone.
     if (entry?.installedFiles) {
-      const runtimeFiles = detectRuntimeFiles(addonsPath, addon.folderName, entry.installedFiles);
+      const { runtimeFiles, missingFiles } = compareWithInstallManifest(addonsPath, addon.folderName, entry.installedFiles);
       if (runtimeFiles.length > 0) {
         addon.runtimeFiles = runtimeFiles;
+      }
+      const filesUnchanged = !entry.localVersion || addon.version === entry.localVersion;
+      if (missingFiles.length > 0 && filesUnchanged) {
+        addon.missingFiles = missingFiles;
       }
     }
   }
@@ -680,16 +687,30 @@ function walkAddonFolder(
 }
 
 /**
- * Detect files in an addon folder that were NOT part of the original ZIP install.
- * These are runtime-created files (caches, data, configs) that addons store in their own folder.
+ * Compare an addon folder with the file list of its YAAM install.
+ *  - runtimeFiles: present but NOT part of the ZIP (caches, data, configs
+ *    that addons store in their own folder)
+ *  - missingFiles: part of the ZIP but gone — e.g. an embedded library copy
+ *    another manager "deduplicated" away.  The version still reads current,
+ *    so without this check nothing would ever offer to repair the folder.
  */
-function detectRuntimeFiles(addonsPath: string, folderName: string, installedFiles: string[]): string[] {
+export function compareWithInstallManifest(
+  addonsPath: string,
+  folderName: string,
+  installedFiles: string[]
+): { runtimeFiles: string[]; missingFiles: string[] } {
   const folderPath = path.join(addonsPath, folderName);
-  if (!fs.existsSync(folderPath)) return [];
-  const installedSet = new Set(installedFiles.map(f => f.replace(/\\/g, '/')));
+  if (!fs.existsSync(folderPath)) return { runtimeFiles: [], missingFiles: [] };
+  const installed = installedFiles.map(f => f.replace(/\\/g, '/'));
+  const installedSet = new Set(installed);
   const actualFiles = walkAddonFolder(folderPath);
+  const actualSet = new Set(actualFiles);
   // YAAM's own marker file is infrastructure, not an addon runtime artifact
-  return actualFiles.filter(f => f !== '.yaam.json' && !installedSet.has(f));
+  const runtimeFiles = actualFiles.filter(f => f !== '.yaam.json' && !installedSet.has(f));
+  // existsSync double-check: the walk is capped and compares case-sensitively,
+  // while Windows and macOS file systems usually are not
+  const missingFiles = installed.filter(f => !actualSet.has(f) && !fs.existsSync(path.join(folderPath, f)));
+  return { runtimeFiles, missingFiles };
 }
 
 /**
@@ -821,11 +842,17 @@ export function reconcileYaamMetadata(
         // otherwise the date-based "possible update" check in
         // isUpdateAvailable is defeated (updatedAt would always be > catalog date).
         updatedAt: existing.localVersion !== m.localVersion ? now : existing.updatedAt,
-        installedFiles: existing.installedFiles,
+        // The file list describes what YAAM extracted.  Once the files changed
+        // outside YAAM (or the identity was healed) it describes a release
+        // that is no longer on disk — keeping it would report that release's
+        // files as "missing" forever.
+        installedFiles: idChanged || existing.localVersion !== m.localVersion ? undefined : existing.installedFiles,
       };
       // Keep an existing .yaam.json marker in sync — a stale marker with the
-      // old esouid would otherwise re-poison or fight the healed DB entry.
-      if (idChanged && readMarkerFile(addonsPath, m.folderName)) {
+      // old esouid (or the old file list) would otherwise re-poison the
+      // healed DB entry the next time the DB is rebuilt from the markers.
+      const filesDropped = !!existing.installedFiles && !db.addons[m.folderName].installedFiles;
+      if ((idChanged || filesDropped) && readMarkerFile(addonsPath, m.folderName)) {
         writeMarkerFile(addonsPath, m.folderName, db.addons[m.folderName]);
       }
       changed = true;
@@ -902,7 +929,14 @@ export function commitBaseline(
       // "The state on disk is current as of now" — also prevents stale
       // date-fallback false positives against older catalog dates.
       updatedAt: now,
-      installedFiles: existing?.installedFiles,
+      // Anchoring extracts nothing: an existing file list is only still valid
+      // when it already belonged to exactly this release and manifest.  (A
+      // folder updated outside YAAM kept the old release's list — e.g. MapPins
+      // moved its textures into a subfolder and was then reported as missing
+      // 13 files.)
+      installedFiles: existing?.catalogVersion === e.catalogVersion && existing?.localVersion === e.localVersion
+        ? existing.installedFiles
+        : undefined,
       overlays: overlays.length > 0 ? overlays : undefined,
     };
     writeMarkerFile(addonsPath, e.folderName, db.addons[e.folderName]);

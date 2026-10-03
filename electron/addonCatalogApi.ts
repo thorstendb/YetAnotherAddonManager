@@ -9,6 +9,7 @@ import { TIMEOUTS } from './shared/timeouts';
 import { getYaamDir } from './yaamDatabase';
 import { callFs } from './fsWorkerHost';
 import { writeFileAtomic } from './shared/atomicWrite';
+import { buildDependencyResolver } from './shared/overlays';
 
 const API_URL = 'https://api.mmoui.com/v3/game/ESO/filelist.json';
 const CATEGORY_API_URL = 'https://api.mmoui.com/v3/game/ESO/categorylist.json';
@@ -305,11 +306,16 @@ function loadCatalogSnapshot(addonsPath: string): Record<string, SnapshotEntry> 
 
 /**
  * Save a catalog snapshot to disk (compact: UID → {version, date}).
+ * holdIds keep their PREVIOUS snapshot entry, so their change stays visible
+ * to the next session's diff.
  */
-function saveCatalogSnapshot(addonsPath: string, catalog: CatalogAddon[]): void {
+function saveCatalogSnapshot(addonsPath: string, catalog: CatalogAddon[], holdIds: string[] = []): void {
+  const previous = holdIds.length > 0 ? loadCatalogSnapshot(addonsPath) : null;
+  const hold = new Set(holdIds);
   const snapshot: Record<string, SnapshotEntry> = {};
   for (const c of catalog) {
-    snapshot[c.id] = { v: c.version, d: c.date };
+    const old = hold.has(c.id) ? previous?.[c.id] : undefined;
+    snapshot[c.id] = old ?? { v: c.version, d: c.date };
   }
   try {
     const snapshotPath = path.join(getYaamDir(addonsPath), SNAPSHOT_FILE);
@@ -363,11 +369,13 @@ export function updateCatalogSnapshot(
 /**
  * Commit (save) the current catalog as the new snapshot baseline.
  * Called after updates are applied so that updated addons are removed from
- * the diff on next launch.  Also called on app quit so newly changed catalog
- * entries that the user chose NOT to update are remembered for next session.
+ * the diff on next launch.  Installed addons whose update is still pending
+ * (deselected, failed, or simply not part of a single install) are passed as
+ * holdIds — committing them too would erase the one signal that reliably
+ * flags updates of addons YAAM does not track.
  */
-export function commitCatalogSnapshot(addonsPath: string, catalog: CatalogAddon[]): void {
-  saveCatalogSnapshot(addonsPath, catalog);
+export function commitCatalogSnapshot(addonsPath: string, catalog: CatalogAddon[], holdIds?: string[]): void {
+  saveCatalogSnapshot(addonsPath, catalog, holdIds);
 }
 
 /**
@@ -446,6 +454,31 @@ async function resolveDownloadUrl(addonId: string): Promise<string> {
   throw new Error(`Could not find CDN download link on ${pageUrl}`);
 }
 
+type InstallResult = { installed: string[]; missingDeps: string[]; unchanged: number; conflictsSwept: string[]; staleRemoved: string[] };
+
+/** Installs currently running, keyed by target + addon + overlay folder. */
+const installsInFlight = new Map<string, Promise<InstallResult>>();
+
+/**
+ * Updates run in parallel batches, and several of them may pull in the same
+ * dependency at once (8 addons needing LibAddonMenu-2.0>=43).  Concurrent
+ * installs of one addon would download into the same ZIP path — so a second
+ * request joins the running one instead of starting its own.
+ */
+export function installAddon(
+  addonId: string,
+  addonsPath: string,
+  onProgress?: (phase: 'resolving' | 'downloading' | 'extracting', percent?: number) => void,
+  opts?: { overlayFor?: string }
+): Promise<InstallResult> {
+  const key = `${addonsPath}\0${addonId}\0${opts?.overlayFor ?? ''}`;
+  const running = installsInFlight.get(key);
+  if (running) return running;
+  const job = runInstall(addonId, addonsPath, onProgress, opts).finally(() => installsInFlight.delete(key));
+  installsInFlight.set(key, job);
+  return job;
+}
+
 /**
  * Download and install an addon from the online catalog.
  *
@@ -456,12 +489,12 @@ async function resolveDownloadUrl(addonId: string): Promise<string> {
  * marker writes — runs in the filesystem worker, so a stuck folder produces a
  * timeout instead of freezing the app.
  */
-export async function installAddon(
+async function runInstall(
   addonId: string,
   addonsPath: string,
   onProgress?: (phase: 'resolving' | 'downloading' | 'extracting', percent?: number) => void,
   opts?: { overlayFor?: string }
-): Promise<{ installed: string[]; missingDeps: string[]; unchanged: number; conflictsSwept: string[]; staleRemoved: string[] }> {
+): Promise<InstallResult> {
   // Look up addon info from cache to build a descriptive filename
   const catalogEntry = cachedList?.find((a) => a.id === addonId) ?? null;
   let zipName = `addon-${addonId}.zip`;
@@ -520,4 +553,66 @@ export async function installAddon(
   );
   onProgress?.('extracting', 100);
   return result;
+}
+
+export interface InstallWithDepsResult {
+  installed: string[];
+  /** Required dependencies no catalog entry could be found for */
+  missingDeps: string[];
+  conflictsSwept: string[];
+  staleRemoved: string[];
+  /** Set when the REQUESTED addon failed (a failing dependency lands in missingDeps) */
+  error?: string;
+}
+
+/**
+ * Install an addon plus every required dependency it is missing, transitively.
+ *
+ * Dependencies are resolved through buildDependencyResolver — never "the last
+ * catalog entry that happens to list the folder": that installed Provision's
+ * TeamFormation (bundling LibAddonMenu-2.0 r26) for LibAddonMenu-2.0 and a
+ * Pt-BR language patch (LibQuestData r204) for LibQuestData.
+ */
+export async function installWithDependencies(
+  addonId: string,
+  addonsPath: string,
+  onProgress?: (p: { phase: string; percent?: number; current: number; total: number }) => void,
+  opts?: { overlayFor?: string }
+): Promise<InstallWithDepsResult> {
+  const all: InstallWithDepsResult = { installed: [], missingDeps: [], conflictsSwept: [], staleRemoved: [] };
+  const processedIds = new Set<string>();
+  const idsToProcess = [addonId];
+  const report = (phase: string, percent?: number) =>
+    onProgress?.({ phase, percent, current: processedIds.size, total: processedIds.size + idsToProcess.length });
+
+  while (idsToProcess.length > 0) {
+    const currentId = idsToProcess.shift()!;
+    if (processedIds.has(currentId)) continue;
+    processedIds.add(currentId);
+    report('resolving');
+
+    try {
+      // overlayFor applies only to the requested addon, never to pulled-in deps
+      const result = await installAddon(currentId, addonsPath, report, currentId === addonId ? opts : undefined);
+      all.installed.push(...result.installed);
+      all.conflictsSwept.push(...result.conflictsSwept);
+      all.staleRemoved.push(...result.staleRemoved);
+
+      if (result.missingDeps.length > 0) {
+        const resolver = buildDependencyResolver(await fetchAddonCatalog());
+        for (const depName of result.missingDeps) {
+          const depId = resolver.get(depName)?.id;
+          if (!depId) all.missingDeps.push(depName);
+          else if (!processedIds.has(depId)) idsToProcess.push(depId);
+        }
+      }
+    } catch (err: unknown) {
+      console.error(`Install addon ${currentId} error:`, err);
+      if (currentId === addonId) {
+        return { ...all, error: err instanceof Error ? err.message : String(err) };
+      }
+      all.missingDeps.push(currentId);
+    }
+  }
+  return all;
 }

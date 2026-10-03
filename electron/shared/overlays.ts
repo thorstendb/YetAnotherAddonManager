@@ -116,3 +116,32 @@ export function findHijackedManifestOverlay(
     return n === t && (!o || n !== o);
   });
 }
+
+/**
+ * Directory name → catalog entry to install when a manifest's DependsOn names
+ * that folder.  Many entries claim the same folder: forks bundling an old copy
+ * of a library (Provision's TeamFormation ships LibAddonMenu-2.0 r-old),
+ * language patches writing into it ("Adjust Language Pt-BR" → LibQuestData).
+ * A plain last-writer-wins map installed THOSE instead of the library itself.
+ *
+ * Ranking: non-overlay > overlay, catalog name equals the folder > not,
+ * primary dir (directories[0]) > bundled copy, then most downloads.
+ */
+export function buildDependencyResolver(catalog: CatalogAddon[]): Map<string, CatalogAddon> {
+  const best = new Map<string, { ca: CatalogAddon; rank: number[] }>();
+  const better = (a: number[], b: number[]): boolean => {
+    for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return a[i] > b[i];
+    return false;
+  };
+  for (const ca of catalog) {
+    const overlay = isOverlayStyleEntry(ca) ? 0 : 1;
+    const nameKey = norm(ca.name);
+    for (let i = 0; i < ca.directories.length; i++) {
+      const d = ca.directories[i];
+      const rank = [overlay, nameKey === norm(d) ? 1 : 0, i === 0 ? 1 : 0, ca.totalDownloads];
+      const cur = best.get(d);
+      if (!cur || better(rank, cur.rank)) best.set(d, { ca, rank });
+    }
+  }
+  return new Map([...best].map(([d, v]) => [d, v.ca]));
+}

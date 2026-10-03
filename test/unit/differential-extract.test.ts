@@ -161,3 +161,74 @@ describe('extractAndRegister (differential)', () => {
     expect(fs.existsSync(path.join(addons, 'TestAddon', 'Original.lua'))).toBe(true);
   });
 });
+
+describe('extractAndRegister (missing dependencies)', () => {
+  let tmp: string;
+  let addons: string;
+
+  const cat = (name: string): CatalogAddon => ({
+    id: '1', categoryId: '1', name, author: 'x', version: '1',
+    date: 0, infoUrl: '', totalDownloads: 0, monthlyDownloads: 0, favorites: 0,
+    compatibility: [], directories: [name], thumbnails: [], images: [],
+    donationLink: '',
+  });
+
+  const makeZip = (files: Record<string, string>): string => {
+    const zip = new AdmZip();
+    for (const [name, content] of Object.entries(files)) zip.addFile(name, Buffer.from(content));
+    const p = path.join(tmp, `t-${Math.random().toString(36).slice(2)}.zip`);
+    zip.writeZip(p);
+    return p;
+  };
+
+  const writeAddon = (dir: string, manifest: string): void => {
+    fs.mkdirSync(path.join(addons, dir), { recursive: true });
+    fs.writeFileSync(path.join(addons, dir, `${dir}.txt`), manifest);
+  };
+
+  beforeEach(() => {
+    tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'yaam-deps-'));
+    addons = path.join(tmp, 'AddOns');
+    fs.mkdirSync(addons, { recursive: true });
+  });
+  afterEach(() => fs.rmSync(tmp, { recursive: true, force: true }));
+
+  it('reports deps declared only by a nested sub-addon (PersonalAssistantConsume)', () => {
+    const zip = makeZip({
+      'PersonalAssistant/PersonalAssistant.addon': '## Title: PA\n## AddOnVersion: 1\n',
+      'PersonalAssistant/PersonalAssistantConsume/PersonalAssistantConsume.addon':
+        '## Title: PAC\n## AddOnVersion: 1\n## DependsOn: PersonalAssistant LibFoodDrinkBuff\n',
+    });
+    const r = extractAndRegister(zip, addons, cat('PersonalAssistant'));
+    expect(r.missingDeps).toEqual(['LibFoodDrinkBuff']);
+  });
+
+  it('reports an installed library older than a PCDependsOn minimum (LibQuestData r204 < 277)', () => {
+    writeAddon('LibQuestData', '## Title: LQD\n## AddOnVersion: 204\n');
+    writeAddon('LibGPS', '## Title: GPS\n## AddOnVersion: 80\n');
+    const zip = makeZip({
+      'QuestMap/QuestMap.addon': '## Title: QM\n## AddOnVersion: 329\n## PCDependsOn: LibQuestData>=277 LibGPS>=73\n',
+    });
+    const r = extractAndRegister(zip, addons, cat('QuestMap'));
+    expect(r.missingDeps).toEqual(['LibQuestData']);
+  });
+
+  it('reports a dependency folder without a loadable manifest', () => {
+    fs.mkdirSync(path.join(addons, 'LibQuestData', 'lang'), { recursive: true });
+    fs.writeFileSync(path.join(addons, 'LibQuestData', 'lang', 'br.lua'), '-- patch data only\n');
+    const zip = makeZip({
+      'QuestMap/QuestMap.addon': '## Title: QM\n## AddOnVersion: 329\n## DependsOn: LibQuestData\n',
+    });
+    const r = extractAndRegister(zip, addons, cat('QuestMap'));
+    expect(r.missingDeps).toEqual(['LibQuestData']);
+  });
+
+  it('accepts libraries the ZIP bundles as nested sub-addons', () => {
+    const zip = makeZip({
+      'MyAddon/MyAddon.txt': '## Title: M\n## DependsOn: LibBundled>=3\n',
+      'MyAddon/libs/LibBundled/LibBundled.txt': '## Title: B\n## AddOnVersion: 5\n',
+    });
+    const r = extractAndRegister(zip, addons, cat('MyAddon'));
+    expect(r.missingDeps).toEqual([]);
+  });
+});

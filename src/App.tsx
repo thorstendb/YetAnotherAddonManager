@@ -3,6 +3,7 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { AddonInfo, AddonSettingsData, CatalogAddon, SavedVarsInfo, compareVersionStrings, versionsDigitEqual, dateToVersion } from '../electron/shared/types';
 import { classifyDirOwnership, findHijackedManifestOverlay, hasOverlayStyleName } from '../electron/shared/overlays';
+import { CharDepConflict, findCharDepConflicts, requiredDepClosure } from '../electron/shared/charDeps';
 import PathBar from './components/PathBar';
 import StatusBar from './components/StatusBar';
 import TreePanel from './components/TreePanel';
@@ -105,8 +106,9 @@ function App() {
   const [addonSettings, setAddonSettings] = useState<AddonSettingsData | null>(null);
   const [savedVarsInfo, setSavedVarsInfo] = useState<SavedVarsInfo>({ addonFiles: {} });
   const [catalogAddons, setCatalogAddons] = useState<CatalogAddon[]>([]);
-  /** Catalog IDs that changed since last session (Tier 0 update detection) */
-  const [catalogChangedIds, setCatalogChangedIds] = useState<Set<string>>(new Set());
+  /** Catalog IDs that changed since last session → their version at the
+   *  last snapshot (Tier 0 update detection) */
+  const [catalogChangedIds, setCatalogChangedIds] = useState<Map<string, string>>(new Map());
   const [logHeight, setLogHeight] = useState(240);
   const [installingAddon, setInstallingAddon] = useState<string | null>(null);
   const [panelWidths, setPanelWidths] = useState<number[]>([1, 1, 1]);
@@ -157,6 +159,7 @@ function App() {
     alreadyTracked: number;
     skippedUpdate: number;
     skippedAmbiguous: number;
+    skippedUncertain: number;
   } | null>(null);
   const [hygienePreview, setHygienePreview] = useState<{
     strayManifests: HygieneStray[];
@@ -258,7 +261,10 @@ function App() {
     }
   }, [addLog]);
 
-  const scanPath = useCallback(async (pathToScan: string) => {
+  /** refreshCatalog: re-download the ESOUI catalog instead of reusing the copy
+   *  fetched at start-up — without it, releases published while YAAM is
+   *  running stay invisible until a restart. */
+  const scanPath = useCallback(async (pathToScan: string, refreshCatalog = false) => {
     if (!pathToScan) return;
     setLoading(true);
     addLog(`Scanning: ${pathToScan}`);
@@ -279,6 +285,10 @@ function App() {
       }
       const libs = results.filter((a) => a.isLibrary).length;
       addLog(`Found ${results.length} addons (${results.length - libs} addons, ${libs} libraries)`, 'success');
+      const damaged = results.filter((a) => a.missingFiles?.length);
+      if (damaged.length > 0) {
+        addLog(`${damaged.length} addon(s) are missing files of their installed release: ${damaged.map((a) => `${a.folderName} (${a.missingFiles!.length})`).join(', ')} — offered as repair in Update All`, 'warn');
+      }
       // The LOCAL scan is done here — stop showing "Scanning…".  What follows
       // is network work, and tying the scan indicator to it made a stalled
       // catalog fetch look like a scan that never finishes.
@@ -298,7 +308,7 @@ function App() {
           addLog(`Could not read SavedVariables: ${errMsg(err)}`, 'error');
           return { addonFiles: {} };
         }),
-        window.electronAPI.fetchAddonCatalog(false).catch((err: unknown) => {
+        window.electronAPI.fetchAddonCatalog(refreshCatalog).catch((err: unknown) => {
           // Silently swallowing this was why users saw an empty ESOUI panel
           // with no explanation whatsoever.
           addLog(`Online catalog unavailable: ${errMsg(err)}`, 'error');
@@ -334,12 +344,14 @@ function App() {
           // not run against a half-finished picture of what needs updating
           setCatalogDiffReady(true);
           if (diff) {
-            // Store changed IDs for Tier 0 update detection
-            const changedIds = new Set(diff.changed.map(([id]) => id));
+            // Store changed IDs (with their previous version) for Tier 0
             setCatalogChangedIds(prev => {
-              // Merge with existing diff (accumulate across rescans within a session)
-              const merged = new Set(prev);
-              for (const id of changedIds) merged.add(id);
+              // Merge with existing diff (accumulate across rescans within a
+              // session); the first-seen old version is the one that counts
+              const merged = new Map(prev);
+              for (const [id, { oldVersion }] of diff.changed) {
+                if (!merged.has(id)) merged.set(id, oldVersion);
+              }
               return merged;
             });
             if (diff.changed.length > 0) {
@@ -490,8 +502,14 @@ function App() {
   }, [handleSetPath]);
 
   const handleRefresh = useCallback(() => {
-    if (addonPath) handleSetPath(addonPath);
-  }, [addonPath, handleSetPath]);
+    if (addonPath) scanPath(addonPath, true);
+  }, [addonPath, scanPath]);
+
+  // The ESOUI panel re-downloaded the catalog — rerun detection against it
+  // (the main process now holds the fresh copy, so no second download)
+  const handleCatalogRefreshed = useCallback(() => {
+    if (addonPath) scanPath(addonPath);
+  }, [addonPath, scanPath]);
 
   // --- Computed data ---
 
@@ -886,18 +904,39 @@ function App() {
   // Toggle a character's addon setting — local only, no disk write.
   // If the new value matches the original on-disk value, remove from pending
   // so the Save button auto-disables when all changes are reverted.
+  /** On-disk value of one AddOnSettings.txt entry.  The game treats missing
+   *  entries as enabled; #Default is consulted as fallback. */
+  const savedCharSetting = useCallback(
+    (character: string, name: string): boolean =>
+      addonSettings?.characters[character]?.[name] ?? addonSettings?.defaults[name] ?? true,
+    [addonSettings]
+  );
+
+  /**
+   * Required dependencies of a folder's game entries (the row's own manifest
+   * plus its sub-addons), followed transitively — installed ones only, since
+   * an entry the game does not know cannot be switched on.
+   */
+  const depClosure = useCallback(
+    (folders: string[]): string[] => requiredDepClosure(folders, (name) => addonMap.get(name)),
+    [addonMap]
+  );
+
   const handleToggleCharSetting = useCallback(
     (addonName: string, character: string, enabled: boolean) => {
       const folders = settingsFoldersFor(addonName);
+      // Switching an addon ON also switches on what it requires — the game
+      // would otherwise refuse to load it ("missing dependency") although
+      // everything is installed.  Switching OFF never cascades: disabling a
+      // library must not silently take its dependents down with it.
+      const names = enabled ? [...folders, ...depClosure(folders)] : folders;
       setPendingCharSettings((prev) => {
         const next = new Map(prev);
-        for (const name of folders) {
+        for (const name of names) {
           const key = `${character}\0${name}`;
-          // Determine the on-disk (original) value
-          // The game treats missing entries as enabled; consult #Default as fallback
-          const defaultValue = addonSettings?.defaults[name] ?? true;
-          const origValue = addonSettings?.characters[character]?.[name] ?? defaultValue;
-          if (enabled === origValue) {
+          // A dependency that is already on stays untouched
+          if (!folders.includes(name) && (next.get(key) ?? savedCharSetting(character, name))) continue;
+          if (enabled === savedCharSetting(character, name)) {
             // Reverted to original — no longer pending
             next.delete(key);
           } else {
@@ -907,7 +946,55 @@ function App() {
         return next;
       });
     },
-    [addonSettings, settingsFoldersFor]
+    [settingsFoldersFor, depClosure, savedCharSetting]
+  );
+
+  /** Effective (pending-aware) setting of one game entry for one character */
+  const effectiveCharSetting = useCallback(
+    (character: string, name: string): boolean => {
+      const key = `${character}\0${name}`;
+      return pendingCharSettings.has(key) ? pendingCharSettings.get(key)! : savedCharSetting(character, name);
+    },
+    [pendingCharSettings, savedCharSetting]
+  );
+
+  /**
+   * Per row and character: enabled game entries whose REQUIRED dependency is
+   * switched off for that character.  The game skips them with "missing
+   * dependency" although everything is installed — typically a parent addon
+   * disabled in game while its modules stayed on (HarvestMap / its zone
+   * modules, VotansFisherman / VotansFishermanExport).
+   */
+  const charDepConflicts = useMemo(
+    () => addonSettings
+      ? findCharDepConflicts(addons, Object.keys(addonSettings.characters), effectiveCharSetting, (name) => addonMap.has(name))
+      : new Map<string, Record<string, CharDepConflict[]>>(),
+    [addons, addonSettings, addonMap, effectiveCharSetting]
+  );
+
+  /** Fix a conflict by switching the missing dependencies on for that character */
+  const handleEnableDepsForChar = useCallback(
+    (character: string, deps: string[]) => {
+      for (const dep of deps) handleToggleCharSetting(dep, character, true);
+    },
+    [handleToggleCharSetting]
+  );
+
+  /** …or the other way round: switch off exactly the entries that cannot load
+   *  (the parent was disabled on purpose, its modules were left behind) */
+  const handleDisableModulesForChar = useCallback(
+    (character: string, modules: string[]) => {
+      setPendingCharSettings((prev) => {
+        const next = new Map(prev);
+        for (const name of modules) {
+          const key = `${character}\0${name}`;
+          if (savedCharSetting(character, name) === false) next.delete(key);
+          else next.set(key, false);
+        }
+        return next;
+      });
+    },
+    [savedCharSetting]
   );
 
   // Save all pending character settings to disk (single batch write)
@@ -1281,6 +1368,16 @@ function App() {
         return false;
       }
 
+      // ── Repair: files of the YAAM install are gone ──
+      // The version reads "current", but the folder is incomplete (an embedded
+      // library deduplicated away by another manager, antivirus, cloud sync).
+      // Reinstalling the release restores it — only for the very entry whose
+      // file list we recorded.
+      if (addon.missingFiles?.length && addon.yaamMeta?.esouid === catalogAddon.id) {
+        console.log(`[YAAM] Repair: ${addon.folderName} is missing ${addon.missingFiles.length} installed file(s)`);
+        return true;
+      }
+
       // ── Tier 0: Catalog diff (most reliable) ──
       // If the catalog entry changed since last session AND the local addon
       // doesn't already match the new catalog version → definitely an update.
@@ -1296,8 +1393,14 @@ function App() {
         // Cross-check: local manifest version matches catalog → updated externally
         const localVer = getEffectiveVersion(addon, catalogAddon);
         if (localVer.trim() === catalogAddon.version.trim() || versionsDigitEqual(localVer, catalogAddon.version)) {
-          // Only skip if the addon has some tracking (avoid false negatives for untracked)
-          if (trackedVersion || addon.yaamMeta?.esouid) {
+          // Tracked addons: the local files already are the new release.
+          // Untracked ones: same — as long as the VERSION changed.  When only
+          // the date moved (re-upload under the same version string), the
+          // manifest cannot tell the two uploads apart, so keep offering it.
+          const oldVersion = catalogChangedIds.get(catalogAddon.id) ?? '';
+          const versionChanged = oldVersion.trim() !== catalogAddon.version.trim()
+            && !versionsDigitEqual(oldVersion, catalogAddon.version);
+          if (trackedVersion || addon.yaamMeta?.esouid || versionChanged) {
             console.log(`[YAAM] Tier 0 skip (local matches new catalog): ${addon.folderName} localVer="${localVer}" catalogVersion="${catalogAddon.version}"`);
             return false;
           }
@@ -1376,6 +1479,32 @@ function App() {
     [recentlyUpdated, catalogChangedIds, getEffectiveVersion, getCatalogMatch]
   );
 
+  /**
+   * "Might update": an untracked addon whose version comparison cannot decide
+   * (callers have already ruled out a definite update via isUpdateAvailable).
+   *   not-tracked — version schemes are incomparable ("2025.03.14" vs "v5")
+   *   date-newer  — versions say "local is newer", but the catalog published
+   *                 well AFTER the manifest landed on disk, so the verdict is
+   *                 likely a scheme artifact ("2.3.22 build 1442" vs "2.3.22")
+   */
+  const getMightUpdateReason = useCallback(
+    (addon: AddonInfo, match: { catalogAddon: CatalogAddon; layered: boolean }): 'not-tracked' | 'date-newer' | undefined => {
+      const ca = match.catalogAddon;
+      if (recentlyUpdated.has(ca.id)) return undefined;
+      // Layered folders have their own dialog section
+      if (match.layered) return undefined;
+      // Only untracked addons (no/empty catalogVersion) can be "might update"
+      if (addon.yaamMeta?.catalogVersion) return undefined;
+      const localVer = getEffectiveVersion(addon, ca);
+      if (localVer.trim() === ca.version.trim() || versionsDigitEqual(localVer, ca.version)) return undefined;
+      const cmp = compareVersionStrings(localVer, ca.version, ca.date);
+      if (cmp === 0) return 'not-tracked';
+      if (cmp > 0 && addon.manifestMtime && ca.date > addon.manifestMtime + MTIME_UPDATE_SLACK_SECONDS) return 'date-newer';
+      return undefined;
+    },
+    [recentlyUpdated, getEffectiveVersion]
+  );
+
   // Count of addons that have a newer version in the catalog (for Update All button)
   const updateCount = useMemo(() => {
     const seen = new Set<string>();
@@ -1409,25 +1538,7 @@ function App() {
         seen.add(catalogAddon.id); // already counted in updateCount
         continue;
       }
-      if (recentlyUpdated.has(catalogAddon.id)) continue;
-      // Layered folders have their own dialog section — not "might update"
-      if (match.layered) continue;
-      // Only untracked addons (no/empty catalogVersion) can be "might update"
-      if (addon.yaamMeta?.catalogVersion) continue;
-      const localVer = getEffectiveVersion(addon, catalogAddon);
-      if (localVer.trim() === catalogAddon.version.trim()) continue;
-      if (versionsDigitEqual(localVer, catalogAddon.version)) continue;
-      const cmp = compareVersionStrings(localVer, catalogAddon.version, catalogAddon.date);
-      // cmp === 0 means inconclusive (scheme mismatch) — count as "might update"
-      if (cmp === 0) {
-        seen.add(catalogAddon.id);
-        count++;
-      } else if (cmp > 0 && addon.manifestMtime
-        && catalogAddon.date > addon.manifestMtime + MTIME_UPDATE_SLACK_SECONDS) {
-        // Stateless mtime hint: version strings say "local is newer", but the
-        // catalog published well AFTER the manifest landed on disk — the
-        // "newer" verdict is likely a scheme artifact (e.g. "2.3.22 build
-        // 1442" vs "2.3.22").  Surface it for review.
+      if (getMightUpdateReason(addon, match)) {
         seen.add(catalogAddon.id);
         count++;
       }
@@ -1435,7 +1546,7 @@ function App() {
     console.log('[YAAM] updateCount', updateCount, 'mightUpdateCount', count,
       'addons', addons.length, 'catalog', addons.filter(a => getCatalogAddon(a)).length);
     return count;
-  }, [addons, getCatalogAddon, getCatalogMatch, isUpdateAvailable, getEffectiveVersion, updateCount, recentlyUpdated]);
+  }, [addons, getCatalogAddon, getCatalogMatch, isUpdateAvailable, getMightUpdateReason, updateCount]);
 
   // ── Baseline commit ──
   // Candidates: addons with an unambiguous catalog match, no pending update,
@@ -1448,12 +1559,18 @@ function App() {
     let alreadyTracked = 0;
     let skippedUpdate = 0;
     let skippedAmbiguous = 0;
+    let skippedUncertain = 0;
     for (const addon of addons) {
       const match = getCatalogMatch(addon);
       if (!match) continue;
       const ca = match.catalogAddon;
       if (match.ambiguous) { skippedAmbiguous++; continue; }
       if (isUpdateAvailable(addon, ca)) { skippedUpdate++; continue; }
+      // Version comparison could not decide whether the files are current —
+      // anchoring them as "up to date" would hide a real pending update until
+      // the author's next release.  Installing the release once anchors them
+      // with certainty.
+      if (getMightUpdateReason(addon, match)) { skippedUncertain++; continue; }
       // Detected-but-untracked overlays get anchored alongside the original —
       // afterwards patch updates are detected deterministically too.
       const untrackedOverlays = match.installedOverlays
@@ -1483,8 +1600,8 @@ function App() {
         overlays: untrackedOverlays.length > 0 ? untrackedOverlays : undefined,
       });
     }
-    return { entries, alreadyTracked, skippedUpdate, skippedAmbiguous };
-  }, [addons, getCatalogMatch, isUpdateAvailable]);
+    return { entries, alreadyTracked, skippedUpdate, skippedAmbiguous, skippedUncertain };
+  }, [addons, getCatalogMatch, isUpdateAvailable, getMightUpdateReason]);
 
   // ── Overlay updates (language patches / fix packs) ──
   // Each installed overlay has its own catalog identity and version history,
@@ -1670,6 +1787,19 @@ function App() {
     }
     return ids;
   }, [addons, getCatalogAddon, isUpdateAvailable]);
+
+  /** Catalog entries to hold back in a snapshot commit: installed addons whose
+   *  update is still pending after `done` were installed.  Committing them too
+   *  would erase their Tier-0 signal for the next session. */
+  const getSnapshotHoldIds = useCallback((done: Iterable<string>): string[] => {
+    const hold = new Set<string>(updatableCatalogIds);
+    for (const addon of addons) {
+      const id = getCatalogAddon(addon)?.id;
+      if (id && catalogChangedIds.has(id)) hold.add(id);
+    }
+    for (const id of done) hold.delete(id);
+    return [...hold];
+  }, [addons, getCatalogAddon, catalogChangedIds, updatableCatalogIds]);
 
   const updatableFolders = useMemo(() => {
     const set = new Set<string>();
@@ -2142,6 +2272,7 @@ function App() {
             catalogVersion: match.catalogAddon.version,
             catalogId: match.catalogAddon.id,
             ambiguous: match.ambiguous,
+            missingFiles: addon.missingFiles,
           });
         }
       }
@@ -2170,42 +2301,20 @@ function App() {
     for (const addon of addons) {
       const match = getCatalogMatch(addon);
       if (!match || seen.has(match.catalogAddon.id)) continue;
-      if (match.layered) continue;
+      const reason = getMightUpdateReason(addon, match);
+      if (!reason) continue;
       const ca = match.catalogAddon;
-      if (recentlyUpdated.has(ca.id)) continue;
-      // Only untracked addons (no/empty catalogVersion) can be "might update"
-      if (addon.yaamMeta?.catalogVersion) continue;
-      const localVer = getEffectiveVersion(addon, ca);
-      if (localVer.trim() === ca.version.trim() || versionsDigitEqual(localVer, ca.version)) continue;
-      const cmp = compareVersionStrings(localVer, ca.version, ca.date);
-      if (cmp === 0) {
-        seen.add(ca.id);
-        updatable.push({
-          folderName: addon.folderName,
-          title: addon.title,
-          localVersion: getEffectiveVersion(addon, ca),
-          catalogVersion: ca.version,
-          catalogId: ca.id,
-          ambiguous: match.ambiguous,
-          mightUpdate: true,
-          mightUpdateReason: 'not-tracked',
-        });
-      } else if (cmp > 0 && addon.manifestMtime
-        && ca.date > addon.manifestMtime + MTIME_UPDATE_SLACK_SECONDS) {
-        // Stateless mtime hint (see mightUpdateCount): "local newer" verdict
-        // contradicted by a catalog publish well after the files hit disk.
-        seen.add(ca.id);
-        updatable.push({
-          folderName: addon.folderName,
-          title: addon.title,
-          localVersion: getEffectiveVersion(addon, ca),
-          catalogVersion: ca.version,
-          catalogId: ca.id,
-          ambiguous: match.ambiguous,
-          mightUpdate: true,
-          mightUpdateReason: 'date-newer',
-        });
-      }
+      seen.add(ca.id);
+      updatable.push({
+        folderName: addon.folderName,
+        title: addon.title,
+        localVersion: getEffectiveVersion(addon, ca),
+        catalogVersion: ca.version,
+        catalogId: ca.id,
+        ambiguous: match.ambiguous,
+        mightUpdate: true,
+        mightUpdateReason: reason,
+      });
     }
 
     // Overlay updates: language patches / fix packs with their own identity.
@@ -2250,7 +2359,7 @@ function App() {
 
     // Show selection dialog
     setUpdateAllList(updatable);
-  }, [addons, addonPath, getCatalogMatch, addLog, updatingAll, isUpdateAvailable, getEffectiveVersion, replacementCandidates, recentlyUpdated, overlayUpdates, layeredItems]);
+  }, [addons, addonPath, getCatalogMatch, addLog, updatingAll, isUpdateAvailable, getMightUpdateReason, getEffectiveVersion, replacementCandidates, overlayUpdates, layeredItems]);
 
   const handleUpdateAllConfirm = useCallback(async (selectedCatalogIds: string[]) => {
     setUpdateAllList(null);
@@ -2376,7 +2485,7 @@ function App() {
                 // Remove from catalog diff — this addon is now up to date
                 setCatalogChangedIds(prev => {
                   if (!prev.has(catalogAddon.id)) return prev;
-                  const next = new Set(prev);
+                  const next = new Map(prev);
                   next.delete(catalogAddon.id);
                   return next;
                 });
@@ -2436,12 +2545,13 @@ function App() {
       } : undefined;
       setLogs((prev) => [...prev, { timestamp: new Date(), message: `Update All complete: ${summaryParts.join(', ')}`, level: success > 0 ? 'success' as const : 'warn' as const, action: undoAllAction }]);
       await scanPath(addonPath);
-      // Commit the catalog snapshot so next session sees a fresh baseline
+      // Commit the catalog snapshot so next session sees a fresh baseline —
+      // except for whatever is still pending (deselected or failed)
       if (success > 0) {
-        window.electronAPI.commitCatalogSnapshot(addonPath).catch(() => {});
+        window.electronAPI.commitCatalogSnapshot(addonPath, getSnapshotHoldIds(Object.keys(newVersions))).catch(() => {});
       }
     }
-  }, [addons, addonPath, catalogById, getCatalogAddon, addLog, scanPath, replacementCandidates, overlayUpdates]);
+  }, [addons, addonPath, catalogById, getCatalogAddon, addLog, scanPath, replacementCandidates, overlayUpdates, getSnapshotHoldIds]);
 
   /**
    * Opt-in auto-update: install everything pending right after the start-up
@@ -2828,13 +2938,14 @@ function App() {
           // Remove from catalog diff — this addon is now up to date
           setCatalogChangedIds(prev => {
             if (!prev.has(catalogAddon.id)) return prev;
-            const next = new Set(prev);
+            const next = new Map(prev);
             next.delete(catalogAddon.id);
             return next;
           });
           scanPath(addonPath);
           // Commit snapshot so this addon is no longer flagged next session
-          window.electronAPI.commitCatalogSnapshot(addonPath).catch(() => {});
+          // (the other pending updates keep their catalog-change signal)
+          window.electronAPI.commitCatalogSnapshot(addonPath, getSnapshotHoldIds([catalogAddon.id])).catch(() => {});
           // Log with Revert button if this was an update (backup exists)
           const revertAction = backupPath && backupFolder ? {
             label: '↩ Undo',
@@ -2858,7 +2969,7 @@ function App() {
         setInstallingAddon(null);
       }
     },
-    [addonPath, addons, addLog, scanPath, dirOwnership, topLevelDirNames]
+    [addonPath, addons, addLog, scanPath, dirOwnership, topLevelDirNames, getSnapshotHoldIds]
   );
 
   // Simple delete (no savedvars) for inline delete button
@@ -3211,6 +3322,9 @@ function App() {
                   isNotInCatalog={notInCatalog.has(addon.folderName)}
                   isCatalogMismatch={catalogMismatch.has(addon.folderName)}
                   characterSettings={getCharacterSettingsForAddon(addon.folderName)}
+                  charDepConflicts={charDepConflicts.get(addon.folderName)}
+                  onEnableDepsForChar={handleEnableDepsForChar}
+                  onDisableModulesForChar={handleDisableModulesForChar}
                   hasSavedVars={!!(savedVarsInfo.addonFiles[addon.folderName]?.length) || addon.subAddons.some(s => !!(savedVarsInfo.addonFiles[s.folderName]?.length))}
                   catalogAddon={getCatalogAddon(addon)}
                   isInstalling={installingAddon === getCatalogAddon(addon)?.id}
@@ -3284,6 +3398,9 @@ function App() {
                   isCatalogMismatch={catalogMismatch.has(lib.folderName)}
                   referencedBy={getReferencedBy(lib)}
                   characterSettings={getCharacterSettingsForAddon(lib.folderName)}
+                  charDepConflicts={charDepConflicts.get(lib.folderName)}
+                  onEnableDepsForChar={handleEnableDepsForChar}
+                  onDisableModulesForChar={handleDisableModulesForChar}
                   hasSavedVars={!!(savedVarsInfo.addonFiles[lib.folderName]?.length) || lib.subAddons.some(s => !!(savedVarsInfo.addonFiles[s.folderName]?.length))}
                   catalogAddon={getCatalogAddon(lib)}
                   isInstalling={installingAddon === getCatalogAddon(lib)?.id}
@@ -3351,6 +3468,8 @@ function App() {
           onToggleCharSetting={handleToggleCharSetting}
           highlightAddonId={catalogHighlightId}
           catalogByDir={catalogLookup}
+          catalog={catalogAddons}
+          onCatalogRefreshed={handleCatalogRefreshed}
           installingAddonId={installingAddon}
           installProgress={installProgress}
           checkUpdateAvailable={isUpdateAvailable}
@@ -3512,6 +3631,7 @@ function App() {
               </p>
               <p style={{ fontSize: '0.857rem', opacity: 0.7 }}>
                 Skipped: {baselineConfirm.skippedUpdate} with pending updates (install those first),{' '}
+                {baselineConfirm.skippedUncertain} whose version can't be compared (update those once instead),{' '}
                 {baselineConfirm.skippedAmbiguous} with ambiguous catalog match,{' '}
                 {baselineConfirm.alreadyTracked} already tracked.
               </p>

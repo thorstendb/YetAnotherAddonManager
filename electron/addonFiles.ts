@@ -422,19 +422,31 @@ export function extractAndRegister(
     }
   }
 
-  // Collect all required dependencies
-  const requiredDeps = new Set<string>();
+  // Collect all required dependencies — including those of nested sub-addons
+  // (PersonalAssistant's Consume module is what needs LibFoodDrinkBuff), keeping
+  // the highest DependsOn minimum per library.
+  const requiredDeps = new Map<string, number>();
+  const bundledDirs = new Set<string>();
   for (const addon of installedAddons) {
-    for (const dep of addon.dependsOn) {
-      requiredDeps.add(dep.name);
+    for (const mod of [addon, ...addon.subAddons]) {
+      if (mod !== addon) bundledDirs.add(mod.folderName);
+      for (const dep of mod.dependsOn) {
+        requiredDeps.set(dep.name, Math.max(requiredDeps.get(dep.name) ?? 0, dep.minVersion ?? 0));
+      }
     }
   }
 
-  // Check which deps are missing (use existing directory names as proxy)
+  // A dep is missing when ESO could not load it: no folder of that name, a
+  // folder without its <Name> manifest (a language patch dropped only data
+  // files there), or an installed copy older than a ">=NN" minimum.
   const allDirNames = new Set(afterDirs);
-  const missingDeps = Array.from(requiredDeps).filter(
-    (depName) => !depName.startsWith('ZO_') && !allDirNames.has(depName)
-  );
+  const missingDeps = Array.from(requiredDeps).filter(([depName, minVersion]) => {
+    if (depName.startsWith('ZO_')) return false;
+    if (!allDirNames.has(depName)) return !bundledDirs.has(depName);
+    const [lib] = scanSpecificAddons(addonsPath, [depName]);
+    const loadable = !!lib && (!lib.isContainer || lib.subAddons.some((s) => s.folderName === depName));
+    return !loadable || lib.addonVersion < minVersion;
+  }).map(([depName]) => depName);
 
   return { installed: shippedDirs, missingDeps, unchanged, conflictsSwept, staleRemoved };
 }

@@ -10,7 +10,8 @@ import { cleanupUnusedLibraries, deleteAddon, deleteAddonAndExclusiveRefs, previ
 import { callFs, shutdownFsWorker } from './fsWorkerHost';
 import { detectCloudProvider } from './cloudDetect';
 import { TIMEOUTS } from './shared/timeouts';
-import { fetchAddonCatalog, fetchAddonDetails, fetchCategories, installAddon, updateCatalogSnapshot, commitCatalogSnapshot } from './addonCatalogApi';
+import { buildDependencyResolver } from './shared/overlays';
+import { fetchAddonCatalog, fetchAddonDetails, fetchCategories, installAddon, installWithDependencies, updateCatalogSnapshot, commitCatalogSnapshot } from './addonCatalogApi';
 import { setAddonSetting, batchSetAddonSettings, getSavedVarsInfo, deleteSavedVars, cleanupSettings, undoCleanupSettings, listSavedVarsBackups, restoreSavedVarsFile, exportProfile, importProfile, exportProfileAsZip, previewProfileZip, importProfileFromZip, ExportData, previewCleanupSettings, cleanupSettingsSelected } from './settingsManager';
 import { saveSnapshotIfChanged, listSnapshots, listAddonBackups, restoreAddonFromBackup, backupAddonFolder, deleteAddonBackups, SnapshotAddon } from './snapshotManager';
 import { migrateFromFolderFiles, getAllEntries, getYaamDir, cleanupMarkerFiles, restoreTrackingState } from './yaamDatabase';
@@ -418,10 +419,10 @@ ipcMain.handle(IPC_CHANNELS.UPDATE_CATALOG_SNAPSHOT, async (_event, addonsPath: 
   }
 });
 
-ipcMain.handle(IPC_CHANNELS.COMMIT_CATALOG_SNAPSHOT, async (_event, addonsPath: string) => {
+ipcMain.handle(IPC_CHANNELS.COMMIT_CATALOG_SNAPSHOT, async (_event, addonsPath: string, holdIds?: string[]) => {
   try {
     const catalog = await fetchAddonCatalog();
-    commitCatalogSnapshot(addonsPath, catalog);
+    commitCatalogSnapshot(addonsPath, catalog, holdIds);
     return true;
   } catch (err: unknown) {
     console.error('Commit catalog snapshot error:', err);
@@ -448,64 +449,13 @@ ipcMain.handle(IPC_CHANNELS.FETCH_CATEGORIES, async () => {
 });
 
 ipcMain.handle(IPC_CHANNELS.INSTALL_ADDON, async (_event, addonId: string, addonsPath: string, opts?: { overlayFor?: string }) => {
-  const allResults: { installed: string[]; missingDeps: string[]; conflictsSwept: string[]; staleRemoved: string[] } =
-    { installed: [], missingDeps: [], conflictsSwept: [], staleRemoved: [] };
-  const processedIds = new Set<string>();
-  const idsToProcess = [addonId];
-
-  const sendProgress = (phase: string, percent?: number) => {
-    if (!mainWindow) return;
-    const current = processedIds.size;
-    const total = current + idsToProcess.length;
-    mainWindow.webContents.send(IPC_CHANNELS.INSTALL_PROGRESS, { addonId, phase, percent, current, total });
-  };
-
-  while (idsToProcess.length > 0) {
-    const currentId = idsToProcess.shift()!;
-    if (processedIds.has(currentId)) continue;
-    processedIds.add(currentId);
-
-    sendProgress('resolving');
-
-    try {
-      // overlayFor applies only to the requested addon, never to pulled-in deps
-      const result = await installAddon(currentId, addonsPath, (phase, percent) => {
-        sendProgress(phase, percent);
-      }, currentId === addonId ? opts : undefined);
-      allResults.installed.push(...result.installed);
-      allResults.conflictsSwept.push(...result.conflictsSwept);
-      allResults.staleRemoved.push(...result.staleRemoved);
-
-      // Resolve missing deps → queue for install
-      if (result.missingDeps.length > 0) {
-        const catalog = await fetchAddonCatalog();
-        const dirToAddon = new Map<string, string>();
-        for (const ca of catalog) {
-          for (const d of ca.directories) {
-            dirToAddon.set(d, ca.id);
-          }
-        }
-        for (const depName of result.missingDeps) {
-          const depId = dirToAddon.get(depName);
-          if (depId && !processedIds.has(depId)) {
-            idsToProcess.push(depId);
-          } else if (!depId) {
-            allResults.missingDeps.push(depName);
-          }
-        }
-      }
-    } catch (err: unknown) {
-      console.error(`Install addon ${currentId} error:`, err);
-      if (currentId === addonId) {
-        return { installed: allResults.installed, missingDeps: allResults.missingDeps, error: errMsg(err) };
-      }
-      allResults.missingDeps.push(currentId);
-    }
-  }
-  if (mainWindow) {
+  const result = await installWithDependencies(addonId, addonsPath, (p) => {
+    mainWindow?.webContents.send(IPC_CHANNELS.INSTALL_PROGRESS, { addonId, ...p });
+  }, opts);
+  if (!result.error && mainWindow) {
     mainWindow.webContents.send(IPC_CHANNELS.INSTALL_PROGRESS, { addonId, phase: 'done' });
   }
-  return allResults;
+  return result;
 });
 
 ipcMain.handle(IPC_CHANNELS.GET_ADDON_SETTINGS, async (_event, addonsPath: string) => {
@@ -787,14 +737,7 @@ ipcMain.handle(IPC_CHANNELS.BATCH_INSTALL_ADDONS, async (
 
           // Resolve missing dependencies → find their catalog IDs and queue them
           if (resolveDeps && r.value.missingDeps.length > 0) {
-            const catalog = await fetchAddonCatalog();
-            // Build a map: directory name → catalog addon
-            const dirToAddon = new Map<string, { id: string; name: string }>();
-            for (const ca of catalog) {
-              for (const d of ca.directories) {
-                dirToAddon.set(d, { id: ca.id, name: ca.name });
-              }
-            }
+            const dirToAddon = buildDependencyResolver(await fetchAddonCatalog());
             for (const depName of r.value.missingDeps) {
               const match = dirToAddon.get(depName);
               if (match && !processedIds.has(match.id)) {

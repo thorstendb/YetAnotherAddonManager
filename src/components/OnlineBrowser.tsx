@@ -33,6 +33,11 @@ interface OnlineBrowserProps {
   flex?: number;
   highlightAddonId?: string | null;
   catalogByDir?: Map<string, CatalogAddon>;
+  /** App's catalog (the one update detection runs on) — adopted whenever it
+   *  changes, so both columns always show the same catalog state */
+  catalog?: CatalogAddon[];
+  /** Called after the user force-refreshed the catalog here */
+  onCatalogRefreshed?: () => void;
   installingAddonId?: string | null;
   installProgress?: Record<string, { phase: string; percent?: number; current?: number; total?: number }>;
   /** Central update-availability check shared with Update All */
@@ -67,6 +72,8 @@ const OnlineBrowser: React.FC<OnlineBrowserProps> = ({
   flex,
   highlightAddonId,
   catalogByDir,
+  catalog,
+  onCatalogRefreshed,
   installingAddonId,
   installProgress,
   checkUpdateAvailable,
@@ -185,6 +192,7 @@ const OnlineBrowser: React.FC<OnlineBrowserProps> = ({
       setAllAddons(list);
       if (forceRefresh) {
         onLog(`Refreshed addon catalog: ${list.length} addons`, 'info');
+        onCatalogRefreshed?.();
       } else {
         onLog(`Loaded addon catalog: ${list.length} addons`, 'info');
       }
@@ -196,7 +204,11 @@ const OnlineBrowser: React.FC<OnlineBrowserProps> = ({
     } finally {
       setLoading(false);
     }
-  }, [onLog]);
+  }, [onLog, onCatalogRefreshed]);
+
+  useEffect(() => {
+    if (catalog && catalog.length > 0) setAllAddons(catalog);
+  }, [catalog]);
 
   // Category name resolver: dynamic API → hardcoded fallback
   const getCategoryName = useCallback((catId: string) => {

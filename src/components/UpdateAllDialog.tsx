@@ -26,6 +26,8 @@ export interface UpdatableAddon {
   needsReapply?: boolean;
   /** Folder manifest hijacked by an untracked patch — original state unknown */
   layered?: boolean;
+  /** Files of the installed release that are gone — reinstalling repairs the folder */
+  missingFiles?: string[];
 }
 
 interface UpdateAllDialogProps {
@@ -115,6 +117,16 @@ const UpdateAllDialog: React.FC<UpdateAllDialogProps> = ({ addons, onConfirm, on
         )}
         {addon.needsReapply && (
           <span style={{ marginLeft: '6px' }} title="Overwritten by a main-addon update — re-apply to restore the patch">⚠️ re-apply</span>
+        )}
+        {addon.missingFiles && addon.missingFiles.length > 0 && (
+          <span
+            style={{ marginLeft: '6px' }}
+            title={['Files of the installed release are missing — reinstalling restores them:',
+              ...addon.missingFiles.slice(0, 10),
+              ...(addon.missingFiles.length > 10 ? ['…'] : [])].join('\n')}
+          >
+            🩹 repair ({addon.missingFiles.length} missing)
+          </span>
         )}
         <span style={{ opacity: 0.7, marginLeft: '8px' }}>
           {addon.localVersion || '?'} → {addon.catalogVersion}

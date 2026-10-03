@@ -28,6 +28,10 @@ interface AddonTreeItemProps {
   isCatalogMismatch?: boolean;
   referencedBy?: string[];
   characterSettings?: CharacterSettings;
+  /** Per character: enabled entries of this row whose required dependency is switched off */
+  charDepConflicts?: Record<string, { module: string; dep: string }[]>;
+  onEnableDepsForChar?: (character: string, deps: string[]) => void;
+  onDisableModulesForChar?: (character: string, modules: string[]) => void;
   hasSavedVars?: boolean;
   catalogAddon?: CatalogAddon;
   isInstalling?: boolean;
@@ -63,6 +67,9 @@ const AddonTreeItem: React.FC<AddonTreeItemProps> = ({
   isCatalogMismatch = false,
   referencedBy = [],
   characterSettings,
+  charDepConflicts,
+  onEnableDepsForChar,
+  onDisableModulesForChar,
   hasSavedVars = false,
   catalogAddon,
   isInstalling = false,
@@ -393,6 +400,23 @@ const AddonTreeItem: React.FC<AddonTreeItemProps> = ({
           )}
           {overlayInfo?.layered && (
             <span className="tree-overlay-badge" title="Manifest belongs to an untracked language patch — the original's version is unknown (see Update All → Patched folders)"> 🎭</span>
+          )}
+          {charDepConflicts && Object.keys(charDepConflicts).length > 0 && (
+            <span
+              className="tree-overlay-badge"
+              title={['Enabled, but a required dependency is switched off — the game will not load it for:',
+                ...Object.entries(charDepConflicts).map(([c, list]) =>
+                  `${shortenCharName(c)}: ${[...new Set(list.map((x) => x.dep))].join(', ')} off`),
+                'Fix it under Characters.'].join('\n')}
+            > ⛓️‍💥</span>
+          )}
+          {addon.missingFiles && addon.missingFiles.length > 0 && (
+            <span
+              className="tree-overlay-badge"
+              title={[`${addon.missingFiles.length} file(s) of the installed release are missing — reinstall (or Update All) repairs the folder:`,
+                ...addon.missingFiles.slice(0, 10),
+                ...(addon.missingFiles.length > 10 ? ['…'] : [])].join('\n')}
+            > 🩹</span>
           )}
           {isUnreferenced && <span className="unreferenced-marker">{' \u26A0\uFE0E (unused)'}</span>}
           {isNotInCatalog && <span className="catalog-missing" title="Not found in catalog and no download URL">{' \u26A0\uFE0E'}</span>}
@@ -998,6 +1022,34 @@ const AddonTreeItem: React.FC<AddonTreeItemProps> = ({
                           />
                           <span className="char-name">{shortenCharName(charName)}</span>
                         </label>
+                        {charDepConflicts?.[charName] && (() => {
+                          const conflicts = charDepConflicts[charName];
+                          const deps = [...new Set(conflicts.map((c) => c.dep))];
+                          const modules = [...new Set(conflicts.map((c) => c.module))];
+                          return (
+                            <span className="char-dep-conflict" title={conflicts.map((c) => `${c.module} requires ${c.dep}`).join('\n')}>
+                              {' '}⚠️ needs {deps.join(', ')} (off)
+                              {onEnableDepsForChar && (
+                                <button
+                                  className="row-btn"
+                                  onClick={(e) => { e.stopPropagation(); onEnableDepsForChar(charName, deps); }}
+                                  title={`Switch ${deps.join(', ')} on for this character`}
+                                >
+                                  enable
+                                </button>
+                              )}
+                              {onDisableModulesForChar && (
+                                <button
+                                  className="row-btn"
+                                  onClick={(e) => { e.stopPropagation(); onDisableModulesForChar(charName, modules); }}
+                                  title={`Switch ${modules.join(', ')} off for this character instead`}
+                                >
+                                  disable {modules.length === 1 ? modules[0] : `${modules.length} modules`}
+                                </button>
+                              )}
+                            </span>
+                          );
+                        })()}
                       </div>
                     ))}
                 </div>

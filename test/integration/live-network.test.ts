@@ -95,4 +95,57 @@ describe.skipIf(!enabled)('live ESOUI endpoints (YAAM_LIVE_TEST=1)', () => {
     });
     expect(second).toContain('cache-hit');
   }, 180_000);
+
+  /**
+   * The user report behind installWithDependencies (September 2026):
+   *  1. LibAddonMenu-2.0 had to be reinstalled after a first install — the
+   *     dependency resolved to Provision's TeamFormation, whose ZIP bundles
+   *     LibAddonMenu-2.0 r26 (+ LibStub) as top-level folders.
+   *  2. Personal Assistant did not pull in LibFoodDrinkBuff — only its nested
+   *     PersonalAssistantConsume module declares it.
+   *  3. Quest Map did not pull in LibQuestData — it resolved to a Pt-BR
+   *     language patch shipping LibQuestData r204 (Quest Map needs >=277).
+   * Each run starts from an EMPTY AddOns folder: that is a first install.
+   */
+  describe('first install pulls in the right dependencies', () => {
+    const fresh = (name: string) => {
+      const dir = path.join(tmp, name, 'live', 'AddOns');
+      fs.mkdirSync(dir, { recursive: true });
+      return dir;
+    };
+    const entryOf = async (addons: string, folder: string) =>
+      (await callFs('getAllEntries', [addons]))[folder];
+    const addonVersionOf = (addons: string, folder: string): number => {
+      const dir = path.join(addons, folder);
+      const manifest = [`${folder}.addon`, `${folder}.txt`].map((f) => path.join(dir, f)).find((f) => fs.existsSync(f));
+      const m = manifest && fs.readFileSync(manifest, 'utf-8').match(/^##\s*AddOnVersion:\s*(\d+)/m);
+      return m ? parseInt(m[1], 10) : 0;
+    };
+
+    it('Personal Assistant: the real LibAddonMenu-2.0 and LibFoodDrinkBuff', async () => {
+      const addons = fresh('pa');
+      const result = await api.installWithDependencies('3512', addons);
+      expect(result.error).toBeUndefined();
+      expect(result.missingDeps).toEqual([]);
+
+      // 1. LibAddonMenu-2.0 from its own entry, new enough for PA (>=40)
+      expect((await entryOf(addons, 'LibAddonMenu-2.0'))?.esouid).toBe(LIB_ADDON_MENU_UID);
+      expect(addonVersionOf(addons, 'LibAddonMenu-2.0')).toBeGreaterThanOrEqual(40);
+      expect(fs.existsSync(path.join(addons, 'ProvisionsTeamFormation'))).toBe(false);
+      expect(fs.existsSync(path.join(addons, 'LibStub'))).toBe(false);
+
+      // 2. the nested module's dependency
+      expect((await entryOf(addons, 'LibFoodDrinkBuff'))?.esouid).toBe('1902');
+    }, 600_000);
+
+    it('Quest Map: the real LibQuestData, not a language patch', async () => {
+      const addons = fresh('qm');
+      const result = await api.installWithDependencies('1022', addons);
+      expect(result.error).toBeUndefined();
+
+      // 3. LibQuestData from its own entry, new enough for Quest Map (>=277)
+      expect((await entryOf(addons, 'LibQuestData'))?.esouid).toBe('2625');
+      expect(addonVersionOf(addons, 'LibQuestData')).toBeGreaterThanOrEqual(277);
+    }, 600_000);
+  });
 });

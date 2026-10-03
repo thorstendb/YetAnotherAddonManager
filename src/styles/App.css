@@ -849,6 +849,22 @@
   color: var(--text-primary);
 }
 
+/* Enabled for this character, but a required dependency is switched off */
+.char-dep-conflict {
+  display: block;
+  padding-left: 20px;
+  font-size: 0.786rem;
+  color: var(--yellow);
+}
+
+.char-dep-conflict .row-btn {
+  opacity: 0.8;
+  margin-left: 6px;
+  font-size: 0.786rem;
+  border: 1px solid var(--border);
+  color: var(--text-secondary);
+}
+
 .saved-vars-indicator {
   margin-left: 4px;
   font-size: 0.786rem;
