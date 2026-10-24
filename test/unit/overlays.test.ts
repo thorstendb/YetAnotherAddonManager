@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { isOverlayStyleEntry, classifyDirOwnership, findHijackedManifestOverlay } from '../../electron/shared/overlays';
+import { isOverlayStyleEntry, classifyDirOwnership, findHijackedManifestOverlay, distrustTrackedIdentity } from '../../electron/shared/overlays';
 import { CatalogAddon } from '../../electron/shared/types';
 
 /** Minimal CatalogAddon factory (only fields the classifier reads + id). */
@@ -105,5 +105,37 @@ describe('findHijackedManifestOverlay', () => {
 
   it('handles empty titles gracefully', () => {
     expect(findHijackedManifestOverlay('', [asylumLangPatch])).toBeUndefined();
+  });
+});
+
+describe('distrustTrackedIdentity', () => {
+  // Live catalog, October 2026
+  const teamFormation = ca({ id: '1135', name: "Provision's TeamFormation : Teammate Radar", directories: ['ProvisionsTeamFormation', 'LibAddonMenu-2.0', 'LibStub'] });
+  const libStub = ca({ id: '44', name: 'LibStub', directories: ['LibStub'] });
+  const esoKr = ca({ id: '2334', name: 'EsoKR', directories: ['EsoKR', 'EsoUI', 'gamedata'] });
+  const spanishObsolete = ca({ id: '2755', name: 'Obsoleto - ESO Spanish Translation', directories: ['gamedata'] });
+
+  it('heals a library folder recorded under the addon that merely bundles it (pre-0.4.0 resolver bug)', () => {
+    // Report: installing Chat Input Viewer left LibAddonMenu-2.0 tracked as TeamFormation
+    expect(distrustTrackedIdentity(teamFormation, 'LibAddonMenu-2.0', libAddonMenu)).toBe(true);
+    expect(distrustTrackedIdentity(teamFormation, 'LibStub', libStub)).toBe(true);
+  });
+
+  it("keeps the bundling addon's own folder", () => {
+    expect(distrustTrackedIdentity(teamFormation, 'ProvisionsTeamFormation', teamFormation)).toBe(false);
+  });
+
+  it('keeps shared generic folders of translation packs', () => {
+    // "gamedata" resolves to another pack — not the folder's own library entry
+    expect(distrustTrackedIdentity(esoKr, 'gamedata', spanishObsolete)).toBe(false);
+  });
+
+  it('still distrusts entries that do not list the folder at all', () => {
+    expect(distrustTrackedIdentity(libAddonMenu, 'WritWorthy', writWorthy)).toBe(true);
+  });
+
+  it('trusts the tracked entry when it is the owner', () => {
+    expect(distrustTrackedIdentity(libAddonMenu, 'LibAddonMenu-2.0', libAddonMenu)).toBe(false);
+    expect(distrustTrackedIdentity(libAddonMenu, 'LibAddonMenu-2.0', undefined)).toBe(false);
   });
 });

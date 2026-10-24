@@ -1,9 +1,9 @@
 // Copyright (c) 2026 thorstendb
 // SPDX-License-Identifier: MIT
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import { AddonInfo, AddonSettingsData, CatalogAddon, SavedVarsInfo, compareVersionStrings, versionsDigitEqual, dateToVersion } from '../electron/shared/types';
-import { classifyDirOwnership, findHijackedManifestOverlay, hasOverlayStyleName } from '../electron/shared/overlays';
-import { CharDepConflict, findCharDepConflicts, requiredDepClosure } from '../electron/shared/charDeps';
+import { AddonInfo, AddonSettingsData, CatalogAddon, SavedVarsInfo, SvBallastFinding, compareVersionStrings, versionsDigitEqual, dateToVersion, releaseZipName } from '../electron/shared/types';
+import { classifyDirOwnership, distrustTrackedIdentity, findHijackedManifestOverlay, hasOverlayStyleName } from '../electron/shared/overlays';
+import { CharDepConflict, findCharDepConflicts, findUnusedAddons, requiredDepClosure } from '../electron/shared/charDeps';
 import PathBar from './components/PathBar';
 import StatusBar from './components/StatusBar';
 import TreePanel from './components/TreePanel';
@@ -18,14 +18,42 @@ import RestoreDialog from './components/RestoreDialog';
 import ImportExportDialog from './components/ImportExportDialog';
 import AboutDialog from './components/AboutDialog';
 import SettingsDialog from './components/SettingsDialog';
-import CleanupDialog, { CleanupType } from './components/CleanupDialog';
-import BackupCleanupDialog from './components/BackupCleanupDialog';
+import CleanupDialog, { CleanupSection, CleanupType } from './components/CleanupDialog';
+import BackupCleanupDialog, { formatSize } from './components/BackupCleanupDialog';
 import UpdateAllDialog, { UpdatableAddon } from './components/UpdateAllDialog';
 import HygieneDialog, { HygieneStray, HygieneDup } from './components/HygieneDialog';
 import './styles/App.css';
 
 function errMsg(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
+}
+
+/**
+ * Every game entry: top-level manifests and all nested sub-addons.  The game
+ * names a SavedVariables file exactly after its entry, so the orphan check
+ * needs all of them — a missing nested one would mark its file as orphaned.
+ */
+function gameEntryNames(list: AddonInfo[]): string[] {
+  return list.flatMap((a) => [a.folderName, ...gameEntryNames(a.subAddons)]);
+}
+
+const GAME_RUNNING_WARNING = 'ESO is running. SavedVariables are only safe to change at the character selection — '
+  + 'in game, ESO overwrites them at logout or /reloadui.';
+
+/** The SavedVariables ballast as a section of the settings cleanup dialog */
+function ballastSection(findings: SvBallastFinding[]): CleanupSection {
+  return {
+    key: 'ballast',
+    label: 'Ballast inside SavedVariables',
+    note: 'Removed from the files of installed addons — the game reads every byte at each login and /reloadui. '
+      + 'Each changed file is backed up first; Undo restores it. Master Merchant sales data is never touched.',
+    items: findings.map((f) => ({
+      id: f.id,
+      label: `${f.label} — ${formatSize(f.bytes)}`,
+      detail: `${f.count.toLocaleString()} entr${f.count === 1 ? 'y' : 'ies'} in ${f.files.length === 1 ? f.files[0] : `${f.files.length} files`} · ${f.detail}`,
+      selected: f.defaultSelected,
+    })),
+  };
 }
 
 /**
@@ -144,6 +172,9 @@ function App() {
     type: CleanupType;
     items: string[];
     savedVarItems?: string[];
+    itemDetails?: Record<string, string>;
+    extraSections?: CleanupSection[];
+    warning?: string;
   } | null>(null);
   const [backupCleanupBackups, setBackupCleanupBackups] = useState<{
     folderName: string; version: string; backupPath: string; sizeBytes: number;
@@ -395,8 +426,7 @@ function App() {
           // Same poisoned-entry validation as getCatalogMatch: a DB entry that
           // does not own this folder loses against the folder's primary owner,
           // so reconciliation rewrites the DB with the correct esouid (self-heal).
-          if (byMeta && !byMeta.directories.includes(addon.folderName)
-            && byDir && byDir.id !== byMeta.id && byDir.directories[0] === addon.folderName) {
+          if (byMeta && distrustTrackedIdentity(byMeta, addon.folderName, byDir)) {
             byMeta = undefined;
           }
 
@@ -423,51 +453,13 @@ function App() {
             if (res.created > 0 || res.updated > 0) {
               addLog(`Database reconciled: ${res.created} created, ${res.updated} updated`, 'info');
               for (const d of res.details) addLog(`  ${d}`, 'info');
-              // Re-inject updated yaamMeta into addons state so update detection
-              // uses fresh catalogVersion / localVersion values without needing a rescan.
-              const matchMap = new Map(matches.map(m => [m.folderName, m]));
+              // Adopt the entries exactly as reconciliation stored them, so update
+              // detection sees fresh anchors without a rescan — and without the
+              // renderer having to re-derive reconciliation rules (catalog version
+              // re-derived after an outside update, healed identities, …).
               setAddons(prev => prev.map(a => {
-                const m = matchMap.get(a.folderName);
-                if (!m) return a;
-                // For newly created entries (no existing yaamMeta from scan),
-                // inject a basic yaamMeta so update detection uses the DB guard
-                // instead of falling through to the raw cmp < 0 path.
-                if (!a.yaamMeta) {
-                  return {
-                    ...a,
-                    yaamMeta: {
-                      esouid: m.esouid,
-                      url: m.url,
-                      catalogName: m.name,
-                      catalogAuthor: m.author,
-                      catalogVersion: '',  // empty = never installed via YAAM
-                      localVersion: m.localVersion,
-                      installedAt: new Date().toISOString(),
-                      updatedAt: new Date().toISOString(),
-                    },
-                  };
-                }
-                // Reconciliation only updates localVersion (not catalogVersion).
-                // Only re-inject if localVersion or the healed identity changed.
-                if (a.yaamMeta.localVersion === m.localVersion && a.yaamMeta.esouid === m.esouid) return a;
-                const healed = a.yaamMeta.esouid !== m.esouid;
-                return {
-                  ...a,
-                  yaamMeta: {
-                    ...a.yaamMeta,
-                    localVersion: m.localVersion,
-                    esouid: m.esouid,
-                    // Healed identity: the old anchors described the wrong
-                    // catalog entry — mirror the DB reset done by reconcile.
-                    ...(healed ? {
-                      url: m.url,
-                      catalogName: m.name,
-                      catalogAuthor: m.author,
-                      catalogVersion: '',
-                      catalogDate: undefined,
-                    } : {}),
-                  },
-                };
+                const entry = res.entries[a.folderName];
+                return entry ? { ...a, yaamMeta: entry } : a;
               }));
             }
           }).catch(() => {});
@@ -673,10 +665,10 @@ function App() {
       //    PRIMARY directory — then fall through to the other match methods,
       //    which lets the next reconciliation heal the database.
       let byMeta = addon.yaamMeta?.esouid ? catalogById.get(addon.yaamMeta.esouid) : undefined;
-      if (byMeta && !byMeta.directories.includes(addon.folderName)) {
+      if (byMeta) {
         const dirOwner = catalogByDir.get(addon.folderName);
-        if (dirOwner && dirOwner.id !== byMeta.id && dirOwner.directories[0] === addon.folderName) {
-          console.warn(`[YAAM] Distrusting DB match for ${addon.folderName}: DB says #${byMeta.id} "${byMeta.name}" (dirs: ${byMeta.directories.join(', ')}), but #${dirOwner.id} "${dirOwner.name}" owns the folder`);
+        if (distrustTrackedIdentity(byMeta, addon.folderName, dirOwner)) {
+          console.warn(`[YAAM] Distrusting DB match for ${addon.folderName}: DB says #${byMeta.id} "${byMeta.name}" (dirs: ${byMeta.directories.join(', ')}), but #${dirOwner!.id} "${dirOwner!.name}" owns the folder`);
           byMeta = undefined;
         }
       }
@@ -972,6 +964,12 @@ function App() {
     [addons, addonSettings, addonMap, effectiveCharSetting]
   );
 
+  /** Top-level folders switched off for every character (pending changes included) */
+  const unusedAddons = useMemo(
+    () => addonSettings ? findUnusedAddons(addons, Object.keys(addonSettings.characters), effectiveCharSetting) : [],
+    [addons, addonSettings, effectiveCharSetting]
+  );
+
   /** Fix a conflict by switching the missing dependencies on for that character */
   const handleEnableDepsForChar = useCallback(
     (character: string, deps: string[]) => {
@@ -1006,6 +1004,9 @@ function App() {
       for (const [key, enabled] of pendingCharSettings) {
         const [character, addonName] = key.split('\0');
         changes.push({ character, addonName, enabled });
+      }
+      if (await window.electronAPI.isGameRunning()) {
+        addLog('ESO is running — in game it may write AddOnSettings.txt again and drop these changes. Safe at the character selection or with the game closed.', 'warn');
       }
       const res = await window.electronAPI.batchSetAddonSettings(addonPath, changes);
       if (res.error) {
@@ -1801,6 +1802,85 @@ function App() {
     return [...hold];
   }, [addons, getCatalogAddon, catalogChangedIds, updatableCatalogIds]);
 
+  /** Catalog IDs of addons with local edits — never updated without the user's say */
+  const locallyModifiedIds = useMemo(() => {
+    const ids = new Set<string>();
+    for (const addon of addons) {
+      const id = addon.modifiedFiles?.length ? getCatalogAddon(addon)?.id : undefined;
+      if (id) ids.add(id);
+    }
+    return ids;
+  }, [addons, getCatalogAddon]);
+
+  // ── Settle folders with the release ZIP YAAM already has (no network) ──
+  // Untracked folders whose version strings cannot be compared (ImpressiveStats:
+  // manifest "1157000" vs catalog "1.5.7") are anchored when byte-identical to
+  // the cached current release.  Tracked folders installed before file stamps
+  // existed get their stamps, so local edits become visible.  Each folder /
+  // release / mode is tried once per session.
+  const adoptAttemptedRef = useRef(new Set<string>());
+  useEffect(() => {
+    if (!addonPath || loading || updatingAll || addons.length === 0 || catalogAddons.length === 0) return;
+    const requests: Parameters<typeof window.electronAPI.adoptCachedRelease>[1] = [];
+    for (const addon of addons) {
+      const match = getCatalogMatch(addon);
+      if (!match || match.layered) continue;
+      const ca = match.catalogAddon;
+      const meta = addon.yaamMeta;
+      let mode: 'anchor' | 'stamp';
+      if (!meta?.catalogVersion) {
+        if (match.ambiguous) continue;
+        mode = 'anchor';
+      } else if (!meta.fileStamps && meta.esouid === ca.id && meta.catalogVersion === ca.version
+        && (!ca.date || meta.catalogDate === ca.date) && (!meta.localVersion || addon.version === meta.localVersion)) {
+        mode = 'stamp';
+      } else {
+        continue;
+      }
+      const key = [addonPath, addon.folderName, mode, ca.id, ca.version].join('\0');
+      if (adoptAttemptedRef.current.has(key)) continue;
+      adoptAttemptedRef.current.add(key);
+      requests.push({
+        folderName: addon.folderName,
+        zipName: releaseZipName(ca),
+        notBefore: ca.date,
+        mode,
+        baseline: mode === 'anchor' ? {
+          folderName: addon.folderName, esouid: ca.id, url: ca.infoUrl, name: ca.name, author: ca.author,
+          catalogVersion: ca.version, catalogDate: ca.date || undefined, localVersion: addon.version,
+        } : undefined,
+      });
+    }
+    if (requests.length === 0) return;
+    const catalogIdOf = new Map(addons.map((a) => [a.folderName, getCatalogMatch(a)?.catalogAddon.id]));
+    (async () => {
+      let results = await window.electronAPI.adoptCachedRelease(addonPath, requests);
+      // Releases YAAM never downloaded (installed by another manager): fetch
+      // the current one once — the catalog serves only the current release,
+      // so this is the last chance to fingerprint what is installed
+      const uncached = requests.filter((r) => results.some((x) => x.folderName === r.folderName && x.outcome === 'no-cache'));
+      const fetched: typeof requests = [];
+      for (const r of uncached) {
+        const id = catalogIdOf.get(r.folderName);
+        if (id && await window.electronAPI.cacheRelease(addonPath, id)) fetched.push(r);
+      }
+      if (fetched.length > 0) {
+        const retry = await window.electronAPI.adoptCachedRelease(addonPath, fetched);
+        results = [...results.filter((x) => !fetched.some((r) => r.folderName === x.folderName)), ...retry];
+      }
+      const anchored = results.filter((r) => r.outcome === 'anchored').map((r) => r.folderName);
+      const stamped = results.filter((r) => r.outcome === 'stamped');
+      const edited = stamped.filter((r) => r.modified);
+      if (anchored.length > 0) {
+        addLog(`Verified against the release and now tracked: ${anchored.join(', ')}`, 'success');
+      }
+      if (edited.length > 0) {
+        addLog(`Local changes found (an update would overwrite them): ${edited.map((r) => `${r.folderName} (${r.modified} file(s))`).join(', ')}`, 'warn');
+      }
+      if (anchored.length > 0 || stamped.length > 0) scanPath(addonPath);
+    })().catch(() => { /* best effort — detection simply stays as it was */ });
+  }, [addonPath, loading, updatingAll, addons, catalogAddons.length, getCatalogMatch, addLog, scanPath]);
+
   const updatableFolders = useMemo(() => {
     const set = new Set<string>();
     for (const addon of addons) {
@@ -2202,22 +2282,26 @@ function App() {
     }
   }, [addonPath, addLog, libraries, unreferencedLibs, skipCleanupConfirm, scanPath]);
 
-  const handleCleanupLibsConfirm = useCallback(async (selectedItems: string[], selectedOptional?: string[]) => {
-    setCleanupDialog(null);
-    const all = [...selectedItems, ...(selectedOptional || [])];
-    if (!addonPath || all.length === 0) return;
+  /**
+   * Back up top-level folders, move them to Removed/ and log an undo action.
+   * `label` names them in the log ("unreferenced libraries", "unused addons").
+   * Returns the folders actually moved.
+   */
+  const moveFoldersToRemoved = useCallback(async (folderNames: string[], label: string): Promise<string[]> => {
+    if (!addonPath || folderNames.length === 0) return [];
     setLoading(true);
-    addLog(`Removing ${all.length} unreferenced libraries...`);
+    addLog(`Removing ${folderNames.length} ${label}...`);
     try {
       const backupPaths: { folder: string; path: string }[] = [];
-      for (const folderName of all) {
-        const lib = libraries.find(l => l.folderName === folderName);
-        if (lib) {
-          const bp = await window.electronAPI.backupAddonFolder(addonPath, folderName, lib.version);
+      for (const folderName of folderNames) {
+        const addon = addons.find(a => a.folderName === folderName);
+        if (addon) {
+          const bp = await window.electronAPI.backupAddonFolder(addonPath, folderName, addon.version);
           if (bp) backupPaths.push({ folder: folderName, path: bp });
         }
       }
-      const result = await window.electronAPI.cleanupLibsSelected(addonPath, all);
+      // Moves any top-level folder to Removed/ — not limited to libraries
+      const result = await window.electronAPI.cleanupLibsSelected(addonPath, folderNames);
       setAddons(result.addons);
       if (result.moved.length > 0) {
         const revertAction = backupPaths.length > 0 ? {
@@ -2230,7 +2314,7 @@ function App() {
                 if (ok) restored++;
               }
               if (restored > 0) {
-                addLog(`Restored ${restored} lib(s) from backup`, 'success');
+                addLog(`Restored ${restored} folder(s) from backup`, 'success');
                 scanPath(addonPath);
               } else {
                 addLog('Restore failed: no backups found', 'error');
@@ -2238,14 +2322,44 @@ function App() {
             } catch (e: unknown) { addLog(`Restore failed: ${errMsg(e)}`, 'error'); }
           },
         } : undefined;
-        setLogs((prev) => [...prev, { timestamp: new Date(), message: `Cleanup: moved ${result.moved.length} libs to Removed/: ${result.moved.join(', ')}`, level: 'success' as const, action: revertAction }]);
+        setLogs((prev) => [...prev, { timestamp: new Date(), message: `Cleanup: moved ${result.moved.length} ${label} to Removed/: ${result.moved.join(', ')}`, level: 'success' as const, action: revertAction }]);
       }
+      return result.moved;
     } catch (err: unknown) {
       addLog(`Cleanup failed: ${errMsg(err)}`, 'error');
+      return [];
     } finally {
       setLoading(false);
     }
-  }, [addonPath, addLog, libraries, scanPath]);
+  }, [addonPath, addons, addLog, scanPath]);
+
+  const handleCleanupLibsConfirm = useCallback(async (selectedItems: string[], selectedOptional?: string[]) => {
+    setCleanupDialog(null);
+    await moveFoldersToRemoved([...selectedItems, ...(selectedOptional || [])], 'unreferenced libraries');
+  }, [moveFoldersToRemoved]);
+
+  const handleCleanupUnused = useCallback(() => {
+    if (unusedAddons.length === 0) {
+      addLog('Unused addons: every addon is enabled for at least one character', 'info');
+      return;
+    }
+    const itemDetails: Record<string, string> = {};
+    for (const name of unusedAddons) {
+      const addon = addons.find(a => a.folderName === name);
+      if (!addon) continue;
+      const parts = [addon.title !== name ? addon.title : '', addon.version ? `v${addon.version}` : '', addon.isLibrary ? '(library)' : ''];
+      itemDetails[name] = parts.filter(Boolean).join(' ');
+    }
+    setCleanupDialog({ type: 'unused', items: unusedAddons, itemDetails });
+  }, [unusedAddons, addons, addLog]);
+
+  const handleCleanupUnusedConfirm = useCallback(async (selectedItems: string[]) => {
+    setCleanupDialog(null);
+    const moved = await moveFoldersToRemoved(selectedItems, 'unused addons');
+    if (moved.length > 0) {
+      addLog('Their AddOnSettings.txt entries and SavedVariables were kept — 🗑️ removes them once you no longer need them.', 'info');
+    }
+  }, [moveFoldersToRemoved, addLog]);
 
   const handleUpdateAll = useCallback(() => {
     if (!addonPath) return;
@@ -2273,6 +2387,7 @@ function App() {
             catalogId: match.catalogAddon.id,
             ambiguous: match.ambiguous,
             missingFiles: addon.missingFiles,
+            modifiedFiles: addon.modifiedFiles,
           });
         }
       }
@@ -2569,9 +2684,15 @@ function App() {
     if (!addonPath || loading || updatingAll) return;
     if (addons.length === 0 || catalogAddons.length === 0 || !catalogDiffReady) return;
     autoUpdateDoneRef.current = true;
-    const ids = [...updatableCatalogIds];
+    // Local edits are the user's own fixes — an unattended update must not
+    // overwrite them; Update All offers them unselected instead
+    const ids = [...updatableCatalogIds].filter((id) => !locallyModifiedIds.has(id));
+    const keptLocal = [...updatableCatalogIds].filter((id) => locallyModifiedIds.has(id)).map((id) => catalogById.get(id)?.name ?? id);
+    if (keptLocal.length > 0) {
+      addLog(`Auto-update: skipped ${keptLocal.join(', ')} — local changes would be overwritten (Update All lists them)`, 'warn');
+    }
     if (ids.length === 0) {
-      addLog('Auto-update: everything is up to date', 'info');
+      if (keptLocal.length === 0) addLog('Auto-update: everything is up to date', 'info');
       return;
     }
     const skipped = replacementCandidates.size + mightUpdateCount + layeredItems.length;
@@ -2582,21 +2703,23 @@ function App() {
     handleUpdateAllConfirm(ids);
   }, [autoUpdateOnStart, addonPath, loading, updatingAll, addons.length, catalogAddons.length,
       catalogDiffReady, updatableCatalogIds, replacementCandidates, mightUpdateCount, layeredItems,
-      addLog, handleUpdateAllConfirm]);
+      locallyModifiedIds, catalogById, addLog, handleUpdateAllConfirm]);
 
   const handleCleanupSettings = useCallback(async () => {
     if (!addonPath || addons.length === 0) return;
-    const existingNames = addons.flatMap((a) => [a.folderName, ...a.subAddons.map(s => s.folderName)]);
+    const existingNames = gameEntryNames(addons);
+    const gameRunning = await window.electronAPI.isGameRunning();
     if (skipCleanupConfirm) {
       // Direct cleanup without preview
       setLoading(true);
       addLog('Cleaning up settings and SavedVariables...');
+      if (gameRunning) addLog(GAME_RUNNING_WARNING, 'warn');
       try {
         const result = await window.electronAPI.cleanupSettings(addonPath, existingNames);
         if (result.error) {
           addLog(`Cleanup settings error: ${result.error}`, 'error');
         } else {
-          const totalRemoved = result.removedFromSettings.length + result.removedSavedVars.length;
+          const totalRemoved = result.removedFromSettings.length + result.removedSavedVars.length + result.trimmedSavedVars.length;
           if (totalRemoved === 0) {
             addLog('Settings cleanup: nothing to clean', 'info');
           } else {
@@ -2605,6 +2728,10 @@ function App() {
             }
             if (result.removedSavedVars.length > 0) {
               addLog(`Removed ${result.removedSavedVars.length} orphaned SavedVariables (backed up): ${result.removedSavedVars.join(', ')}`, 'success');
+            }
+            if (result.trimmedSavedVars.length > 0) {
+              const bytes = result.trimmedSavedVars.reduce((sum, t) => sum + t.bytes, 0);
+              addLog(`Removed ${formatSize(bytes)} of ballast from SavedVariables (backed up): ${result.trimmedSavedVars.map((t) => t.file).join(', ')}`, 'success');
             }
             addCleanupUndoEntry(result.backupPath, result.svBackupDir, totalRemoved);
           }
@@ -2621,11 +2748,17 @@ function App() {
     // Show preview dialog
     try {
       const preview = await window.electronAPI.previewCleanupSettings(addonPath, existingNames);
-      if (preview.orphanedSettings.length === 0 && preview.orphanedSavedVars.length === 0) {
+      if (preview.orphanedSettings.length === 0 && preview.orphanedSavedVars.length === 0 && preview.ballast.length === 0) {
         addLog('Settings cleanup: nothing to clean', 'info');
         return;
       }
-      setCleanupDialog({ type: 'settings', items: preview.orphanedSettings, savedVarItems: preview.orphanedSavedVars });
+      setCleanupDialog({
+        type: 'settings',
+        items: preview.orphanedSettings,
+        savedVarItems: preview.orphanedSavedVars,
+        extraSections: [ballastSection(preview.ballast)],
+        warning: gameRunning ? GAME_RUNNING_WARNING : undefined,
+      });
     } catch (err: unknown) {
       addLog(`Cleanup preview failed: ${errMsg(err)}`, 'error');
     }
@@ -2662,18 +2795,18 @@ function App() {
     ]);
   }, [addonPath, addLog]);
 
-  const handleCleanupSettingsConfirm = useCallback(async (selectedSettings: string[], selectedSvItems?: string[]) => {
+  const handleCleanupSettingsConfirm = useCallback(async (selectedSettings: string[], selectedSvItems?: string[], selectedBallast: string[] = []) => {
     setCleanupDialog(null);
     if (!addonPath) return;
-    const existingNames = addons.flatMap((a) => [a.folderName, ...a.subAddons.map(s => s.folderName)]);
+    const existingNames = gameEntryNames(addons);
     setLoading(true);
     addLog('Cleaning up selected settings and SavedVariables...');
     try {
-      const result = await window.electronAPI.cleanupSettingsSelected(addonPath, existingNames, selectedSettings, selectedSvItems || []);
+      const result = await window.electronAPI.cleanupSettingsSelected(addonPath, existingNames, selectedSettings, selectedSvItems || [], selectedBallast);
       if (result.error) {
         addLog(`Cleanup settings error: ${result.error}`, 'error');
       } else {
-        const totalRemoved = result.removedFromSettings.length + result.removedSavedVars.length;
+        const totalRemoved = result.removedFromSettings.length + result.removedSavedVars.length + result.trimmedSavedVars.length;
         if (totalRemoved === 0) {
           addLog('Settings cleanup: nothing removed', 'info');
         } else {
@@ -2682,6 +2815,10 @@ function App() {
           }
           if (result.removedSavedVars.length > 0) {
             addLog(`Removed ${result.removedSavedVars.length} orphaned SavedVariables (backed up): ${result.removedSavedVars.join(', ')}`, 'success');
+          }
+          if (result.trimmedSavedVars.length > 0) {
+            const bytes = result.trimmedSavedVars.reduce((sum, t) => sum + t.bytes, 0);
+            addLog(`Removed ${formatSize(bytes)} of ballast from SavedVariables (backed up): ${result.trimmedSavedVars.map((t) => t.file).join(', ')}`, 'success');
           }
           addCleanupUndoEntry(result.backupPath, result.svBackupDir, totalRemoved);
         }
@@ -2935,6 +3072,9 @@ function App() {
             addLog(`Missing dependencies: ${result.missingDeps.join(', ')}`, 'warn');
           }
           logInstallCleanup(result);
+          if (existingAddon?.modifiedFiles?.length) {
+            addLog(`Overwrote ${existingAddon.modifiedFiles.length} locally changed file(s) in ${existingAddon.folderName} (${existingAddon.modifiedFiles.slice(0, 3).join(', ')}${existingAddon.modifiedFiles.length > 3 ? ', …' : ''}) — Undo restores them`, 'warn');
+          }
           // Remove from catalog diff — this addon is now up to date
           setCatalogChangedIds(prev => {
             if (!prev.has(catalogAddon.id)) return prev;
@@ -3271,6 +3411,7 @@ function App() {
         onCleanupSettings={handleCleanupSettings}
         onCleanupDownloads={handleCleanupDownloads}
         onCleanupBackups={handleCleanupBackups}
+        onCleanupUnused={handleCleanupUnused}
         onFolderHygiene={handleFolderHygiene}
         onUpdateAll={handleUpdateAll}
         onCommitBaseline={handleCommitBaselineClick}
@@ -3281,6 +3422,7 @@ function App() {
         loading={loading}
         hasAddons={addons.length > 0}
         unreferencedCount={unreferencedLibs.size}
+        unusedCount={unusedAddons.length}
         updateCount={updateCount}
         mightUpdateCount={mightUpdateCount}
         replacementCount={replacementCandidates.size}
@@ -3581,10 +3723,14 @@ function App() {
           type={cleanupDialog.type}
           items={cleanupDialog.items}
           savedVarItems={cleanupDialog.savedVarItems}
-          onConfirm={(items, svItems) => {
+          itemDetails={cleanupDialog.itemDetails}
+          extraSections={cleanupDialog.extraSections}
+          warning={cleanupDialog.warning}
+          onConfirm={(items, svItems, extra) => {
             if (cleanupDialog.type === 'libs') handleCleanupLibsConfirm(items, svItems);
-            else if (cleanupDialog.type === 'settings') handleCleanupSettingsConfirm(items, svItems);
+            else if (cleanupDialog.type === 'settings') handleCleanupSettingsConfirm(items, svItems, extra?.ballast);
             else if (cleanupDialog.type === 'downloads') handleCleanupDownloadsConfirm(items);
+            else if (cleanupDialog.type === 'unused') handleCleanupUnusedConfirm(items);
           }}
           onCancel={() => setCleanupDialog(null)}
         />

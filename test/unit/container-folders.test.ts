@@ -89,9 +89,11 @@ describe('container folders without their own manifest', () => {
     });
     const svDir = path.join(addons, '..', 'SavedVariables');
     fs.mkdirSync(svDir, { recursive: true });
-    fs.writeFileSync(path.join(svDir, 'ArkadiusTradeTools.lua'), '-- sales history\n');
-    fs.writeFileSync(path.join(svDir, 'ArkadiusTradeToolsSalesData.lua'), '-- sales data\n');
-    fs.writeFileSync(path.join(svDir, 'LongGoneAddon.lua'), '-- really orphaned\n');
+    // The game names the file after the addon entry and stores the declared
+    // variables inside it (ArkadiusTradeToolsSalesData → ArkadiusTradeToolsSales.lua)
+    fs.writeFileSync(path.join(svDir, 'ArkadiusTradeTools.lua'), 'ArkadiusTradeTools =\r\n{\r\n}\r\n');
+    fs.writeFileSync(path.join(svDir, 'ArkadiusTradeToolsSales.lua'), 'ArkadiusTradeToolsSalesData =\r\n{\r\n}\r\n');
+    fs.writeFileSync(path.join(svDir, 'LongGoneAddon.lua'), 'LongGoneAddon_SV =\r\n{\r\n}\r\n');
 
     // Exactly what App.tsx hands to the cleanup: folders plus their sub-addons
     const existing = scanAddonsFolder(addons)

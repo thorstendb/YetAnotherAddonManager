@@ -410,6 +410,14 @@ const AddonTreeItem: React.FC<AddonTreeItemProps> = ({
                 'Fix it under Characters.'].join('\n')}
             > ⛓️‍💥</span>
           )}
+          {addon.modifiedFiles && addon.modifiedFiles.length > 0 && (
+            <span
+              className="tree-overlay-badge"
+              title={[`${addon.modifiedFiles.length} file(s) changed locally since the install — an update overwrites them (a backup is kept):`,
+                ...addon.modifiedFiles.slice(0, 10),
+                ...(addon.modifiedFiles.length > 10 ? ['…'] : [])].join('\n')}
+            > ✏️</span>
+          )}
           {addon.missingFiles && addon.missingFiles.length > 0 && (
             <span
               className="tree-overlay-badge"

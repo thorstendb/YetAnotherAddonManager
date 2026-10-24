@@ -1,8 +1,9 @@
 // Copyright (c) 2026 thorstendb
 // SPDX-License-Identifier: MIT
+import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
-import { AddonInfo, DependencyRef, ColorSegment, YaamAddonEntry, compareVersionStrings } from './shared/types';
+import { AddonInfo, DependencyRef, ColorSegment, FileStamp, YaamAddonEntry, compareVersionStrings, versionsDigitEqual } from './shared/types';
 import { loadDatabase, saveDatabase, YaamDatabase, readMarkerFile, writeMarkerFile, backupTrackingState } from './yaamDatabase';
 import { canEnterDir } from './shared/fsWalk';
 import { writeJsonAtomic } from './shared/atomicWrite';
@@ -484,6 +485,7 @@ export function scanAddonsFolder(addonsPath: string): AddonInfo[] {
         updatedAt: marker.updatedAt,
         overlays: marker.overlays,
         installedFiles: marker.installedFiles,
+        fileStamps: marker.fileStamps,
       };
       db.addons[addon.folderName] = entry;
       dbChanged = true;
@@ -519,18 +521,33 @@ export function scanAddonsFolder(addonsPath: string): AddonInfo[] {
       entry.catalogDate = marker.catalogDate;
       if (marker.localVersion) entry.localVersion = marker.localVersion;
       if (marker.overlays) entry.overlays = marker.overlays;
-      if (marker.installedFiles) entry.installedFiles = marker.installedFiles;
+      // The file list and stamps describe the marker's release, not the DB's —
+      // a marker without them means "unknown", never "the DB's old list"
+      entry.installedFiles = marker.installedFiles;
+      entry.fileStamps = marker.fileStamps;
       db.addons[addon.folderName] = entry;
       dbChanged = true;
     } else if (entry?.esouid && entry.catalogVersion && !marker) {
-      // DB has a tracked version but no marker file on disk.
-      // The addon folder was likely replaced (e.g. restored from a backup
-      // taken before YAAM tracking).  Clear catalogVersion so the addon
-      // falls to Tier 3 (best-effort) update detection.
-      entry.catalogVersion = '';
-      entry.catalogDate = undefined;
-      db.addons[addon.folderName] = entry;
-      dbChanged = true;
+      // DB has a tracked version but no marker file on disk: something other
+      // than YAAM rewrote the folder.  Two very different cases:
+      //  - the manifest still equals the install anchor and no installed file
+      //    is missing → the files are the release YAAM installed, only the
+      //    marker was lost (another manager re-extracting the same release
+      //    wiped .yaam.json — seen with ImpressiveStats).  Restore the marker.
+      //  - anything else (e.g. a backup taken before YAAM tracking) → clear
+      //    catalogVersion so the addon falls to Tier 3 best-effort detection.
+      const sameRelease = !!entry.localVersion && addon.version === entry.localVersion
+        && (!entry.installedFiles?.length
+          || compareWithInstallManifest(addonsPath, addon.folderName, entry.installedFiles).missingFiles.length === 0);
+      if (sameRelease) {
+        console.log(`[YAAM] Restored lost marker of ${addon.folderName} (manifest still "${addon.version}", files complete)`);
+        writeMarkerFile(addonsPath, addon.folderName, entry);
+      } else {
+        entry.catalogVersion = '';
+        entry.catalogDate = undefined;
+        db.addons[addon.folderName] = entry;
+        dbChanged = true;
+      }
     } else if (entry?.esouid && !entry.catalogVersion && !marker) {
       // DB entry exists (e.g. from reconciliation) but has no catalogVersion
       // and no marker.  Try to backfill from Minion data so Tier 2 detection
@@ -562,6 +579,8 @@ export function scanAddonsFolder(addonsPath: string): AddonInfo[] {
     // every field must be reconstructable from the folders alone.
     if (entry?.esouid && marker && marker.installedFiles === undefined && entry.installedFiles?.length) {
       writeMarkerFile(addonsPath, addon.folderName, entry);
+    } else if (entry?.esouid && marker && marker.fileStamps === undefined && entry.fileStamps && Object.keys(entry.fileStamps).length) {
+      writeMarkerFile(addonsPath, addon.folderName, entry);
     }
 
     if (entry?.esouid) {
@@ -572,13 +591,19 @@ export function scanAddonsFolder(addonsPath: string): AddonInfo[] {
     // manifest no longer matches the install anchor: then the folder was
     // replaced outside YAAM and the list describes a release that is gone.
     if (entry?.installedFiles) {
-      const { runtimeFiles, missingFiles } = compareWithInstallManifest(addonsPath, addon.folderName, entry.installedFiles);
+      // Files a tracked overlay (language patch) wrote are expected to differ
+      const overlayFiles = new Set((entry.overlays ?? []).flatMap((o) => o.installedFiles ?? []));
+      const { runtimeFiles, missingFiles, modifiedFiles } =
+        compareWithInstallManifest(addonsPath, addon.folderName, entry.installedFiles, entry.fileStamps, overlayFiles);
       if (runtimeFiles.length > 0) {
         addon.runtimeFiles = runtimeFiles;
       }
       const filesUnchanged = !entry.localVersion || addon.version === entry.localVersion;
       if (missingFiles.length > 0 && filesUnchanged) {
         addon.missingFiles = missingFiles;
+      }
+      if (modifiedFiles.length > 0 && filesUnchanged) {
+        addon.modifiedFiles = modifiedFiles;
       }
     }
   }
@@ -693,14 +718,21 @@ function walkAddonFolder(
  *  - missingFiles: part of the ZIP but gone — e.g. an embedded library copy
  *    another manager "deduplicated" away.  The version still reads current,
  *    so without this check nothing would ever offer to repair the folder.
+ *  - modifiedFiles: present, but no longer the content the release shipped —
+ *    a user's own fix an update would silently overwrite.  Only checked for
+ *    files with a stamp; size+mtime gate the hash, so an unchanged folder is
+ *    never read (cloud placeholders stay offline).
+ * `ignore` holds files a tracked overlay legitimately replaced.
  */
 export function compareWithInstallManifest(
   addonsPath: string,
   folderName: string,
-  installedFiles: string[]
-): { runtimeFiles: string[]; missingFiles: string[] } {
+  installedFiles: string[],
+  fileStamps?: Record<string, FileStamp>,
+  ignore?: Set<string>
+): { runtimeFiles: string[]; missingFiles: string[]; modifiedFiles: string[] } {
   const folderPath = path.join(addonsPath, folderName);
-  if (!fs.existsSync(folderPath)) return { runtimeFiles: [], missingFiles: [] };
+  if (!fs.existsSync(folderPath)) return { runtimeFiles: [], missingFiles: [], modifiedFiles: [] };
   const installed = installedFiles.map(f => f.replace(/\\/g, '/'));
   const installedSet = new Set(installed);
   const actualFiles = walkAddonFolder(folderPath);
@@ -710,7 +742,24 @@ export function compareWithInstallManifest(
   // existsSync double-check: the walk is capped and compares case-sensitively,
   // while Windows and macOS file systems usually are not
   const missingFiles = installed.filter(f => !actualSet.has(f) && !fs.existsSync(path.join(folderPath, f)));
-  return { runtimeFiles, missingFiles };
+  const missingSet = new Set(missingFiles);
+  const modifiedFiles: string[] = [];
+  for (const f of fileStamps ? installed : []) {
+    const stamp = fileStamps![f];
+    if (!stamp || missingSet.has(f) || ignore?.has(f)) continue;
+    const p = path.join(folderPath, f);
+    try {
+      const st = fs.statSync(p);
+      if (st.size === stamp.size && Math.round(st.mtimeMs) === stamp.mtime) continue;
+      if (st.size !== stamp.size || md5OfFile(p) !== stamp.md5) modifiedFiles.push(f);
+    } catch { /* unreadable right now — not evidence of a change */ }
+  }
+  return { runtimeFiles, missingFiles, modifiedFiles };
+}
+
+/** MD5 of a file's content (the same digest the catalog uses for its ZIPs) */
+export function md5OfFile(p: string): string {
+  return crypto.createHash('md5').update(fs.readFileSync(p)).digest('hex');
 }
 
 /**
@@ -742,6 +791,9 @@ export interface ReconcileResult {
   created: number;
   updated: number;
   details: string[];
+  /** The created/updated entries as stored — the renderer adopts them as-is
+   *  instead of re-deriving reconciliation rules on its side */
+  entries: Record<string, YaamAddonEntry>;
 }
 
 /** Match entry sent from the renderer for reconciliation */
@@ -771,7 +823,7 @@ export function reconcileYaamMetadata(
   addonsPath: string,
   matches: ReconcileMatch[]
 ): ReconcileResult {
-  const result: ReconcileResult = { created: 0, updated: 0, details: [] };
+  const result: ReconcileResult = { created: 0, updated: 0, details: [], entries: {} };
   const now = new Date().toISOString();
   const db = loadDatabase(addonsPath);
   let changed = false;
@@ -800,6 +852,7 @@ export function reconcileYaamMetadata(
       };
       changed = true;
       result.created++;
+      result.entries[m.folderName] = db.addons[m.folderName];
       result.details.push(`Created DB entry for ${m.folderName} → ${m.name} (#${m.esouid})`);
     } else {
       // Existing entry — check if it needs updating.
@@ -823,17 +876,38 @@ export function reconcileYaamMetadata(
       if (existing.catalogName !== m.name) changes.push(`name: ${existing.catalogName}→${m.name}`);
       if (existing.localVersion !== m.localVersion) changes.push(`localVer: ${existing.localVersion}→${m.localVersion}`);
 
+      // Install-time anchors are preserved — UNLESS they no longer describe
+      // what is on disk:
+      //  - identity changed (healed poisoned entry): they described the WRONG
+      //    catalog entry → clear, best-effort detection takes over.
+      //  - manifest moved away from the anchor: the files were replaced
+      //    outside YAAM (Minion, manual copy).  The recorded catalog version
+      //    is the OLD release; keeping it while the anchor follows the new
+      //    manifest made Tier 2 trust it again and offer an "update" Minion
+      //    had already installed.  Re-derive it: manifest equals the CURRENT
+      //    catalog version → the files are that release; otherwise unknown
+      //    ('' → best-effort, and the cached-release pass can re-anchor it
+      //    byte-exactly).
+      const filesChangedOutside = !idChanged && !!existing.localVersion && existing.localVersion !== m.localVersion;
+      let catalogVersion = idChanged ? '' : existing.catalogVersion;
+      let catalogDate = idChanged ? undefined : existing.catalogDate;
+      if (filesChangedOutside) {
+        const isCurrent = !!m.localVersion
+          && (m.localVersion.trim() === m.version.trim() || versionsDigitEqual(m.localVersion, m.version));
+        catalogVersion = isCurrent ? m.version : '';
+        catalogDate = isCurrent ? (m.catalogDate || undefined) : undefined;
+        if (catalogVersion !== existing.catalogVersion) {
+          changes.push(`catalogVer: ${existing.catalogVersion || '—'}→${catalogVersion || '— (unknown, files changed outside YAAM)'}`);
+        }
+      }
+
       db.addons[m.folderName] = {
         esouid: m.esouid,
         url: m.url,
         catalogName: m.name,
         catalogAuthor: m.author,
-        // Preserve install-time anchors — UNLESS the identity changed (healed
-        // poisoned entry): then they described the WRONG catalog entry and
-        // must be cleared so the addon falls back to best-effort detection
-        // instead of comparing against a foreign version history.
-        catalogVersion: idChanged ? '' : existing.catalogVersion,
-        catalogDate: idChanged ? undefined : existing.catalogDate,
+        catalogVersion,
+        catalogDate,
         localVersion: m.localVersion,
         installedAt: existing.installedAt,
         // Only bump updatedAt when the local addon files actually changed
@@ -847,16 +921,23 @@ export function reconcileYaamMetadata(
         // that is no longer on disk — keeping it would report that release's
         // files as "missing" forever.
         installedFiles: idChanged || existing.localVersion !== m.localVersion ? undefined : existing.installedFiles,
+        fileStamps: idChanged || existing.localVersion !== m.localVersion ? undefined : existing.fileStamps,
+        // Language patches live in the folder, not in the catalog identity —
+        // dropping them here lost overlay tracking on any metadata change
+        overlays: existing.overlays,
       };
       // Keep an existing .yaam.json marker in sync — a stale marker with the
-      // old esouid (or the old file list) would otherwise re-poison the
-      // healed DB entry the next time the DB is rebuilt from the markers.
+      // old esouid, file list or catalog version would otherwise re-poison the
+      // entry: the scanner treats a marker that disagrees with the DB as the
+      // ground truth and copies it back.
       const filesDropped = !!existing.installedFiles && !db.addons[m.folderName].installedFiles;
-      if ((idChanged || filesDropped) && readMarkerFile(addonsPath, m.folderName)) {
+      const anchorMoved = catalogVersion !== existing.catalogVersion;
+      if ((idChanged || filesDropped || anchorMoved) && readMarkerFile(addonsPath, m.folderName)) {
         writeMarkerFile(addonsPath, m.folderName, db.addons[m.folderName]);
       }
       changed = true;
       result.updated++;
+      result.entries[m.folderName] = db.addons[m.folderName];
       result.details.push(`Updated ${m.folderName}: ${changes.join(', ')}`);
     }
   }
@@ -880,6 +961,10 @@ export interface BaselineEntry {
   localVersion: string;
   /** Detected-but-untracked overlays (language patches) to anchor alongside */
   overlays?: { esouid: string; catalogName: string; catalogVersion: string; catalogDate?: number }[];
+  /** File list + stamps of the release, when the anchor was VERIFIED against
+   *  its ZIP (see adoptCachedRelease) — otherwise anchoring knows no files */
+  installedFiles?: string[];
+  fileStamps?: Record<string, FileStamp>;
 }
 
 /**
@@ -934,9 +1019,10 @@ export function commitBaseline(
       // folder updated outside YAAM kept the old release's list — e.g. MapPins
       // moved its textures into a subfolder and was then reported as missing
       // 13 files.)
-      installedFiles: existing?.catalogVersion === e.catalogVersion && existing?.localVersion === e.localVersion
-        ? existing.installedFiles
-        : undefined,
+      installedFiles: e.installedFiles
+        ?? (existing?.catalogVersion === e.catalogVersion && existing?.localVersion === e.localVersion ? existing.installedFiles : undefined),
+      fileStamps: e.fileStamps
+        ?? (existing?.catalogVersion === e.catalogVersion && existing?.localVersion === e.localVersion ? existing.fileStamps : undefined),
       overlays: overlays.length > 0 ? overlays : undefined,
     };
     writeMarkerFile(addonsPath, e.folderName, db.addons[e.folderName]);

@@ -8,10 +8,12 @@ import { IPC_CHANNELS } from './shared/types';
 import { loadConfig, saveConfig } from './configStore';
 import { cleanupUnusedLibraries, deleteAddon, deleteAddonAndExclusiveRefs, previewUnusedLibraries, cleanupSelectedLibraries, reconcileYaamMetadata, ReconcileMatch, commitBaseline, BaselineEntry, previewFolderHygiene, applyFolderHygiene, undoFolderHygiene, HygieneUndoInfo, listRemovedEntries, restoreRemovedEntry } from './addonScanner';
 import { callFs, shutdownFsWorker } from './fsWorkerHost';
+import type { AdoptRequest } from './addonFiles';
 import { detectCloudProvider } from './cloudDetect';
+import { isGameRunning } from './gameProcess';
 import { TIMEOUTS } from './shared/timeouts';
 import { buildDependencyResolver } from './shared/overlays';
-import { fetchAddonCatalog, fetchAddonDetails, fetchCategories, installAddon, installWithDependencies, updateCatalogSnapshot, commitCatalogSnapshot } from './addonCatalogApi';
+import { fetchAddonCatalog, fetchAddonDetails, fetchCategories, fetchRelease, installAddon, installWithDependencies, updateCatalogSnapshot, commitCatalogSnapshot } from './addonCatalogApi';
 import { setAddonSetting, batchSetAddonSettings, getSavedVarsInfo, deleteSavedVars, cleanupSettings, undoCleanupSettings, listSavedVarsBackups, restoreSavedVarsFile, exportProfile, importProfile, exportProfileAsZip, previewProfileZip, importProfileFromZip, ExportData, previewCleanupSettings, cleanupSettingsSelected } from './settingsManager';
 import { saveSnapshotIfChanged, listSnapshots, listAddonBackups, restoreAddonFromBackup, backupAddonFolder, deleteAddonBackups, SnapshotAddon } from './snapshotManager';
 import { migrateFromFolderFiles, getAllEntries, getYaamDir, cleanupMarkerFiles, restoreTrackingState } from './yaamDatabase';
@@ -161,7 +163,7 @@ function createWindow() {
     height,
     minWidth: 900,
     minHeight: 600,
-    title: 'YAAM',
+    title: `YAAM v${app.getVersion()}`,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
@@ -170,6 +172,14 @@ function createWindow() {
   });
 
   if (shouldMaximize) mainWindow.maximize();
+
+  // Version in the title bar: the page <title> replaces the window title as
+  // soon as the renderer loads, so append the version to whatever it says
+  // (release builds set it from the tag — see release.yml)
+  mainWindow.on('page-title-updated', (e, title) => {
+    e.preventDefault();
+    mainWindow?.setTitle(`${title} v${app.getVersion()}`);
+  });
 
   // Save window bounds on move/resize (debounced)
   let boundsTimer: ReturnType<typeof setTimeout> | null = null;
@@ -259,7 +269,27 @@ ipcMain.handle(IPC_CHANNELS.RECONCILE_YAAM_META, async (_event, addonsPath: stri
     return await callFs('reconcileYaamMetadata', [addonsPath, matches], TIMEOUTS.fs.scan);
   } catch (err: unknown) {
     console.error('Reconcile error:', err);
-    return { created: 0, updated: 0, details: [] };
+    return { created: 0, updated: 0, details: [], entries: {} };
+  }
+});
+
+ipcMain.handle(IPC_CHANNELS.ADOPT_CACHED_RELEASE, async (_event, addonsPath: string, requests: AdoptRequest[]) => {
+  try {
+    // Reads release ZIPs and the folders they describe — install-sized work
+    return await callFs('adoptCachedRelease', [addonsPath, requests], TIMEOUTS.fs.install);
+  } catch (err: unknown) {
+    console.error('Adopt cached release error:', err);
+    return [];
+  }
+});
+
+ipcMain.handle(IPC_CHANNELS.CACHE_RELEASE, async (_event, addonsPath: string, addonId: string) => {
+  try {
+    await fetchRelease(addonId, addonsPath);
+    return true;
+  } catch (err: unknown) {
+    console.error(`Cache release ${addonId} error:`, err);
+    return false;
   }
 });
 
@@ -502,12 +532,15 @@ ipcMain.handle(IPC_CHANNELS.DELETE_SAVED_VARS, async (_event, addonsPath: string
 
 ipcMain.handle(IPC_CHANNELS.CLEANUP_SETTINGS, async (_event, addonsPath: string, existingAddonNames: string[]) => {
   try {
-    return await callFs('cleanupSettings', [addonsPath, existingAddonNames], TIMEOUTS.fs.settings);
+    // Reads and may rewrite every SavedVariables file — the large-file budget
+    return await callFs('cleanupSettings', [addonsPath, existingAddonNames], TIMEOUTS.fs.savedVars);
   } catch (err: unknown) {
     console.error('Cleanup settings error:', err);
-    return { removedFromSettings: [], removedSavedVars: [], backupPath: '', svBackupDir: '', error: errMsg(err) };
+    return { removedFromSettings: [], removedSavedVars: [], trimmedSavedVars: [], backupPath: '', svBackupDir: '', error: errMsg(err) };
   }
 });
+
+ipcMain.handle(IPC_CHANNELS.IS_GAME_RUNNING, async () => isGameRunning());
 
 ipcMain.handle(IPC_CHANNELS.UNDO_CLEANUP_SETTINGS, async (_event, addonsPath: string, settingsBackupPath: string, svBackupDir: string) => {
   try {
@@ -797,19 +830,20 @@ ipcMain.handle(IPC_CHANNELS.CLEANUP_LIBS_SELECTED, async (_event, addonsPath: st
 
 ipcMain.handle(IPC_CHANNELS.PREVIEW_CLEANUP_SETTINGS, async (_event, addonsPath: string, existingAddonNames: string[]) => {
   try {
-    return await callFs('previewCleanupSettings', [addonsPath, existingAddonNames], TIMEOUTS.fs.settings);
+    // Scans every SavedVariables file for ballast — the large-file budget
+    return await callFs('previewCleanupSettings', [addonsPath, existingAddonNames], TIMEOUTS.fs.savedVars);
   } catch (err: unknown) {
     console.error('Preview cleanup settings error:', err);
-    return { orphanedSettings: [], orphanedSavedVars: [] };
+    return { orphanedSettings: [], orphanedSavedVars: [], ballast: [] };
   }
 });
 
-ipcMain.handle(IPC_CHANNELS.CLEANUP_SETTINGS_SELECTED, async (_event, addonsPath: string, existingAddonNames: string[], settingsToRemove: string[], savedVarsToRemove: string[]) => {
+ipcMain.handle(IPC_CHANNELS.CLEANUP_SETTINGS_SELECTED, async (_event, addonsPath: string, existingAddonNames: string[], settingsToRemove: string[], savedVarsToRemove: string[], ballastToRemove: string[] = []) => {
   try {
-    return await callFs('cleanupSettingsSelected', [addonsPath, existingAddonNames, settingsToRemove, savedVarsToRemove], TIMEOUTS.fs.settings);
+    return await callFs('cleanupSettingsSelected', [addonsPath, existingAddonNames, settingsToRemove, savedVarsToRemove, ballastToRemove], TIMEOUTS.fs.savedVars);
   } catch (err: unknown) {
     console.error('Cleanup selected settings error:', err);
-    return { removedFromSettings: [], removedSavedVars: [], backupPath: '', svBackupDir: '', error: errMsg(err) };
+    return { removedFromSettings: [], removedSavedVars: [], trimmedSavedVars: [], backupPath: '', svBackupDir: '', error: errMsg(err) };
   }
 });
 

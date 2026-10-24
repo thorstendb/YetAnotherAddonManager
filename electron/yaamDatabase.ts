@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT
 import * as fs from 'fs';
 import * as path from 'path';
-import type { YaamMarker, YaamOverlayEntry } from './shared/types';
+import type { FileStamp, YaamMarker, YaamOverlayEntry } from './shared/types';
 import { writeJsonAtomic } from './shared/atomicWrite';
 
 /**
@@ -30,6 +30,8 @@ export interface YaamAddonEntry {
   updatedAt: string;
   /** Relative file paths from the original ZIP (install manifest for detecting runtime-created files) */
   installedFiles?: string[];
+  /** Size, mtime and MD5 per installed file — detects local edits (keep in sync with shared/types.ts) */
+  fileStamps?: Record<string, FileStamp>;
   /** Overlays (language patches, fixes) layered into this addon's folder */
   overlays?: YaamOverlayEntry[];
 }
@@ -222,6 +224,7 @@ export function writeMarkerFile(addonsPath: string, folderName: string, entry: Y
     updatedAt: entry.updatedAt,
     overlays: entry.overlays?.length ? entry.overlays : undefined,
     installedFiles: entry.installedFiles?.length ? entry.installedFiles : undefined,
+    fileStamps: entry.fileStamps && Object.keys(entry.fileStamps).length ? entry.fileStamps : undefined,
   };
   try {
     writeJsonAtomic(markerPath, marker);
@@ -251,6 +254,7 @@ export function readMarkerFile(addonsPath: string, folderName: string): YaamMark
       updatedAt: data.updatedAt || '',
       overlays: Array.isArray(data.overlays) ? data.overlays as YaamOverlayEntry[] : undefined,
       installedFiles: Array.isArray(data.installedFiles) ? data.installedFiles as string[] : undefined,
+      fileStamps: data.fileStamps && typeof data.fileStamps === 'object' ? data.fileStamps as Record<string, FileStamp> : undefined,
     };
   } catch {
     return null;

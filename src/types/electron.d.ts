@@ -1,6 +1,6 @@
 // Copyright (c) 2026 thorstendb
 // SPDX-License-Identifier: MIT
-import { AddonInfo, AddonSettingsData, AppConfig, CatalogAddon, SavedVarsInfo } from '../electron/shared/types';
+import { AddonInfo, AddonSettingsData, AppConfig, CatalogAddon, SavedVarsInfo, SvBallastFinding, YaamAddonEntry } from '../electron/shared/types';
 import { ExportData } from '../electron/settingsManager';
 
 interface SnapshotAddon {
@@ -60,7 +60,7 @@ declare global {
       cleanupSettings: (
         addonsPath: string,
         existingAddonNames: string[]
-      ) => Promise<{ removedFromSettings: string[]; removedSavedVars: string[]; backupPath: string; svBackupDir: string; error?: string }>;
+      ) => Promise<{ removedFromSettings: string[]; removedSavedVars: string[]; trimmedSavedVars: { file: string; bytes: number }[]; backupPath: string; svBackupDir: string; error?: string }>;
       undoCleanupSettings: (
         addonsPath: string,
         settingsBackupPath: string,
@@ -124,26 +124,29 @@ declare global {
       getSystemFonts: () => Promise<string[]>;
       previewCleanupLibs: (addonsPath: string) => Promise<{ unreferenced: string[]; optionalOnly: string[] }>;
       cleanupLibsSelected: (addonsPath: string, folderNames: string[]) => Promise<{ moved: string[]; addons: AddonInfo[] }>;
-      previewCleanupSettings: (addonsPath: string, existingAddonNames: string[]) => Promise<{ orphanedSettings: string[]; orphanedSavedVars: string[] }>;
+      previewCleanupSettings: (addonsPath: string, existingAddonNames: string[]) => Promise<{ orphanedSettings: string[]; orphanedSavedVars: string[]; ballast: SvBallastFinding[] }>;
       cleanupSettingsSelected: (
         addonsPath: string,
         existingAddonNames: string[],
         settingsToRemove: string[],
-        savedVarsToRemove: string[]
-      ) => Promise<{ removedFromSettings: string[]; removedSavedVars: string[]; backupPath: string; svBackupDir: string; error?: string }>;
+        savedVarsToRemove: string[],
+        ballastToRemove: string[]
+      ) => Promise<{ removedFromSettings: string[]; removedSavedVars: string[]; trimmedSavedVars: { file: string; bytes: number }[]; backupPath: string; svBackupDir: string; error?: string }>;
       previewCleanupDownloads: (addonsPath: string) => Promise<string[]>;
       cleanupDownloadsSelected: (addonsPath: string, fileNames: string[]) => Promise<{ moved: string[] }>;
       writeClipboard: (text: string) => void;
       reconcileYaamMeta: (
         addonsPath: string,
         matches: { folderName: string; esouid: string; name: string; author: string; version: string; url: string; catalogDate: number; localVersion: string; confident: boolean }[]
-      ) => Promise<{ created: number; updated: number; details: string[] }>;
+      ) => Promise<{ created: number; updated: number; details: string[]; entries: Record<string, YaamAddonEntry> }>;
       getYaamDb: (addonsPath: string) => Promise<Record<string, { esouid: string; url: string; catalogName: string; catalogAuthor: string; catalogVersion: string; localVersion: string; installedAt: string; updatedAt: string }>>;
       cleanupYaamMarkers: (addonsPath: string) => Promise<{ count: number; backupDir: string }>;
       restoreTrackingState: (addonsPath: string, backupDir: string) => Promise<{ restored: boolean; markers: number; error?: string }>;
       listRemoved: (addonsPath: string) => Promise<{ name: string; relPath: string; fromHygiene: boolean; isDirectory: boolean; sizeBytes: number; mtimeMs: number }[]>;
       restoreRemoved: (addonsPath: string, relPath: string) => Promise<{ restored: boolean; target: string; error?: string }>;
       moveDownloadsBack: (addonsPath: string, fileNames: string[]) => Promise<{ restored: string[]; errors: string[] }>;
+      /** False when the process list cannot be read */
+      isGameRunning: () => Promise<boolean>;
       updateCatalogSnapshot: (addonsPath: string) => Promise<{ changed: [string, { oldVersion: string; newVersion: string }][]; added: string[]; removed: string[] } | null>;
       /** holdIds: catalog entries to keep at their previous snapshot state
        *  (installed addons whose update is still pending) */
@@ -152,6 +155,14 @@ declare global {
         addonsPath: string,
         entries: { folderName: string; esouid: string; url: string; name: string; author: string; catalogVersion: string; catalogDate?: number; localVersion: string; overlays?: { esouid: string; catalogName: string; catalogVersion: string; catalogDate?: number }[] }[]
       ) => Promise<{ anchored: number; details: string[]; trackingBackupDir: string }>;
+      /** Check folders against their release ZIP in the download cache:
+       *  anchor untracked byte-identical ones, stamp tracked ones (no network) */
+      adoptCachedRelease: (
+        addonsPath: string,
+        requests: { folderName: string; zipName: string; notBefore: number; mode: 'anchor' | 'stamp'; baseline?: { folderName: string; esouid: string; url: string; name: string; author: string; catalogVersion: string; catalogDate?: number; localVersion: string } }[]
+      ) => Promise<{ folderName: string; outcome: 'anchored' | 'stamped' | 'differs' | 'no-cache' | 'stale-cache' | 'not-in-zip' | 'skipped'; modified?: number; missing?: number }[]>;
+      /** Download the current release ZIP into the cache without installing it */
+      cacheRelease: (addonsPath: string, addonId: string) => Promise<boolean>;
       previewFolderHygiene: (addonsPath: string) => Promise<{
         strayManifests: { file: string; addonName: string; title: string; version: string; addonVersion: number; relatedFiles: string[]; folderExists: boolean; folderVersion: string; rootIsStale: boolean }[];
         duplicates: { relPath: string; originalRelPath: string; isDirectory: boolean }[];

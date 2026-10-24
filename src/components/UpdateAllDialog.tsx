@@ -28,6 +28,8 @@ export interface UpdatableAddon {
   layered?: boolean;
   /** Files of the installed release that are gone — reinstalling repairs the folder */
   missingFiles?: string[];
+  /** Files changed locally since the install — the update overwrites them */
+  modifiedFiles?: string[];
 }
 
 interface UpdateAllDialogProps {
@@ -50,9 +52,10 @@ const UpdateAllDialog: React.FC<UpdateAllDialogProps> = ({ addons, onConfirm, on
   const layered = addons.filter(a => a.layered);
 
   // Default: sure addons and overlay updates selected;
-  // replacements/ambiguous/mightUpdate/layered require explicit opt-in
+  // replacements/ambiguous/mightUpdate/layered require explicit opt-in — and so
+  // does anything with local edits: the update would overwrite the user's fix
   const [selected, setSelected] = useState<Set<string>>(
-    () => new Set([...sure, ...overlays].map(a => a.catalogId))
+    () => new Set([...sure, ...overlays].filter(a => !a.modifiedFiles?.length).map(a => a.catalogId))
   );
 
   useEffect(() => {
@@ -126,6 +129,16 @@ const UpdateAllDialog: React.FC<UpdateAllDialogProps> = ({ addons, onConfirm, on
               ...(addon.missingFiles.length > 10 ? ['…'] : [])].join('\n')}
           >
             🩹 repair ({addon.missingFiles.length} missing)
+          </span>
+        )}
+        {addon.modifiedFiles && addon.modifiedFiles.length > 0 && (
+          <span
+            style={{ marginLeft: '6px', color: 'var(--yellow)' }}
+            title={['Changed locally since the install — the update overwrites these files (a backup is kept, Undo restores it):',
+              ...addon.modifiedFiles.slice(0, 10),
+              ...(addon.modifiedFiles.length > 10 ? ['…'] : [])].join('\n')}
+          >
+            ✏️ {addon.modifiedFiles.length} local change(s)
           </span>
         )}
         <span style={{ opacity: 0.7, marginLeft: '8px' }}>

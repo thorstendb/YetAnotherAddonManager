@@ -4,7 +4,7 @@ import * as https from 'https';
 import * as http from 'http';
 import * as fs from 'fs';
 import * as path from 'path';
-import { CatalogAddon, CatalogCategory } from './shared/types';
+import { CatalogAddon, CatalogCategory, releaseZipName } from './shared/types';
 import { TIMEOUTS } from './shared/timeouts';
 import { getYaamDir } from './yaamDatabase';
 import { callFs } from './fsWorkerHost';
@@ -495,15 +495,39 @@ async function runInstall(
   onProgress?: (phase: 'resolving' | 'downloading' | 'extracting', percent?: number) => void,
   opts?: { overlayFor?: string }
 ): Promise<InstallResult> {
-  // Look up addon info from cache to build a descriptive filename
-  const catalogEntry = cachedList?.find((a) => a.id === addonId) ?? null;
-  let zipName = `addon-${addonId}.zip`;
-  if (catalogEntry) {
-    // Sanitize name: remove characters not safe for filenames
-    const safeName = catalogEntry.name.replace(/[<>:"\/\\|?*']/g, '_').replace(/_+/g, '_').trim();
-    const safeVersion = catalogEntry.version.replace(/[<>:"\/\\|?*']/g, '_').trim();
-    zipName = `${safeName}-${safeVersion}.zip`;
-  }
+  const { zipPath, catalogEntry } = await fetchRelease(addonId, addonsPath, onProgress);
+
+  // Extraction reports as a single step; it is fast compared to the download
+  // and reporting sub-percentages would mean streaming progress out of the
+  // worker for no real gain.
+  onProgress?.('extracting', 0);
+  const result = await callFs(
+    'extractAndRegister',
+    [zipPath, addonsPath, catalogEntry, opts],
+    TIMEOUTS.fs.install
+  );
+  onProgress?.('extracting', 100);
+  return result;
+}
+
+/**
+ * The network half of an install: make sure the CURRENT release ZIP of an
+ * addon sits md5-verified in the download cache.  Also used on its own to
+ * fetch a release YAAM never downloaded (installed by another manager), so its
+ * files can be stamped while it is still the current release — afterwards the
+ * catalog no longer serves it, and local edits could not be told apart.
+ */
+export async function fetchRelease(
+  addonId: string,
+  addonsPath: string,
+  onProgress?: (phase: 'resolving' | 'downloading', percent?: number) => void
+): Promise<{ zipPath: string; catalogEntry: CatalogAddon | null }> {
+  // Look up addon info to build a descriptive filename — and to register the
+  // install at all: without a catalog entry the folder ends up untracked, and
+  // its updates are only ever guessed.  Load the catalog if nothing has yet.
+  const catalog = cachedList ?? await fetchAddonCatalog().catch(() => null);
+  const catalogEntry = catalog?.find((a) => a.id === addonId) ?? null;
+  const zipName = catalogEntry ? releaseZipName(catalogEntry) : `addon-${addonId}.zip`;
 
   onProgress?.('resolving');
   let downloadUrl = '';
@@ -541,18 +565,7 @@ async function runInstall(
   } else {
     onProgress?.('downloading', 100);
   }
-
-  // Extraction reports as a single step; it is fast compared to the download
-  // and reporting sub-percentages would mean streaming progress out of the
-  // worker for no real gain.
-  onProgress?.('extracting', 0);
-  const result = await callFs(
-    'extractAndRegister',
-    [zipPath, addonsPath, catalogEntry, opts],
-    TIMEOUTS.fs.install
-  );
-  onProgress?.('extracting', 100);
-  return result;
+  return { zipPath, catalogEntry };
 }
 
 export interface InstallWithDepsResult {

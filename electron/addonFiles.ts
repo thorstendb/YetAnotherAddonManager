@@ -13,8 +13,8 @@ import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
 import AdmZip from 'adm-zip';
-import { CatalogAddon } from './shared/types';
-import { scanSpecificAddons } from './addonScanner';
+import { CatalogAddon, FileStamp } from './shared/types';
+import { scanSpecificAddons, commitBaseline, BaselineEntry } from './addonScanner';
 import { loadDatabase, saveDatabase, writeMarkerFile } from './yaamDatabase';
 import { canEnterDir } from './shared/fsWalk';
 import { writeJsonAtomic } from './shared/atomicWrite';
@@ -411,6 +411,8 @@ export function extractAndRegister(
           installedAt: existing?.installedAt || now,
           updatedAt: now,
           installedFiles: zipFilesByDir.get(dir),
+          // Just extracted, so disk == release: no need to read the files back
+          fileStamps: stampRelease(zip, addonsPath, dir, zipFilesByDir.get(dir) ?? [], true),
           overlays: overlays?.length ? overlays : undefined,
         };
         db.addons[dir] = entry;
@@ -539,4 +541,103 @@ export function cleanupDownloadsFolder(addonsPath: string): { moved: string[] } 
   }
 
   return { moved };
+}
+
+/**
+ * Fingerprint one addon folder's files as the release shipped them.
+ *
+ * md5/size always describe the RELEASE content.  mtime is the file's current
+ * mtime only when the disk copy IS that content — otherwise -1, so the scanner
+ * re-checks it and reports it as locally modified.  `extracted` skips reading
+ * the disk copy back right after an install, where it is identical by
+ * construction.
+ */
+function stampRelease(zip: AdmZip, addonsPath: string, dir: string, files: string[], extracted = false): Record<string, FileStamp> {
+  const stamps: Record<string, FileStamp> = {};
+  for (const rel of files) {
+    const entry = zip.getEntry(`${dir}/${rel}`);
+    if (!entry) continue;
+    const data = entry.getData();
+    const p = path.join(addonsPath, dir, ...rel.split('/'));
+    let mtime = -1;
+    try {
+      const st = fs.statSync(p);
+      if (st.size === data.length && (extracted || fs.readFileSync(p).equals(data))) mtime = Math.round(st.mtimeMs);
+    } catch { /* missing — the scanner reports it as such */ }
+    stamps[rel] = { md5: crypto.createHash('md5').update(data).digest('hex'), size: data.length, mtime };
+  }
+  return stamps;
+}
+
+/** One folder to check against its release ZIP in the download cache. */
+export interface AdoptRequest {
+  folderName: string;
+  /** Cache file name of the release (releaseZipName) */
+  zipName: string;
+  /** Catalog upload date (epoch seconds).  A cached ZIP downloaded BEFORE it
+   *  may be an older upload under the same version — not trusted. */
+  notBefore: number;
+  /** anchor: start tracking an untracked folder — only if byte-identical.
+   *  stamp:  add file list + stamps to a tracked folder installed before
+   *          stamps existed (local edits then become visible). */
+  mode: 'anchor' | 'stamp';
+  /** anchor only: the identity to record */
+  baseline?: BaselineEntry;
+}
+
+export interface AdoptResult {
+  folderName: string;
+  outcome: 'anchored' | 'stamped' | 'differs' | 'no-cache' | 'stale-cache' | 'not-in-zip' | 'skipped';
+  /** Files present but different from the release (local edits) */
+  modified?: number;
+  /** Files of the release that are not on disk */
+  missing?: number;
+}
+
+/**
+ * Settle folders whose state version strings cannot decide, using the release
+ * ZIP YAAM already has in its download cache — no network.
+ *
+ * Real case: another manager re-extracted ImpressiveStats 1.5.7 and dropped
+ * the marker; its manifest says "1157000", the catalog "1.5.7", so the
+ * folder was offered as a possible update forever.  Byte-identical to the
+ * cached 1.5.7 ZIP means it IS 1.5.7 — anchor it, with file stamps.
+ */
+export function adoptCachedRelease(addonsPath: string, requests: AdoptRequest[]): AdoptResult[] {
+  const downloads = path.join(path.dirname(addonsPath), 'Downloads');
+  const results: AdoptResult[] = [];
+  for (const req of requests) {
+    const done = (outcome: AdoptResult['outcome'], modified?: number, missing?: number) =>
+      results.push({ folderName: req.folderName, outcome, modified, missing });
+    const zipPath = path.join(downloads, req.zipName);
+    if (!fs.existsSync(zipPath)) { done('no-cache'); continue; }
+    if (Math.floor(fs.statSync(zipPath).mtimeMs / 1000) < req.notBefore) { done('stale-cache'); continue; }
+    let zip: AdmZip;
+    try { zip = new AdmZip(zipPath); } catch { done('no-cache'); continue; }
+    const prefix = `${req.folderName}/`;
+    const files = zip.getEntries()
+      .filter((e) => !e.isDirectory && e.entryName.startsWith(prefix))
+      .map((e) => e.entryName.slice(prefix.length));
+    if (files.length === 0) { done('not-in-zip'); continue; }
+
+    const fileStamps = stampRelease(zip, addonsPath, req.folderName, files);
+    const missing = files.filter((f) => !fs.existsSync(path.join(addonsPath, req.folderName, ...f.split('/')))).length;
+    const differing = files.filter((f) => fileStamps[f]?.mtime === -1).length - missing;
+
+    if (req.mode === 'anchor') {
+      if (differing > 0 || missing > 0 || !req.baseline) { done('differs', differing, missing); continue; }
+      commitBaseline(addonsPath, [{ ...req.baseline, installedFiles: files, fileStamps }]);
+      done('anchored');
+    } else {
+      const db = loadDatabase(addonsPath);
+      const entry = db.addons[req.folderName];
+      if (!entry?.esouid || entry.fileStamps) { done('skipped'); continue; }
+      entry.installedFiles = files;
+      entry.fileStamps = fileStamps;
+      saveDatabase(db, addonsPath);
+      writeMarkerFile(addonsPath, req.folderName, entry);
+      done('stamped', differing, missing);
+    }
+  }
+  return results;
 }
