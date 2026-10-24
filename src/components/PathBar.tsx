@@ -13,6 +13,7 @@ interface PathBarProps {
   onCleanupSettings: () => void;
   onCleanupDownloads: () => void;
   onCleanupBackups: () => void;
+  onCleanupUnused: () => void;
   onFolderHygiene: () => void;
   onUpdateAll: () => void;
   onCommitBaseline: () => void;
@@ -23,6 +24,8 @@ interface PathBarProps {
   loading: boolean;
   hasAddons: boolean;
   unreferencedCount: number;
+  /** Folders switched off for every character */
+  unusedCount: number;
   updateCount: number;
   mightUpdateCount?: number;
   replacementCount?: number;
@@ -49,6 +52,7 @@ const PathBar: React.FC<PathBarProps> = ({
   onCleanupSettings,
   onCleanupDownloads,
   onCleanupBackups,
+  onCleanupUnused,
   onFolderHygiene,
   onUpdateAll,
   onCommitBaseline,
@@ -59,6 +63,7 @@ const PathBar: React.FC<PathBarProps> = ({
   loading,
   hasAddons,
   unreferencedCount,
+  unusedCount,
   updateCount,
   mightUpdateCount = 0,
   replacementCount = 0,
@@ -117,9 +122,18 @@ const PathBar: React.FC<PathBarProps> = ({
           🧹 {unreferencedCount > 0 && <>({unreferencedCount})</>}
         </button>
         <button
+          onClick={onCleanupUnused}
+          disabled={!hasAddons || loading || unusedCount === 0}
+          title={unusedCount === 0 ? `Unused — Move addons switched off for every character to Removed/\nNothing to clean up` : `Unused — Move addons switched off for every character to Removed/\n${unusedCount} unused addon(s) found`}
+          aria-label="Remove addons no character uses"
+          className="btn-warning"
+        >
+          💤 {unusedCount > 0 && <>({unusedCount})</>}
+        </button>
+        <button
           onClick={onCleanupSettings}
           disabled={!hasAddons || loading}
-          title={`Settings — Remove orphaned saved variables\nCleans AddOnSettings.txt and SavedVariables (creates backups)`}
+          title={`Settings — Remove orphaned settings, SavedVariables and data ballast\nCleans AddOnSettings.txt and SavedVariables, trims dead data inside\nthe files of installed addons (creates backups)`}
           className="btn-warning"
         >
           🗑️

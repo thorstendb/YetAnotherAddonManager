@@ -80,6 +80,9 @@ export interface AddonInfo {
    *  (deleted by another manager, antivirus or a cloud sync) — the folder is
    *  incomplete although its version says "current" */
   missingFiles?: string[];
+  /** Installed files whose content differs from the release YAAM installed —
+   *  local edits an update would overwrite */
+  modifiedFiles?: string[];
   /** Manifest file mtime (epoch seconds).  Extraction rewrites it, so it
    *  approximates the install time — a stateless update hint:
    *  catalog published later than this → likely newer than what's on disk. */
@@ -112,6 +115,16 @@ export interface YaamOverlayEntry {
 }
 
 /** Per-addon metadata stored in the central YAAM database (yaam-addons.json). */
+/** Fingerprint of one installed file.  size+mtime gate the (expensive) hash:
+ *  only a file whose size or mtime moved is read again. */
+export interface FileStamp {
+  /** MD5 of the content the release shipped */
+  md5: string;
+  size: number;
+  /** mtimeMs on disk right after the install */
+  mtime: number;
+}
+
 export interface YaamAddonEntry {
   /** ESOUI catalog UID (e.g. "1346") */
   esouid: string;
@@ -133,6 +146,10 @@ export interface YaamAddonEntry {
   updatedAt: string;
   /** Relative file paths from the original ZIP (install manifest for detecting runtime-created files) */
   installedFiles?: string[];
+  /** Size, mtime and MD5 per installed file (same keys as installedFiles) —
+   *  detects files changed locally since the install, so an update does not
+   *  silently overwrite a user's own fix */
+  fileStamps?: Record<string, FileStamp>;
   /** Overlays (language patches, fixes) layered into this addon's folder */
   overlays?: YaamOverlayEntry[];
 }
@@ -166,6 +183,10 @@ export interface YaamMarker {
    *  central DB is FULLY reconstructable from the folders alone — deleting
    *  yaam-addons.json is lossless. */
   installedFiles?: string[];
+  /** Size, mtime and MD5 per installed file (same keys as installedFiles) —
+   *  detects files changed locally since the install, so an update does not
+   *  silently overwrite a user's own fix */
+  fileStamps?: Record<string, FileStamp>;
 }
 
 export interface DependencyRef {
@@ -612,6 +633,23 @@ export interface SavedVarsInfo {
   addonFiles: Record<string, string[]>;
 }
 
+/** Superfluous data inside the SavedVariables files of installed addons */
+export interface SvBallastFinding {
+  /** Stable id passed back to apply exactly this finding */
+  id: string;
+  label: string;
+  /** Why it is superfluous — and when it is not */
+  detail: string;
+  /** SavedVariables files (with .lua) it touches */
+  files: string[];
+  /** Entries removed */
+  count: number;
+  /** Bytes saved — every byte is read at each login and /reloadui */
+  bytes: number;
+  /** Preselected only when removing it can never lose anything the user still needs */
+  defaultSelected: boolean;
+}
+
 /** A single addon from the online catalog */
 export interface CatalogAddon {
   id: string;
@@ -629,6 +667,16 @@ export interface CatalogAddon {
   thumbnails: string[];
   images: string[];
   donationLink: string;
+}
+
+/**
+ * File name of a release ZIP in YAAM's download cache (<live>/Downloads).
+ * Shared by the installer and every check that reuses the cached release.
+ */
+export function releaseZipName(ca: Pick<CatalogAddon, 'name' | 'version'>): string {
+  const safeName = ca.name.replace(/[<>:"\/\\|?*']/g, '_').replace(/_+/g, '_').trim();
+  const safeVersion = ca.version.replace(/[<>:"\/\\|?*']/g, '_').trim();
+  return `${safeName}-${safeVersion}.zip`;
 }
 
 /** A category from the ESOUI API */
@@ -750,6 +798,8 @@ export const IPC_CHANNELS = {
   UPDATE_CATALOG_SNAPSHOT: 'update-catalog-snapshot',
   COMMIT_CATALOG_SNAPSHOT: 'commit-catalog-snapshot',
   COMMIT_BASELINE: 'commit-baseline',
+  ADOPT_CACHED_RELEASE: 'adopt-cached-release',
+  CACHE_RELEASE: 'cache-release',
   PREVIEW_FOLDER_HYGIENE: 'preview-folder-hygiene',
   APPLY_FOLDER_HYGIENE: 'apply-folder-hygiene',
   UNDO_FOLDER_HYGIENE: 'undo-folder-hygiene',
@@ -757,4 +807,5 @@ export const IPC_CHANNELS = {
   LIST_REMOVED: 'list-removed',
   RESTORE_REMOVED: 'restore-removed',
   MOVE_DOWNLOADS_BACK: 'move-downloads-back',
+  IS_GAME_RUNNING: 'is-game-running',
 } as const;

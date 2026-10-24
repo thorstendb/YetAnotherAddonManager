@@ -118,6 +118,29 @@ export function findHijackedManifestOverlay(
 }
 
 /**
+ * Should a TRACKED identity (DB entry / marker) of a folder be distrusted in
+ * favour of the folder's own catalog entry?
+ *  - the tracked entry does not list the folder at all, while another entry
+ *    claims it as its primary directory (poisoned DB entry), or
+ *  - the tracked entry merely BUNDLES the folder while the folder has a
+ *    catalog entry of its own NAME: before 0.4.0 the dependency resolver
+ *    installed Provision's TeamFormation for LibAddonMenu-2.0 and recorded the
+ *    library folder under it — LibAddonMenu updates were never offered again.
+ * The name condition matters: translation packs share generic folders
+ * (gamedata, EsoUI, lang) whose "primary owner" is just another pack.
+ * `dirOwner` is the catalog entry the folder name resolves to.
+ */
+export function distrustTrackedIdentity(
+  tracked: CatalogAddon,
+  folderName: string,
+  dirOwner: CatalogAddon | undefined
+): boolean {
+  if (!dirOwner || dirOwner.id === tracked.id || dirOwner.directories[0] !== folderName) return false;
+  if (!tracked.directories.includes(folderName)) return true;
+  return tracked.directories[0] !== folderName && norm(dirOwner.name) === norm(folderName);
+}
+
+/**
  * Directory name → catalog entry to install when a manifest's DependsOn names
  * that folder.  Many entries claim the same folder: forks bundling an old copy
  * of a library (Provision's TeamFormation ships LibAddonMenu-2.0 r-old),

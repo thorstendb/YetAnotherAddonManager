@@ -3,8 +3,10 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import AdmZip from 'adm-zip';
-import { AddonSettingsData, SavedVarsInfo } from './shared/types';
+import { AddonSettingsData, SavedVarsInfo, SvBallastFinding } from './shared/types';
 import { writeFileAtomic } from './shared/atomicWrite';
+import { BallastContext, KNOWN_WORLDS, RuleHit, collectBallast, lastCharacterNames, summarizeBallast } from './svBallast';
+import { removeEntries } from './svParse';
 
 /**
  * Resolve the "live" directory from an AddOns path.
@@ -459,12 +461,110 @@ export function deleteSavedVars(
 }
 
 /**
+ * Whether a SavedVariables file belongs to an installed addon.  The game names
+ * the file exactly after the addon (`<AddOnName>.lua`) — sub-addons included,
+ * so `existingAddonNames` must list those too.  A prefix match would hide real
+ * orphans behind a shorter installed name (SynergyCooldown.lua behind
+ * "Synergy").  ZO_* files belong to the game itself.
+ */
+function isOwnedSavedVars(file: string, existingLower: Set<string>): boolean {
+  const baseName = file.replace(/\.lua$/i, '');
+  return baseName.startsWith('ZO_') || existingLower.has(baseName.toLowerCase());
+}
+
+/** Worlds and character names that have a section in AddOnSettings.txt */
+function readCharacterSections(addonsPath: string): { worlds: string[]; names: string[] } {
+  const settingsPath = getSettingsPath(addonsPath);
+  const worlds = new Set<string>();
+  const names = new Set<string>();
+  if (fs.existsSync(settingsPath)) {
+    for (const line of fs.readFileSync(settingsPath, 'utf-8').split(/\r?\n/)) {
+      const header = line.trim().slice(1);
+      if (!line.trim().startsWith('#')) continue;
+      // Character names may contain a dash — split at the known world name first
+      const world = KNOWN_WORLDS.find((w) => header.startsWith(`${w}-`))
+        ?? (header.lastIndexOf('-') > 0 ? header.slice(0, header.lastIndexOf('-')) : undefined);
+      if (!world) continue;
+      worlds.add(world);
+      names.add(header.slice(world.length + 1));
+    }
+  }
+  return { worlds: [...worlds], names: [...names] };
+}
+
+/**
+ * Ballast inside the SavedVariables of installed addons.  Files that cannot
+ * be parsed are skipped — they are never touched.
+ */
+function scanSavedVarsBallast(
+  addonsPath: string,
+  existingAddonNames: string[]
+): { file: string; buf: Buffer; hits: RuleHit[] }[] {
+  const svDir = getSavedVarsDir(addonsPath);
+  if (!fs.existsSync(svDir)) return [];
+  const existingLower = new Set(existingAddonNames.map((n) => n.toLowerCase()));
+  const files = fs.readdirSync(svDir).filter((f) => f.endsWith('.lua') && isOwnedSavedVars(f, existingLower));
+
+  const sections = readCharacterSections(addonsPath);
+  // Without any character section nothing can be judged per character
+  const recorded = new Set<string>();
+  if (sections.names.length > 0) {
+    for (const file of files) {
+      try {
+        for (const name of lastCharacterNames(fs.readFileSync(path.join(svDir, file)))) recorded.add(name);
+      } catch { /* unreadable — skipped below as well */ }
+    }
+  }
+  const ctx: BallastContext = {
+    playedWorlds: sections.worlds,
+    unknownCharacters: [...recorded].filter((n) => !sections.names.includes(n)),
+  };
+
+  const result: { file: string; buf: Buffer; hits: RuleHit[] }[] = [];
+  for (const file of files) {
+    try {
+      const buf = fs.readFileSync(path.join(svDir, file));
+      const hits = collectBallast(file, buf, ctx);
+      if (hits.length > 0) result.push({ file, buf, hits });
+    } catch (err) {
+      console.warn(`[YAAM] SavedVariables ballast scan skipped ${file}:`, err instanceof Error ? err.message : err);
+    }
+  }
+  return result;
+}
+
+/**
+ * Remove the selected ballast findings.  Each changed file is copied into the
+ * backup directory first (created on demand via `backupDir()`), so the
+ * regular cleanup undo restores it.
+ */
+function trimSavedVarsBallast(
+  addonsPath: string,
+  existingAddonNames: string[],
+  select: (findingId: string, defaultSelected: boolean) => boolean,
+  backupDir: () => string
+): { file: string; bytes: number }[] {
+  const svDir = getSavedVarsDir(addonsPath);
+  const trimmed: { file: string; bytes: number }[] = [];
+  for (const { file, buf, hits } of scanSavedVarsBallast(addonsPath, existingAddonNames)) {
+    const nodes = hits.filter((h) => select(h.findingId, h.defaultSelected)).flatMap((h) => h.nodes);
+    if (nodes.length === 0) continue;
+    // Throws on a cut that would leave invalid syntax — nothing is written then
+    const { output, removedBytes } = removeEntries(buf, nodes);
+    fs.copyFileSync(path.join(svDir, file), path.join(backupDir(), file));
+    writeFileAtomic(path.join(svDir, file), output);
+    trimmed.push({ file, bytes: removedBytes });
+  }
+  return trimmed;
+}
+
+/**
  * Remove entries from AddOnSettings.txt for addons that no longer exist.
  */
 export function previewCleanupSettings(
   addonsPath: string,
   existingAddonNames: string[]
-): { orphanedSettings: string[]; orphanedSavedVars: string[] } {
+): { orphanedSettings: string[]; orphanedSavedVars: string[]; ballast: SvBallastFinding[] } {
   const existingSet = new Set(existingAddonNames);
   const settingsPath = getSettingsPath(addonsPath);
   const orphanedSettings: string[] = [];
@@ -492,28 +592,26 @@ export function previewCleanupSettings(
   // Preview orphaned SavedVariables
   const svDir = getSavedVarsDir(addonsPath);
   if (fs.existsSync(svDir)) {
-    const files = fs.readdirSync(svDir).filter((f) => f.endsWith('.lua'));
-    const sortedNames = [...existingAddonNames].sort((a, b) => b.length - a.length);
-    for (const file of files) {
-      const baseName = file.replace(/\.lua$/, '');
-      const hasMatch = baseName.startsWith('ZO_') ||
-        existingSet.has(baseName) ||
-        sortedNames.some((name) => baseName.startsWith(name));
-      if (!hasMatch) {
-        orphanedSavedVars.push(file);
-      }
+    const existingLower = new Set(existingAddonNames.map((n) => n.toLowerCase()));
+    for (const file of fs.readdirSync(svDir).filter((f) => f.endsWith('.lua'))) {
+      if (!isOwnedSavedVars(file, existingLower)) orphanedSavedVars.push(file);
     }
   }
 
-  return { orphanedSettings: orphanedSettings.sort(), orphanedSavedVars: orphanedSavedVars.sort() };
+  const ballast = summarizeBallast(scanSavedVarsBallast(addonsPath, existingAddonNames));
+  return { orphanedSettings: orphanedSettings.sort(), orphanedSavedVars: orphanedSavedVars.sort(), ballast };
 }
 
 export function cleanupSettingsSelected(
   addonsPath: string,
   existingAddonNames: string[],
   settingsToRemove: string[],
-  savedVarsToRemove: string[]
-): { removedFromSettings: string[]; removedSavedVars: string[]; backupPath: string; svBackupDir: string } {
+  savedVarsToRemove: string[],
+  ballastToRemove: string[] = []
+): {
+  removedFromSettings: string[]; removedSavedVars: string[]; trimmedSavedVars: { file: string; bytes: number }[];
+  backupPath: string; svBackupDir: string;
+} {
   const settingsPath = getSettingsPath(addonsPath);
   const removedFromSettings: string[] = [];
   const removedSavedVars: string[] = [];
@@ -521,6 +619,16 @@ export function cleanupSettingsSelected(
   let svBackupDir = '';
   const settingsSet = new Set(settingsToRemove);
   const svSet = new Set(savedVarsToRemove);
+  const ballastSet = new Set(ballastToRemove);
+  const ts = new Date().toISOString().replace(/[:.]/g, '-').replace('T', '_').slice(0, 19);
+  const bkDir = path.join(getBackupDir(addonsPath, 'SavedVariables'), `_cleanup_backup_${ts}`);
+  const ensureBkDir = () => {
+    if (!svBackupDir) {
+      fs.mkdirSync(bkDir, { recursive: true });
+      svBackupDir = bkDir;
+    }
+    return bkDir;
+  };
 
   // Cleanup AddOnSettings.txt — only remove selected entries
   if (settingsSet.size > 0 && fs.existsSync(settingsPath)) {
@@ -558,27 +666,24 @@ export function cleanupSettingsSelected(
   if (svSet.size > 0) {
     const svDir = getSavedVarsDir(addonsPath);
     if (fs.existsSync(svDir)) {
-      const ts = new Date().toISOString().replace(/[:.]/g, '-').replace('T', '_').slice(0, 19);
-      const bkDir = path.join(getBackupDir(addonsPath, 'SavedVariables'), `_cleanup_backup_${ts}`);
-      let backupCreated = false;
-
       for (const file of svSet) {
         const src = path.join(svDir, file);
         if (fs.existsSync(src)) {
-          if (!backupCreated) {
-            fs.mkdirSync(bkDir, { recursive: true });
-            backupCreated = true;
-          }
-          fs.copyFileSync(src, path.join(bkDir, file));
+          fs.copyFileSync(src, path.join(ensureBkDir(), file));
           fs.unlinkSync(src);
           removedSavedVars.push(file);
         }
       }
-      if (backupCreated) svBackupDir = bkDir;
     }
   }
 
-  return { removedFromSettings, removedSavedVars, backupPath, svBackupDir };
+  // Ballast inside the files of installed addons — same backup directory, so
+  // a single undo restores everything this run changed
+  const trimmedSavedVars = ballastSet.size > 0
+    ? trimSavedVarsBallast(addonsPath, existingAddonNames, (id) => ballastSet.has(id), ensureBkDir)
+    : [];
+
+  return { removedFromSettings, removedSavedVars, trimmedSavedVars, backupPath, svBackupDir };
 }
 
 /**
@@ -588,7 +693,10 @@ export function cleanupSettingsSelected(
 export function cleanupSettings(
   addonsPath: string,
   existingAddonNames: string[]
-): { removedFromSettings: string[]; removedSavedVars: string[]; backupPath: string; svBackupDir: string } {
+): {
+  removedFromSettings: string[]; removedSavedVars: string[]; trimmedSavedVars: { file: string; bytes: number }[];
+  backupPath: string; svBackupDir: string;
+} {
   const existingSet = new Set(existingAddonNames);
   const settingsPath = getSettingsPath(addonsPath);
   const removedFromSettings: string[] = [];
@@ -633,43 +741,34 @@ export function cleanupSettings(
     writeFileAtomic(settingsPath, newLines.join('\r\n'));
   }
 
-  // Cleanup orphaned SavedVariables
-  // IMPORTANT: Match files against both addon folder names AND
-  // their declared SavedVariable names to avoid destroying user settings
-  // for sub-addons like PersonalAssistantBanking, CombatMetricsFightData, etc.
+  // Cleanup orphaned SavedVariables.  existingAddonNames includes sub-addons
+  // (PersonalAssistantBanking, CombatMetricsFightData, …), whose files the
+  // game names after them as well.
   const svDir = getSavedVarsDir(addonsPath);
-  if (fs.existsSync(svDir)) {
-    const files = fs.readdirSync(svDir).filter((f) => f.endsWith('.lua'));
-    const ts = new Date().toISOString().replace(/[:.]/g, '-').replace('T', '_').slice(0, 19);
-    const backupDir = path.join(getBackupDir(addonsPath, 'SavedVariables'), `_cleanup_backup_${ts}`);
-    let backupCreated = false;
-
-    // Sort by length descending for proper prefix matching
-    const sortedNames = [...existingAddonNames].sort((a, b) => b.length - a.length);
-
-    for (const file of files) {
-      const baseName = file.replace(/\.lua$/, '');
-      // Check if any existing addon matches this file
-    // Always keep ZO_ prefixed files (built-in game variables)
-      const hasMatch = baseName.startsWith('ZO_') ||
-        existingSet.has(baseName) ||
-        sortedNames.some((name) => baseName.startsWith(name));
-      if (!hasMatch) {
-        if (!backupCreated) {
-          fs.mkdirSync(backupDir, { recursive: true });
-          backupCreated = true;
-        }
-        const src = path.join(svDir, file);
-        const dest = path.join(backupDir, file);
-        fs.copyFileSync(src, dest);
-        fs.unlinkSync(src);
-        removedSavedVars.push(file);
-      }
+  const ts = new Date().toISOString().replace(/[:.]/g, '-').replace('T', '_').slice(0, 19);
+  const backupDir = path.join(getBackupDir(addonsPath, 'SavedVariables'), `_cleanup_backup_${ts}`);
+  const ensureBackupDir = () => {
+    if (!svBackupDir) {
+      fs.mkdirSync(backupDir, { recursive: true });
+      svBackupDir = backupDir;
     }
-    if (backupCreated) svBackupDir = backupDir;
+    return backupDir;
+  };
+  if (fs.existsSync(svDir)) {
+    const existingLower = new Set(existingAddonNames.map((n) => n.toLowerCase()));
+    for (const file of fs.readdirSync(svDir).filter((f) => f.endsWith('.lua'))) {
+      if (isOwnedSavedVars(file, existingLower)) continue;
+      const src = path.join(svDir, file);
+      fs.copyFileSync(src, path.join(ensureBackupDir(), file));
+      fs.unlinkSync(src);
+      removedSavedVars.push(file);
+    }
   }
 
-  return { removedFromSettings, removedSavedVars, backupPath, svBackupDir };
+  // Without a preview only the ballast the dialog would preselect is removed
+  const trimmedSavedVars = trimSavedVarsBallast(addonsPath, existingAddonNames, (_id, preselected) => preselected, ensureBackupDir);
+
+  return { removedFromSettings, removedSavedVars, trimmedSavedVars, backupPath, svBackupDir };
 }
 
 /**

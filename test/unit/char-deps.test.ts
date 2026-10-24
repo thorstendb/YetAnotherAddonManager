@@ -1,7 +1,7 @@
 // Copyright (c) 2026 thorstendb
 // SPDX-License-Identifier: MIT
 import { describe, it, expect } from 'vitest';
-import { findCharDepConflicts, requiredDepClosure } from '../../electron/shared/charDeps';
+import { findCharDepConflicts, findUnusedAddons, requiredDepClosure } from '../../electron/shared/charDeps';
 import { AddonInfo } from '../../electron/shared/types';
 
 /** Minimal AddonInfo: only what the dependency logic reads. */
@@ -50,6 +50,57 @@ describe('findCharDepConflicts', () => {
   it('keeps characters apart', () => {
     const conflicts = findCharDepConflicts(all, ['A', 'B'], (c, n) => !(c === 'B' && n === 'LibGPS'), installed);
     expect(Object.keys(conflicts.get('VotansFisherman') ?? {})).toEqual(['B']);
+  });
+});
+
+describe('findUnusedAddons', () => {
+  const lib = (folderName: string, deps: string[] = []) => ({ ...mod(folderName, deps), isLibrary: true }) as AddonInfo;
+  const chars = ['Alhandur', 'Aldharun'];
+  /** Switched off for every character, everything else on (no entry → enabled) */
+  const offEverywhere = (...names: string[]) => (_c: string, n: string) => !names.includes(n);
+
+  it('reports folders no character loads, keeps everything with an enabled entry', () => {
+    const tank = mod('TankHelper');
+    const synergy = mod('Synergy');
+    const both = [tank, synergy, lam];
+    expect(findUnusedAddons(both, chars, offEverywhere('TankHelper', 'Synergy'))).toEqual(['Synergy', 'TankHelper']);
+    // On for a single character is enough to stay
+    expect(findUnusedAddons(both, chars, (c, n) => n !== 'TankHelper' || c === 'Aldharun')).toEqual([]);
+  });
+
+  it('ignores embedded libraries when judging the host', () => {
+    const ck = mod('CharacterKnowledge', ['LibCharacterKnowledge'], [lib('LibCharacterKnowledge'), lib('LibExtendedJournal')]);
+    const lej = lib('LibExtendedJournal');
+    const lck = lib('LibCharacterKnowledge');
+    expect(findUnusedAddons([ck, lej, lck], chars, offEverywhere('CharacterKnowledge'))).toEqual(['CharacterKnowledge']);
+  });
+
+  it('judges modules: a container is in use while one of its modules is', () => {
+    expect(findUnusedAddons([harvestMapData], chars, offEverywhere('HarvestMapAD', 'HarvestMapDC'))).toEqual(['HarvestMapData']);
+    expect(findUnusedAddons([harvestMapData], chars, (c, n) => n !== 'HarvestMapAD' && !(c === 'Alhandur' && n === 'HarvestMapDC')))
+      .toEqual([]);
+    // Parent off, module still on → the folder is in use (the game reports a conflict instead)
+    expect(findUnusedAddons([harvestMap], chars, offEverywhere('HarvestMap'))).toEqual([]);
+  });
+
+  it('keeps what an addon in use requires, even when it is switched off everywhere', () => {
+    expect(findUnusedAddons([fisherman, libGps, libMapPing, lam], chars, offEverywhere('LibGPS'))).toEqual([]);
+    // Only required dependencies protect — optional ones do not
+    const optional = { ...mod('UsesTtcOptionally'), optionalDependsOn: [{ name: 'TamrielTradeCentre' }] } as AddonInfo;
+    expect(findUnusedAddons([optional, mod('TamrielTradeCentre')], chars, offEverywhere('TamrielTradeCentre')))
+      .toEqual(['TamrielTradeCentre']);
+  });
+
+  it('keeps an unused host whose embedded library is the only copy a used addon requires', () => {
+    const host = mod('LucentCitadel', [], [lib('LibUnits2')]);
+    const user = mod('RaidNotifier', ['LibUnits2']);
+    expect(findUnusedAddons([host, user], chars, offEverywhere('LucentCitadel'))).toEqual([]);
+    // With a standalone copy in use the host can go
+    expect(findUnusedAddons([host, user, lib('LibUnits2')], chars, offEverywhere('LucentCitadel'))).toEqual(['LucentCitadel']);
+  });
+
+  it('reports nothing without character sections', () => {
+    expect(findUnusedAddons([mod('TankHelper')], [], () => false)).toEqual([]);
   });
 });
 

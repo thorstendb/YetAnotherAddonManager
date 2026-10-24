@@ -1,7 +1,7 @@
 // Copyright (c) 2026 thorstendb
 // SPDX-License-Identifier: MIT
 import { contextBridge, ipcRenderer, IpcRendererEvent, clipboard } from 'electron';
-import { AddonInfo, AddonSettingsData, AppConfig, CatalogAddon, SavedVarsInfo, IPC_CHANNELS } from './shared/types';
+import { AddonInfo, AddonSettingsData, AppConfig, CatalogAddon, SavedVarsInfo, SvBallastFinding, YaamAddonEntry, IPC_CHANNELS } from './shared/types';
 import { SnapshotAddon, AddonSnapshot } from './snapshotManager';
 import { SvBackupEntry, ExportData } from './settingsManager';
 
@@ -60,7 +60,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   cleanupSettings: (
     addonsPath: string,
     existingAddonNames: string[]
-  ): Promise<{ removedFromSettings: string[]; removedSavedVars: string[]; backupPath: string; svBackupDir: string; error?: string }> =>
+  ): Promise<{ removedFromSettings: string[]; removedSavedVars: string[]; trimmedSavedVars: { file: string; bytes: number }[]; backupPath: string; svBackupDir: string; error?: string }> =>
     ipcRenderer.invoke(IPC_CHANNELS.CLEANUP_SETTINGS, addonsPath, existingAddonNames),
   undoCleanupSettings: (
     addonsPath: string,
@@ -172,15 +172,16 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.invoke(IPC_CHANNELS.PREVIEW_CLEANUP_LIBS, addonsPath),
   cleanupLibsSelected: (addonsPath: string, folderNames: string[]): Promise<{ moved: string[]; addons: AddonInfo[] }> =>
     ipcRenderer.invoke(IPC_CHANNELS.CLEANUP_LIBS_SELECTED, addonsPath, folderNames),
-  previewCleanupSettings: (addonsPath: string, existingAddonNames: string[]): Promise<{ orphanedSettings: string[]; orphanedSavedVars: string[] }> =>
+  previewCleanupSettings: (addonsPath: string, existingAddonNames: string[]): Promise<{ orphanedSettings: string[]; orphanedSavedVars: string[]; ballast: SvBallastFinding[] }> =>
     ipcRenderer.invoke(IPC_CHANNELS.PREVIEW_CLEANUP_SETTINGS, addonsPath, existingAddonNames),
   cleanupSettingsSelected: (
     addonsPath: string,
     existingAddonNames: string[],
     settingsToRemove: string[],
-    savedVarsToRemove: string[]
-  ): Promise<{ removedFromSettings: string[]; removedSavedVars: string[]; backupPath: string; svBackupDir: string; error?: string }> =>
-    ipcRenderer.invoke(IPC_CHANNELS.CLEANUP_SETTINGS_SELECTED, addonsPath, existingAddonNames, settingsToRemove, savedVarsToRemove),
+    savedVarsToRemove: string[],
+    ballastToRemove: string[]
+  ): Promise<{ removedFromSettings: string[]; removedSavedVars: string[]; trimmedSavedVars: { file: string; bytes: number }[]; backupPath: string; svBackupDir: string; error?: string }> =>
+    ipcRenderer.invoke(IPC_CHANNELS.CLEANUP_SETTINGS_SELECTED, addonsPath, existingAddonNames, settingsToRemove, savedVarsToRemove, ballastToRemove),
   previewCleanupDownloads: (addonsPath: string): Promise<string[]> =>
     ipcRenderer.invoke(IPC_CHANNELS.PREVIEW_CLEANUP_DOWNLOADS, addonsPath),
   cleanupDownloadsSelected: (addonsPath: string, fileNames: string[]): Promise<{ moved: string[] }> =>
@@ -189,7 +190,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   reconcileYaamMeta: (
     addonsPath: string,
     matches: { folderName: string; esouid: string; name: string; author: string; version: string; url: string; catalogDate: number; localVersion: string; confident: boolean }[]
-  ): Promise<{ created: number; updated: number; details: string[] }> =>
+  ): Promise<{ created: number; updated: number; details: string[]; entries: Record<string, YaamAddonEntry> }> =>
     ipcRenderer.invoke(IPC_CHANNELS.RECONCILE_YAAM_META, addonsPath, matches),
   getYaamDb: (addonsPath: string): Promise<Record<string, { esouid: string; url: string; catalogName: string; catalogAuthor: string; catalogVersion: string; localVersion: string; installedAt: string; updatedAt: string }>> =>
     ipcRenderer.invoke(IPC_CHANNELS.GET_YAAM_DB, addonsPath),
@@ -201,6 +202,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.invoke(IPC_CHANNELS.LIST_REMOVED, addonsPath),
   restoreRemoved: (addonsPath: string, relPath: string): Promise<{ restored: boolean; target: string; error?: string }> =>
     ipcRenderer.invoke(IPC_CHANNELS.RESTORE_REMOVED, addonsPath, relPath),
+  isGameRunning: (): Promise<boolean> => ipcRenderer.invoke(IPC_CHANNELS.IS_GAME_RUNNING),
   moveDownloadsBack: (addonsPath: string, fileNames: string[]): Promise<{ restored: string[]; errors: string[] }> =>
     ipcRenderer.invoke(IPC_CHANNELS.MOVE_DOWNLOADS_BACK, addonsPath, fileNames),
   updateCatalogSnapshot: (addonsPath: string): Promise<{ changed: [string, { oldVersion: string; newVersion: string }][]; added: string[]; removed: string[] } | null> =>
@@ -210,6 +212,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
     entries: { folderName: string; esouid: string; url: string; name: string; author: string; catalogVersion: string; catalogDate?: number; localVersion: string; overlays?: { esouid: string; catalogName: string; catalogVersion: string; catalogDate?: number }[] }[]
   ): Promise<{ anchored: number; details: string[]; trackingBackupDir: string }> =>
     ipcRenderer.invoke(IPC_CHANNELS.COMMIT_BASELINE, addonsPath, entries),
+  adoptCachedRelease: (
+    addonsPath: string,
+    requests: { folderName: string; zipName: string; notBefore: number; mode: 'anchor' | 'stamp'; baseline?: { folderName: string; esouid: string; url: string; name: string; author: string; catalogVersion: string; catalogDate?: number; localVersion: string } }[]
+  ): Promise<{ folderName: string; outcome: 'anchored' | 'stamped' | 'differs' | 'no-cache' | 'stale-cache' | 'not-in-zip' | 'skipped'; modified?: number; missing?: number }[]> =>
+    ipcRenderer.invoke(IPC_CHANNELS.ADOPT_CACHED_RELEASE, addonsPath, requests),
+  cacheRelease: (addonsPath: string, addonId: string): Promise<boolean> =>
+    ipcRenderer.invoke(IPC_CHANNELS.CACHE_RELEASE, addonsPath, addonId),
   previewFolderHygiene: (addonsPath: string): Promise<{
     strayManifests: { file: string; addonName: string; title: string; version: string; addonVersion: number; relatedFiles: string[]; folderExists: boolean; folderVersion: string; rootIsStale: boolean }[];
     duplicates: { relPath: string; originalRelPath: string; isDirectory: boolean }[];

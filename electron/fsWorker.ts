@@ -42,7 +42,7 @@ import {
   getAllEntries, cleanupMarkerFiles, restoreTrackingState, migrateFromFolderFiles,
 } from './yaamDatabase';
 import {
-  prepareDownload, verifyZip, extractAndRegister, previewCleanupDownloads,
+  prepareDownload, verifyZip, extractAndRegister, adoptCachedRelease, previewCleanupDownloads,
   cleanupDownloadsSelected, moveDownloadsBack, cleanupDownloadsFolder,
 } from './addonFiles';
 
@@ -103,6 +103,7 @@ const handlers = {
   prepareDownload,
   verifyZip,
   extractAndRegister,
+  adoptCachedRelease,
   previewCleanupDownloads,
   cleanupDownloadsSelected,
   moveDownloadsBack,

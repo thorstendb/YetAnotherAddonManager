@@ -1,7 +1,8 @@
 // Copyright (c) 2026 thorstendb
 // SPDX-License-Identifier: MIT
 /**
- * Per-character dependency consistency of AddOnSettings.txt.
+ * Per-character dependency consistency of AddOnSettings.txt, and the folders
+ * no character uses at all.
  *
  * The game skips an enabled addon with "missing dependency" when a REQUIRED
  * dependency is switched off for that character — although everything is
@@ -73,4 +74,51 @@ export function findCharDepConflicts(
     }
   }
   return result;
+}
+
+/**
+ * Game entries that decide whether a top-level folder is in use: its own
+ * manifest plus its modules.  Embedded libraries do not count — they are
+ * usually also installed standalone and switched on everywhere, which would
+ * keep every host addon "in use".  A container whose children are all
+ * libraries falls back to all of them.
+ */
+function usageEntries(addon: AddonInfo): string[] {
+  const modules = addon.subAddons.filter((s) => !s.isLibrary).map((s) => s.folderName);
+  if (!addon.isContainer) return [addon.folderName, ...modules];
+  return modules.length > 0 ? modules : addon.subAddons.map((s) => s.folderName);
+}
+
+/**
+ * Top-level folders switched off for every character — the game never loads
+ * them.  `isEnabled` must apply the game's rules (missing entry → #Default →
+ * enabled).  A folder that provides a REQUIRED dependency of a folder in use
+ * is kept, even when it is switched off everywhere: removing it would turn a
+ * fixable "missing dependency" into a missing install.  Without any character
+ * section nothing can be judged, so nothing is reported.
+ */
+export function findUnusedAddons(
+  addons: AddonInfo[],
+  characters: string[],
+  isEnabled: (character: string, name: string) => boolean
+): string[] {
+  if (characters.length === 0) return [];
+  const isUsed = (addon: AddonInfo) =>
+    characters.some((c) => usageEntries(addon).some((name) => isEnabled(c, name)));
+  const used = addons.filter(isUsed);
+  const unused = addons.filter((a) => !isUsed(a));
+
+  const required = new Set<string>();
+  for (const addon of used) {
+    for (const mod of [addon, ...addon.subAddons]) {
+      for (const dep of mod.dependsOn) required.add(dep.name);
+    }
+  }
+  // Names still provided by a folder that stays installed
+  const keptProviders = new Set(used.flatMap((a) => [a.folderName, ...a.subAddons.map((s) => s.folderName)]));
+
+  return unused
+    .filter((a) => ![a, ...a.subAddons].some((m) => required.has(m.folderName) && !keptProviders.has(m.folderName)))
+    .map((a) => a.folderName)
+    .sort((a, b) => a.localeCompare(b));
 }

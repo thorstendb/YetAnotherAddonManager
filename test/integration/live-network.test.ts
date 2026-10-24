@@ -136,6 +136,18 @@ describe.skipIf(!enabled)('live ESOUI endpoints (YAAM_LIVE_TEST=1)', () => {
 
       // 2. the nested module's dependency
       expect((await entryOf(addons, 'LibFoodDrinkBuff'))?.esouid).toBe('1902');
+      // …and the requested addon itself is tracked, even though nothing had
+      // loaded the catalog before this install
+      expect((await entryOf(addons, 'PersonalAssistant'))?.esouid).toBe('3512');
+    }, 600_000);
+
+    it('Chat Input Viewer: no uninvited TeamFormation, LibAddonMenu-2.0 r43 (PTS report, October 2026)', async () => {
+      const addons = fresh('civ');
+      const result = await api.installWithDependencies('4158', addons);
+      expect(result.error).toBeUndefined();
+      expect(fs.readdirSync(addons).sort()).toEqual(['ChatInputViewer', 'LibAddonMenu-2.0']);
+      expect((await entryOf(addons, 'LibAddonMenu-2.0'))?.esouid).toBe(LIB_ADDON_MENU_UID);
+      expect(addonVersionOf(addons, 'LibAddonMenu-2.0')).toBeGreaterThanOrEqual(40);
     }, 600_000);
 
     it('Quest Map: the real LibQuestData, not a language patch', async () => {
