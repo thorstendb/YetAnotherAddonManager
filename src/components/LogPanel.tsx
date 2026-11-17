@@ -5,7 +5,14 @@ import React, { useEffect, useRef, useMemo } from 'react';
 export interface LogEntry {
   timestamp: Date;
   message: string;
-  level: 'info' | 'warn' | 'error' | 'success';
+  /**
+   * `attention` is for problems YAAM found but cannot fix on its own — the
+   * user has to act.  Distinct from `error` (an operation failed) and `warn`
+   * (worth knowing, maybe harmless), so it can stand out without crying wolf.
+   */
+  level: 'info' | 'warn' | 'error' | 'success' | 'attention';
+  /** Bold — for the few lines that must not drown in a long log */
+  strong?: boolean;
   action?: { label: string; onClick: () => void };
 }
 
@@ -81,6 +88,7 @@ const LogPanel: React.FC<LogPanelProps> = ({ logs, height, knownNames, onNavigat
     warn: 'var(--yellow)',
     error: 'var(--red)',
     success: 'var(--green)',
+    attention: 'var(--orange)',
   };
 
   return (
@@ -136,7 +144,14 @@ const LogPanel: React.FC<LogPanelProps> = ({ logs, height, knownNames, onNavigat
           <div className="log-empty">No log entries</div>
         ) : (
           logs.map((entry, i) => (
-            <div key={i} className="log-entry" style={{ color: levelColors[entry.level] || undefined }}>
+            <div
+              key={i}
+              className="log-entry"
+              style={{
+                color: levelColors[entry.level] || undefined,
+                fontWeight: entry.strong ? 700 : undefined,
+              }}
+            >
               <span className="log-time">[{formatTime(entry.timestamp)}]</span>
               <span className="log-message">
                 {renderMessage(entry.message)}

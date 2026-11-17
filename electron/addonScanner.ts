@@ -3,7 +3,10 @@
 import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
-import { AddonInfo, DependencyRef, ColorSegment, FileStamp, YaamAddonEntry, compareVersionStrings, versionsDigitEqual } from './shared/types';
+import { AddonInfo, DependencyRef, ColorSegment, FileStamp, YaamAddonEntry, BundledLibReport,
+  compareVersionStrings, versionsDigitEqual } from './shared/types';
+// Re-exported for existing importers — the shapes are shared with the renderer
+export type { BundledLibReport, EmbeddedLibLocation } from './shared/types';
 import { loadDatabase, saveDatabase, YaamDatabase, readMarkerFile, writeMarkerFile, backupTrackingState } from './yaamDatabase';
 import { canEnterDir } from './shared/fsWalk';
 import { writeJsonAtomic } from './shared/atomicWrite';
@@ -466,6 +469,12 @@ export function scanAddonsFolder(addonsPath: string): AddonInfo[] {
   let dbChanged = false;
   for (const addon of addons) {
     let entry = db.addons[addon.folderName];
+
+    // Minion's own record, kept as-is for display: it is what Minion shows the
+    // user, so a stale one is worth pointing out even when YAAM tracks the
+    // folder itself (the bootstrap below only applies to untracked folders).
+    const minion = minionData.get(addon.folderName);
+    if (minion) addon.minion = { uid: minion.uid, uiVersion: minion.uiVersion };
 
     // Read .yaam.json marker file from the addon folder
     const marker = readMarkerFile(addonsPath, addon.folderName);
@@ -1090,46 +1099,105 @@ export interface HygieneDuplicate {
   isDirectory: boolean;
 }
 
-/** One place where a library is embedded inside another addon's folder. */
-export interface EmbeddedLibLocation {
-  /** Top-level addon whose folder contains the copy */
-  parent: string;
-  /** Path of the embedded copy, relative to the AddOns folder */
-  relPath: string;
-  version: string;
-  addonVersion: number;
+/** A version header that is a build placeholder, not a version. */
+function isPlaceholderVersion(v: string): boolean {
+  return v === '' || /VERSION_NUMBER|@project|\$\{/i.test(v);
 }
 
 /**
- * A library that exists BOTH as its own top-level addon and embedded inside
- * one or more other addons.
+ * Read what can be known about a library copy that is NOT a sub-addon: it has
+ * no `<Folder>/<Folder>.txt`, so the version — if any — sits in a manifest the
+ * author left lying beside the folder (`libs/LibAddonMenu-2.0.txt`), and that
+ * one may carry unsubstituted placeholders.
  */
-export interface BundledLibReport {
-  /** Folder name of the library */
-  name: string;
-  standaloneVersion: string;
-  standaloneAddonVersion: number;
-  isLibrary: boolean;
-  embedded: EmbeddedLibLocation[];
-  /**
-   * The standalone copy is OLDER than at least one embedded copy.
-   *
-   * This is the only state that actually causes damage.  ESO loads whichever
-   * copy wins, and an addon manager that "deduplicates" by dropping the
-   * embedded copy (Minion does this) leaves the host addon running against a
-   * library older than the one it shipped with.  The fix is always to update
-   * the standalone library — never to delete the embedded one.
-   */
-  standaloneOutdated: boolean;
+function readEmbeddedCopyInfo(dir: string, name: string): {
+  version: string; addonVersion: number; usesLibStub: boolean; placeholderVersion: boolean;
+  versionFromLibStub: boolean;
+} {
+  let version = '';
+  let addonVersion = 0;
+  let versionFromLibStub = false;
+  for (const candidate of [
+    resolveManifestPath(dir, name),
+    path.join(path.dirname(dir), `${name}.txt`),
+    path.join(path.dirname(dir), `${name}.addon`),
+  ]) {
+    if (!candidate || !fs.existsSync(candidate)) continue;
+    const info = readManifestVersionInfo(candidate);
+    if (!info) continue;
+    if (!isPlaceholderVersion(info.version)) version = info.version;
+    if (info.addonVersion > 0) addonVersion = info.addonVersion;
+    break;
+  }
+
+  // The library's own entry file says how it registers.  Only that one file is
+  // read — enough for the pattern, and bounded.
+  let usesLibStub = false;
+  let placeholderVersion = false;
+  try {
+    const entry = path.join(dir, `${name}.lua`);
+    if (fs.existsSync(entry)) {
+      const src = fs.readFileSync(entry, 'utf-8');
+      // A CALL that assigns the result — not LibStub.lua's own definition
+      // `function LibStub:NewLibrary(…)`, which would match a looser pattern
+      usesLibStub = /=\s*LibStub\s*:\s*NewLibrary\s*\(/.test(src);
+      if (usesLibStub) {
+        // The registration version was a build placeholder nobody substituted
+        // (ExecuteNow: `_LAM2_VERSION_NUMBER or -1`) — the copy registers as -1.
+        // This, not LibStub as such, is the confirmed-broken pattern.
+        placeholderVersion = /VERSION_NUMBER/.test(src);
+        // Without a manifest, the LibStub minor is the only version there is:
+        // `NewLibrary(ID, 2)` or `local MAJOR, MINOR = "LibAddonMenu-2.0", 25`
+        if (!addonVersion && !placeholderVersion) {
+          const m = src.match(/NewLibrary\s*\(\s*[^,()]+,\s*(\d+)\s*\)/)
+            ?? src.match(/local\s+MAJOR\s*,\s*MINOR\s*=\s*[^,\n]+,\s*(\d+)/);
+          if (m) {
+            addonVersion = parseInt(m[1], 10);
+            versionFromLibStub = true;
+          }
+        }
+      }
+    }
+  } catch { /* unreadable — leave the flags off */ }
+
+  return { version, addonVersion, usesLibStub, placeholderVersion, versionFromLibStub };
+}
+
+/**
+ * Libraries whose whole purpose is to be loaded many times: LibStub exists to
+ * arbitrate between bundled copies, so finding it twice is the design working,
+ * not a collision.
+ */
+const MULTI_COPY_BY_DESIGN = new Set(['LibStub']);
+
+/**
+ * Directory segments a manifest's file list walks through, so a bundled library
+ * is found by the only evidence that always exists: the host loading it.
+ * ESO manifests use backslashes, and the last segment is the file itself.
+ */
+function fileListDirSegments(files: string[]): Set<string> {
+  const segments = new Set<string>();
+  for (const f of files) {
+    const parts = f.replace(/\\/g, '/').split('/').map((p) => p.trim()).filter(Boolean);
+    for (const part of parts.slice(0, -1)) segments.add(part);
+  }
+  return segments;
 }
 
 /**
  * Find libraries that exist standalone AND embedded in other addons.
  *
+ * Two shapes, because authors bundle in two ways:
+ *  1. a sub-addon with its own manifest (MasterMerchant/Libs/LibGuildStore)
+ *  2. plain source files the HOST's manifest loads (ExecuteNow listing
+ *     `libs/LibAddonMenu-2.0/LibAddonMenu-2.0.lua`) — invisible to a sub-addon
+ *     scan, and the case a user had to hand-search
+ *
  * Deliberately NOT reported: a sub-addon sitting inside the folder of the
  * same-named top-level addon (HarvestMap/Modules/HarvestMap).  That is the
  * author's own module layout, not a bundling conflict, and flagging it would
- * put a warning on a perfectly healthy install.
+ * put a warning on a perfectly healthy install.  Likewise a bundled library
+ * that is NOT installed standalone: nothing loads twice, nothing to say.
  */
 export function findBundledLibs(addonsPath: string): BundledLibReport[] {
   const all = scanAddonsFolder(addonsPath);
@@ -1152,6 +1220,8 @@ export function findBundledLibs(addonsPath: string): BundledLibReport[] {
           isLibrary: standalone.isLibrary || sub.isLibrary,
           embedded: [],
           standaloneOutdated: false,
+          versionMismatch: false,
+          brokenRegistration: false,
         };
         byName.set(sub.folderName, report);
       }
@@ -1165,18 +1235,108 @@ export function findBundledLibs(addonsPath: string): BundledLibReport[] {
       // AddOnVersion is the reliable comparison: a monotonic integer ESO itself
       // uses.  The Version string is author-formatted prose ("1.0 r43") and
       // only worth consulting when the numeric header is missing.
-      const newer =
+      const cmp =
         standalone.addonVersion && sub.addonVersion
-          ? sub.addonVersion > standalone.addonVersion
-          : compareVersionStrings(sub.version, standalone.version) > 0;
-      if (newer) report.standaloneOutdated = true;
+          ? Math.sign(sub.addonVersion - standalone.addonVersion)
+          : compareVersionStrings(sub.version, standalone.version);
+      if (cmp > 0) report.standaloneOutdated = true;
+      if (cmp !== 0) report.versionMismatch = true;
+    }
+  }
+
+  // ── Pass 2: copies the host loads from its own manifest file list ──
+  for (const top of all) {
+    const recorded = new Set<string>();
+    for (const [, r] of byName) {
+      for (const e of r.embedded) if (e.parent === top.folderName) recorded.add(r.name);
+    }
+    for (const segment of fileListDirSegments(top.files)) {
+      if (segment === top.folderName || recorded.has(segment)) continue;
+      if (segment.startsWith('ZO_') || MULTI_COPY_BY_DESIGN.has(segment)) continue;
+      const standalone = topLevel.get(segment);
+      if (!standalone || standalone.folderName === top.folderName) continue;
+
+      // The segment names a standalone addon — locate the copy on disk
+      const dir = findDirNamed(top.path, segment);
+      if (!dir) continue;
+
+      const info = readEmbeddedCopyInfo(dir, segment);
+      let report = byName.get(segment);
+      if (!report) {
+        report = {
+          name: standalone.folderName,
+          standaloneVersion: standalone.version,
+          standaloneAddonVersion: standalone.addonVersion,
+          isLibrary: standalone.isLibrary,
+          embedded: [],
+          standaloneOutdated: false,
+          versionMismatch: false,
+          brokenRegistration: false,
+        };
+        byName.set(segment, report);
+      }
+      const versionUnknown = info.placeholderVersion || (!info.version && !info.addonVersion);
+      report.embedded.push({
+        parent: top.folderName,
+        relPath: path.relative(addonsPath, dir),
+        version: info.version,
+        addonVersion: info.addonVersion,
+        viaFileList: true,
+        usesLibStub: info.usesLibStub,
+        versionUnknown,
+        placeholderVersion: info.placeholderVersion,
+        versionFromLibStub: info.versionFromLibStub,
+      });
+
+      if (info.placeholderVersion) report.brokenRegistration = true;
+      // An unreadable version cannot be declared equal — "no mismatch" would
+      // wave through exactly the copy that caused the reported breakage.
+      if (versionUnknown) {
+        report.versionMismatch = true;
+      } else if (info.versionFromLibStub) {
+        // A LibStub minor need not count like the standalone's AddOnVersion
+        // (a date-style minor against `AddOnVersion: 19`), so it can say
+        // "different" — never which side is older.  Claiming the standalone is
+        // outdated on that basis would raise the loudest alarm on a guess.
+        if (info.addonVersion !== standalone.addonVersion) report.versionMismatch = true;
+      } else {
+        const cmp =
+          standalone.addonVersion && info.addonVersion
+            ? Math.sign(info.addonVersion - standalone.addonVersion)
+            : compareVersionStrings(info.version, standalone.version);
+        if (cmp > 0) report.standaloneOutdated = true;
+        if (cmp !== 0) report.versionMismatch = true;
+      }
     }
   }
 
   return Array.from(byName.values()).sort((a, b) => {
+    if (a.brokenRegistration !== b.brokenRegistration) return a.brokenRegistration ? -1 : 1;
     if (a.standaloneOutdated !== b.standaloneOutdated) return a.standaloneOutdated ? -1 : 1;
+    if (a.versionMismatch !== b.versionMismatch) return a.versionMismatch ? -1 : 1;
     return a.name.localeCompare(b.name);
   });
+}
+
+/** Locate a directory of the given name inside an addon folder (depth-bounded). */
+function findDirNamed(root: string, name: string, depth = 0): string | null {
+  if (depth > 4) return null;
+  let entries: fs.Dirent[];
+  try {
+    entries = fs.readdirSync(root, { withFileTypes: true });
+  } catch {
+    return null;
+  }
+  for (const entry of entries) {
+    if (!entry.isDirectory() || entry.isSymbolicLink()) continue;
+    if (entry.name === name) return path.join(root, entry.name);
+  }
+  for (const entry of entries) {
+    if (!entry.isDirectory() || entry.isSymbolicLink()) continue;
+    const hit = findDirNamed(path.join(root, entry.name), name, depth + 1);
+    if (hit) return hit;
+  }
+  return null;
 }
 
 export interface HygienePreview {

@@ -1,7 +1,11 @@
 // Copyright (c) 2026 thorstendb
 // SPDX-License-Identifier: MIT
-import { AddonInfo, AddonSettingsData, AppConfig, CatalogAddon, SavedVarsInfo, SvBallastFinding, YaamAddonEntry } from '../electron/shared/types';
-import { ExportData } from '../electron/settingsManager';
+// Paths are relative to src/types/, hence ../../ — check them when moving this
+// file.  With skipLibCheck on, a wrong path in a .d.ts is NOT an error: every
+// imported type silently becomes `any`, and the whole window.electronAPI
+// surface stops being type-checked (it ran that way until this was fixed).
+import { AddonInfo, AddonSettingsData, AppConfig, BundledLibReport, CatalogAddon, SavedVarsInfo, SvBallastFinding, YaamAddonEntry } from '../../electron/shared/types';
+import { ExportData } from '../../electron/settingsManager';
 
 interface SnapshotAddon {
   folderName: string;
@@ -167,14 +171,7 @@ declare global {
         strayManifests: { file: string; addonName: string; title: string; version: string; addonVersion: number; relatedFiles: string[]; folderExists: boolean; folderVersion: string; rootIsStale: boolean }[];
         duplicates: { relPath: string; originalRelPath: string; isDirectory: boolean }[];
         unclaimedRootFiles: string[];
-        bundledLibs: {
-          name: string;
-          standaloneVersion: string;
-          standaloneAddonVersion: number;
-          isLibrary: boolean;
-          embedded: { parent: string; relPath: string; version: string; addonVersion: number }[];
-          standaloneOutdated: boolean;
-        }[];
+        bundledLibs: BundledLibReport[];
       }>;
       applyFolderHygiene: (
         addonsPath: string,

@@ -1,7 +1,7 @@
 // Copyright (c) 2026 thorstendb
 // SPDX-License-Identifier: MIT
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import { AddonInfo, AddonSettingsData, CatalogAddon, SavedVarsInfo, SvBallastFinding, compareVersionStrings, versionsDigitEqual, dateToVersion, releaseZipName } from '../electron/shared/types';
+import { AddonInfo, AddonSettingsData, BundledLibReport, CatalogAddon, SavedVarsInfo, SvBallastFinding, compareVersionStrings, versionsDigitEqual, dateToVersion, releaseZipName } from '../electron/shared/types';
 import { classifyDirOwnership, distrustTrackedIdentity, findHijackedManifestOverlay, hasOverlayStyleName } from '../electron/shared/overlays';
 import { CharDepConflict, findCharDepConflicts, findUnusedAddons, requiredDepClosure } from '../electron/shared/charDeps';
 import PathBar from './components/PathBar';
@@ -21,7 +21,10 @@ import SettingsDialog from './components/SettingsDialog';
 import CleanupDialog, { CleanupSection, CleanupType } from './components/CleanupDialog';
 import BackupCleanupDialog, { formatSize } from './components/BackupCleanupDialog';
 import UpdateAllDialog, { UpdatableAddon } from './components/UpdateAllDialog';
-import HygieneDialog, { HygieneStray, HygieneDup } from './components/HygieneDialog';
+import HygieneDialog, { HygieneStray, HygieneDup, HygieneFix } from './components/HygieneDialog';
+
+/** A hygiene fix plus the catalog entry it installs — the target stays in App */
+type HygieneFixWithTarget = HygieneFix & { catalogAddon: CatalogAddon };
 import './styles/App.css';
 
 function errMsg(err: unknown): string {
@@ -192,18 +195,19 @@ function App() {
     skippedAmbiguous: number;
     skippedUncertain: number;
   } | null>(null);
+  /** Installs a catalog entry — bound once handleInstallAddon exists (see there) */
+  const installAddonRef = useRef<((ca: CatalogAddon) => Promise<void>) | null>(null);
+  /**
+   * Decisions the folder-hygiene scan offers for bundled-library problems.
+   * Shown as checkboxes in the hygiene dialog AND as buttons on the orange log
+   * lines, so they stay reachable after the dialog is closed — one code path.
+   */
+  const [hygieneFixes, setHygieneFixes] = useState<HygieneFixWithTarget[]>([]);
   const [hygienePreview, setHygienePreview] = useState<{
     strayManifests: HygieneStray[];
     duplicates: HygieneDup[];
     unclaimedRootFiles: string[];
-    bundledLibs: {
-      name: string;
-      standaloneVersion: string;
-      standaloneAddonVersion: number;
-      isLibrary: boolean;
-      embedded: { parent: string; relPath: string; version: string; addonVersion: number }[];
-      standaloneOutdated: boolean;
-    }[];
+    bundledLibs: BundledLibReport[];
   } | null>(null);
 
   // Theme state: persisted in localStorage
@@ -232,8 +236,12 @@ function App() {
   const initRef = useRef(false);
 
   // Logging helper
-  const addLog = useCallback((message: string, level: LogEntry['level'] = 'info') => {
-    setLogs((prev) => [...prev, { timestamp: new Date(), message, level }]);
+  const addLog = useCallback((
+    message: string,
+    level: LogEntry['level'] = 'info',
+    extra?: { strong?: boolean; action?: LogEntry['action'] },
+  ) => {
+    setLogs((prev) => [...prev, { timestamp: new Date(), message, level, ...extra }]);
   }, []);
 
   // Load saved config on mount (guarded against StrictMode double-run)
@@ -1703,20 +1711,70 @@ function App() {
       const preview = await window.electronAPI.previewFolderHygiene(addonPath);
       const total = preview.strayManifests.length + preview.duplicates.length + preview.unclaimedRootFiles.length;
 
-      // Bundled libraries are reported even when nothing is repairable — an
-      // outdated standalone copy is the one state that causes real damage.
-      const outdated = preview.bundledLibs.filter((b) => b.standaloneOutdated);
-      for (const b of outdated) {
+      // Bundled libraries: which copy a host ends up using is decided by its
+      // own code, so YAAM never deletes one.  What it can do is name the
+      // collision precisely and offer the fixes that ARE safe — as checkboxes
+      // in the dialog and as buttons on the log line, one code path for both.
+      const bundledLibs: BundledLibReport[] = preview.bundledLibs;
+      const fixes: HygieneFixWithTarget[] = [];
+
+      // Severity, from confirmed to unconfirmed:
+      //  attention (orange, bold) — a problem the user has to act on
+      //  warn                     — two copies live, may well be harmless
+      //  info                     — identical copies, nothing to do
+      for (const b of bundledLibs.filter((x) => x.brokenRegistration)) {
+        for (const e of b.embedded.filter((x) => x.placeholderVersion)) {
+          const fork = replacementCandidates.get(e.parent);
+          const fix: HygieneFixWithTarget | undefined = fork && {
+            key: `fork:${e.parent}`,
+            label: `Switch ${e.parent} to "${fork.name}" v${fork.version}`,
+            detail: `Another catalog entry maintains this folder. Check that it no longer ships its own ${b.name}.`,
+            recommended: false, // a different author's addon: opt-in, like replacements in Update All
+            catalogAddon: fork,
+          };
+          if (fix) fixes.push(fix);
+          addLog(
+            `${e.parent} loads its own ${b.name} and registers it with an unfilled version placeholder — ` +
+            `the current ${b.name} (v${b.standaloneVersion || '?'}) then cannot initialize its handlers. ` +
+            (fix ? `Fix: switch to the maintained "${fork!.name}".` : `No maintained replacement in the catalog — contact the author of ${e.parent}.`),
+            'attention',
+            { strong: true, action: fix && { label: `Switch to ${fork!.name}`, onClick: () => { installAddonRef.current?.(fix.catalogAddon); } } },
+          );
+        }
+      }
+      for (const b of bundledLibs.filter((x) => x.standaloneOutdated && !x.brokenRegistration)) {
+        const own = addons.find((a) => a.folderName === b.name);
+        const ca = own && getCatalogAddon(own);
+        const fix: HygieneFixWithTarget | undefined = ca && {
+          key: `update:${b.name}`,
+          label: `Update ${b.name} to v${ca.version}`,
+          detail: `Your standalone copy is older than the one bundled in ${b.embedded.map((e) => e.parent).join(', ')}.`,
+          recommended: true, // an ordinary update of the user's own library, backed up and undoable
+          catalogAddon: ca,
+        };
+        if (fix) fixes.push(fix);
         addLog(
-          `Bundled library: your standalone ${b.name} (v${b.standaloneVersion || '?'}) is OLDER than the copy in ` +
+          `Your standalone ${b.name} (v${b.standaloneVersion || '?'}) is OLDER than the copy in ` +
           `${b.embedded.map((e) => `${e.parent} (v${e.version || '?'})`).join(', ')} — update ${b.name}`,
-          'error'
+          'attention',
+          { strong: true, action: fix && { label: `Update ${b.name}`, onClick: () => { installAddonRef.current?.(fix.catalogAddon); } } },
         );
       }
-      if (preview.bundledLibs.length > outdated.length) {
-        const same = preview.bundledLibs.length - outdated.length;
-        addLog(`Bundled libraries: ${same} also present inside other addons at the same version (nothing to do)`, 'info');
+      for (const b of bundledLibs.filter((x) => x.versionMismatch && !x.standaloneOutdated && !x.brokenRegistration)) {
+        const where = b.embedded
+          .map((e) => `${e.parent} (${e.versionUnknown ? 'version unreadable' : `v${e.version || e.addonVersion || '?'}${e.versionFromLibStub ? ' via LibStub' : ''}`})`)
+          .join(', ');
+        addLog(
+          `Bundled library: ${where} loads its own copy of ${b.name}; you also have ${b.name} ` +
+          `v${b.standaloneVersion || '?'} installed standalone — two different copies are live`,
+          'warn'
+        );
       }
+      const identical = bundledLibs.filter((b) => !b.versionMismatch);
+      if (identical.length > 0) {
+        addLog(`Bundled libraries: ${identical.length} also present inside other addons at the same version (nothing to do)`, 'info');
+      }
+      setHygieneFixes(fixes);
 
       if (total === 0 && preview.bundledLibs.length === 0) {
         addLog('Folder hygiene: no problems found — the AddOns folder is clean', 'success');
@@ -1728,14 +1786,21 @@ function App() {
     } finally {
       setLoading(false);
     }
-  }, [addonPath, addLog]);
+  }, [addonPath, addLog, replacementCandidates, addons, getCatalogAddon]);
 
-  const handleHygieneConfirm = useCallback(async (actions: { repairs: string[]; removals: string[] }) => {
+  const handleHygieneConfirm = useCallback(async (actions: { repairs: string[]; removals: string[]; fixes: string[] }) => {
     setHygienePreview(null);
     if (!addonPath) return;
+    // Fixes are installs, run after the folder work so they land on a clean folder
+    const chosenFixes = hygieneFixes.filter((f) => actions.fixes.includes(f.key));
+    setHygieneFixes([]);
+    if (actions.repairs.length + actions.removals.length === 0) {
+      for (const f of chosenFixes) await installAddonRef.current?.(f.catalogAddon);
+      return;
+    }
     setLoading(true);
     try {
-      const res = await window.electronAPI.applyFolderHygiene(addonPath, actions);
+      const res = await window.electronAPI.applyFolderHygiene(addonPath, { repairs: actions.repairs, removals: actions.removals });
       for (const e of res.errors) addLog(`Hygiene: ${e}`, 'warn');
       const totalChanged = res.repaired.length + res.removed.length;
       if (totalChanged > 0) {
@@ -1766,7 +1831,8 @@ function App() {
     } finally {
       setLoading(false);
     }
-  }, [addonPath, addLog, scanPath]);
+    for (const f of chosenFixes) await installAddonRef.current?.(f.catalogAddon);
+  }, [addonPath, addLog, scanPath, hygieneFixes]);
 
   // Set of folder names that have an update available (used for sorting to top)
   // Authoritative set of catalog addon IDs that have an update available.
@@ -2705,6 +2771,47 @@ function App() {
       catalogDiffReady, updatableCatalogIds, replacementCandidates, mightUpdateCount, layeredItems,
       locallyModifiedIds, catalogById, addLog, handleUpdateAllConfirm]);
 
+  /**
+   * Minion false positives: addons Minion's database still marks for update
+   * although they are current — typically because YAAM updated them and
+   * Minion's record never caught up.
+   *
+   * Only claimed where YAAM is CERTAIN the addon is current: it installed
+   * exactly the catalog's current release itself (tracked version = catalog
+   * version) and sees no update.  "Not flagged for update" alone is not enough
+   * — inconclusive version comparisons are not flagged either, and calling
+   * those "up to date" would be a false positive of our own.
+   */
+  const minionFpLoggedRef = useRef('');
+  useEffect(() => {
+    if (!addonPath || loading || updatingAll) return;
+    if (addons.length === 0 || catalogAddons.length === 0 || !catalogDiffReady) return;
+    const falsePositives: string[] = [];
+    for (const addon of addons) {
+      const minion = addon.minion;
+      if (!minion) continue;
+      const ca = getCatalogAddon(addon);
+      // Minion must be talking about the same catalog entry YAAM matched
+      if (!ca || ca.id !== minion.uid) continue;
+      if (updatableCatalogIds.has(ca.id)) continue;
+      const current = ca.version.trim();
+      if ((addon.yaamMeta?.catalogVersion ?? '').trim() !== current) continue; // not certain it is current
+      if (minion.uiVersion.trim() !== current) falsePositives.push(addon.title || addon.folderName);
+    }
+    // Once per distinct result — a rescan with the same picture stays quiet
+    const signature = [...falsePositives].sort().join('\0');
+    if (signature === minionFpLoggedRef.current) return;
+    minionFpLoggedRef.current = signature;
+    if (falsePositives.length === 0) return;
+    addLog(
+      `False positive: Minion's database still lists an update for ${falsePositives.length} addon(s) ` +
+      `that are up to date — ${falsePositives.sort((a, b) => a.localeCompare(b)).join(', ')}`,
+      'success',
+      { strong: true },
+    );
+  }, [addonPath, loading, updatingAll, addons, catalogAddons.length, catalogDiffReady,
+      getCatalogAddon, updatableCatalogIds, addLog]);
+
   const handleCleanupSettings = useCallback(async () => {
     if (!addonPath || addons.length === 0) return;
     const existingNames = gameEntryNames(addons);
@@ -2855,7 +2962,7 @@ function App() {
     }
   }, [addonPath, addLog]);
 
-  // Restore an entry from Removed/ (deletes, cleanups and hygiene runs all
+  //Restore an entry from Removed/ (deletes, cleanups and hygiene runs all
   // move folders there — this is their global recovery path)
   const handleRestoreRemoved = useCallback(async (relPath: string) => {
     if (!addonPath) return;
@@ -3111,6 +3218,9 @@ function App() {
     },
     [addonPath, addons, addLog, scanPath, dirOwnership, topLevelDirNames, getSnapshotHoldIds]
   );
+  // Bound here, read by callbacks declared earlier (folder hygiene) — those
+  // cannot list handleInstallAddon as a dependency without hitting the TDZ.
+  installAddonRef.current = handleInstallAddon;
 
   // Simple delete (no savedvars) for inline delete button
   const handleSimpleDelete = useCallback(
@@ -3755,6 +3865,7 @@ function App() {
           duplicates={hygienePreview.duplicates}
           unclaimedRootFiles={hygienePreview.unclaimedRootFiles}
           bundledLibs={hygienePreview.bundledLibs}
+          fixes={hygieneFixes}
           onConfirm={handleHygieneConfirm}
           onCancel={() => setHygienePreview(null)}
         />

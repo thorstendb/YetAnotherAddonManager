@@ -74,6 +74,13 @@ export interface AddonInfo {
   yaamMeta?: YaamAddonEntry;
   /** YAAM marker file data read from .yaam.json in the addon folder */
   yaamMarker?: YaamMarker;
+  /**
+   * The folder's entry in Minion's database (AddOns/miniondata.json), if any:
+   * the catalog version Minion last installed.  Minion offers an update when it
+   * differs from the catalog — so a stale entry here makes Minion show an
+   * update for an addon that is already current.
+   */
+  minion?: { uid: string; uiVersion: string };
   /** Files found in the addon folder that were NOT part of the original install (runtime-created) */
   runtimeFiles?: string[];
   /** Files YAAM installed from the catalog ZIP that are gone from disk
@@ -809,3 +816,75 @@ export const IPC_CHANNELS = {
   MOVE_DOWNLOADS_BACK: 'move-downloads-back',
   IS_GAME_RUNNING: 'is-game-running',
 } as const;
+
+/** One place where a library is embedded inside another addon's folder. */
+export interface EmbeddedLibLocation {
+  /** Top-level addon whose folder contains the copy */
+  parent: string;
+  /** Path of the embedded copy, relative to the AddOns folder */
+  relPath: string;
+  version: string;
+  addonVersion: number;
+  /**
+   * Found through the HOST's own manifest file list rather than as a sub-addon
+   * with its own manifest.  ExecuteNow is the reported case: its manifest lists
+   * `libs/LibAddonMenu-2.0/LibAddonMenu-2.0.lua`, so the game loads that copy
+   * as part of ExecuteNow — there is no second addon to notice, which is why a
+   * sub-addon scan walks straight past it.
+   */
+  viaFileList?: boolean;
+  /**
+   * The embedded copy registers itself through LibStub.  A library generation
+   * that predates the standalone one's registration scheme, so both end up
+   * live in the same Lua state: the ExecuteNow copy falls back to version -1
+   * (`_LAM2_VERSION_NUMBER or -1`, a build placeholder that never got
+   * substituted) while LibAddonMenu-2.0 r43 registers a plain global and never
+   * goes through LibStub at all.  This is what breaks handler registration.
+   */
+  usesLibStub?: boolean;
+  /** No version could be read for this copy (no manifest, or placeholders) */
+  versionUnknown?: boolean;
+  /** Registers through LibStub with a build placeholder for its version
+   *  (`_LAM2_VERSION_NUMBER or -1`) — the confirmed-broken ExecuteNow pattern */
+  placeholderVersion?: boolean;
+  /** Version read from the LibStub registration, not a manifest: comparable
+   *  for equality only — the numbering may differ from AddOnVersion */
+  versionFromLibStub?: boolean;
+}
+
+/**
+ * A library that exists BOTH as its own top-level addon and embedded inside
+ * one or more other addons.
+ */
+export interface BundledLibReport {
+  /** Folder name of the library */
+  name: string;
+  standaloneVersion: string;
+  standaloneAddonVersion: number;
+  isLibrary: boolean;
+  embedded: EmbeddedLibLocation[];
+  /**
+   * The standalone copy is OLDER than at least one embedded copy.
+   *
+   * Dropping the embedded copy (Minion does this) then leaves the host addon
+   * running against a library older than the one it shipped with.  The fix is
+   * to update the standalone library — not to delete the embedded one.
+   */
+  standaloneOutdated: boolean;
+  /**
+   * Standalone and embedded copy differ, or the embedded version cannot be
+   * read at all.  Reported because the reverse direction does damage too: an
+   * ancient embedded LibAddonMenu-2.0 registering through LibStub stops the
+   * current standalone one from initializing its handlers (reported for
+   * ExecuteNow).  "Older embedded copy" is NOT the harmless case it looks
+   * like — it just fails in the host's library instead of the host itself.
+   */
+  versionMismatch: boolean;
+  /**
+   * An embedded copy registers with an unsubstituted version placeholder.
+   * Unlike a mere version difference this is a confirmed failure — reported
+   * for ExecuteNow, where the current LibAddonMenu-2.0 could no longer
+   * initialize its handlers.  The one bundled-library state that needs action.
+   */
+  brokenRegistration: boolean;
+}

@@ -18,6 +18,7 @@
   --yellow: #e0c478;
   --red: #d45c6e;
   --peach: #7ca8c9;
+  --orange: #f0954a;
   --contrast-on-color: #1a1d24;
   --tree-indent: 20px;
   --bg-update: rgba(91, 155, 213, 0.12);
@@ -39,6 +40,7 @@
   --yellow: #a08030;
   --red: #b8394a;
   --peach: #4a80a8;
+  --orange: #9c4e0b;
   --contrast-on-color: #ffffff;
   --bg-update: rgba(43, 108, 176, 0.10);
 }

@@ -915,6 +915,8 @@ export interface ExportData {
   savedVariables: Record<string, string>;
   /** Non-catalog addon folders bundled as base64-encoded zip per folder */
   bundledAddons?: Record<string, string>;
+  /** Runtime-created files inside addon folders (caches, data): folder → relPath → base64 */
+  runtimeData?: Record<string, Record<string, string>>;
 }
 
 /**

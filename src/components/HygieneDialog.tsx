@@ -1,6 +1,7 @@
 // Copyright (c) 2026 thorstendb
 // SPDX-License-Identifier: MIT
 import React, { useEffect, useRef, useState } from 'react';
+import { BundledLibReport } from '../../electron/shared/types';
 
 export interface HygieneStray {
   file: string;
@@ -20,21 +21,27 @@ export interface HygieneDup {
   isDirectory: boolean;
 }
 
-interface BundledLib {
-  name: string;
-  standaloneVersion: string;
-  standaloneAddonVersion: number;
-  isLibrary: boolean;
-  embedded: { parent: string; relPath: string; version: string; addonVersion: number }[];
-  standaloneOutdated: boolean;
+
+
+/** A fix YAAM can offer for a bundled-library problem — the user decides. */
+export interface HygieneFix {
+  /** Stable key; the selection travels back as these */
+  key: string;
+  /** What the checkbox says */
+  label: string;
+  /** Why it is offered */
+  detail: string;
+  /** Preselected: an ordinary update is, switching to another author's fork is not */
+  recommended: boolean;
 }
 
 interface HygieneDialogProps {
   strayManifests: HygieneStray[];
   duplicates: HygieneDup[];
   unclaimedRootFiles: string[];
-  bundledLibs: BundledLib[];
-  onConfirm: (actions: { repairs: string[]; removals: string[] }) => void;
+  bundledLibs: BundledLibReport[];
+  fixes?: HygieneFix[];
+  onConfirm: (actions: { repairs: string[]; removals: string[]; fixes: string[] }) => void;
   onCancel: () => void;
 }
 
@@ -49,6 +56,7 @@ const HygieneDialog: React.FC<HygieneDialogProps> = ({
   duplicates,
   unclaimedRootFiles,
   bundledLibs,
+  fixes = [],
   onConfirm,
   onCancel,
 }) => {
@@ -63,6 +71,12 @@ const HygieneDialog: React.FC<HygieneDialogProps> = ({
   const [staleSel, setStaleSel] = useState<Set<string>>(() => new Set(stale.filter((s) => s.rootIsStale).map((s) => s.file)));
   const [dupSel, setDupSel] = useState<Set<string>>(() => new Set(duplicates.map((d) => d.relPath)));
   const [unclaimedSel, setUnclaimedSel] = useState<Set<string>>(() => new Set());
+  const [fixSel, setFixSel] = useState<Set<string>>(() => new Set(fixes.filter((f) => f.recommended).map((f) => f.key)));
+  const toggleFix = (key: string) => setFixSel((prev) => {
+    const next = new Set(prev);
+    if (next.has(key)) next.delete(key); else next.add(key);
+    return next;
+  });
 
   useEffect(() => {
     closeRef.current?.focus();
@@ -86,7 +100,7 @@ const HygieneDialog: React.FC<HygieneDialogProps> = ({
   const toggleUnclaimed = toggle(setUnclaimedSel);
 
   const totalItems = strayManifests.length + duplicates.length + unclaimedRootFiles.length;
-  const totalSelected = repairSel.size + staleSel.size + dupSel.size + unclaimedSel.size;
+  const totalSelected = repairSel.size + staleSel.size + dupSel.size + unclaimedSel.size + fixSel.size;
 
   const handleConfirm = () => {
     if (totalSelected === 0) return;
@@ -100,7 +114,7 @@ const HygieneDialog: React.FC<HygieneDialogProps> = ({
     for (const f of unclaimedRootFiles) {
       if (unclaimedSel.has(f)) removals.push(f);
     }
-    onConfirm({ repairs: Array.from(repairSel), removals });
+    onConfirm({ repairs: Array.from(repairSel), removals, fixes: Array.from(fixSel) });
   };
 
   return (
@@ -206,25 +220,49 @@ const HygieneDialog: React.FC<HygieneDialogProps> = ({
               )}
 
               {bundledLibs.length > 0 && (() => {
-                const outdated = bundledLibs.filter((b) => b.standaloneOutdated);
-                const same = bundledLibs.filter((b) => !b.standaloneOutdated);
+                // Same severity scale as the log: orange = act, yellow = maybe, grey = fine
+                const broken = bundledLibs.filter((b) => b.brokenRegistration);
+                const outdated = bundledLibs.filter((b) => b.standaloneOutdated && !b.brokenRegistration);
+                const differing = bundledLibs.filter((b) => b.versionMismatch && !b.standaloneOutdated && !b.brokenRegistration);
+                const same = bundledLibs.filter((b) => !b.versionMismatch);
+                const copyText = (e: BundledLibReport['embedded'][number]) =>
+                  `${e.parent} ${e.viaFileList ? 'loads from' : 'bundles in'} ${e.relPath} (` +
+                  (e.versionUnknown ? 'version unreadable'
+                    : `v${e.version || e.addonVersion || '?'}${e.versionFromLibStub ? ' via LibStub' : ''}`) + ')';
                 return (
                   <>
                     <div className="cleanup-section-label" style={{ marginTop: '12px' }}>
                       Bundled libraries ({bundledLibs.length})
                     </div>
                     <div style={{ fontSize: '0.8rem', opacity: 0.7, margin: '4px 0 8px' }}>
-                      These libraries exist standalone AND inside other addons. Nothing is
-                      changed here — never delete an embedded copy, the host addon needs it.
+                      These libraries exist standalone AND inside other addons. YAAM never deletes
+                      an embedded copy — whether the host still works without it depends on its code.
+                      Where a safe fix exists, it is offered below.
                     </div>
                     <div className="cleanup-items">
-                      {outdated.map((b) => (
-                        <div key={b.name} className="cleanup-item" style={{ color: 'var(--red)' }}>
+                      {broken.map((b) => (
+                        <div key={b.name} className="cleanup-item" style={{ color: 'var(--orange)', fontWeight: 700 }}>
                           <span>
-                            ⚠️ <strong>{b.name}</strong> — your standalone copy (v
-                            {b.standaloneVersion || '?'}) is OLDER than the one bundled in{' '}
-                            {b.embedded.map((e) => `${e.parent} (v${e.version || '?'})`).join(', ')}.
-                            Update {b.name} to avoid the host addon running against an outdated library.
+                            ⚠️ {b.name} — {b.embedded.filter((e) => e.placeholderVersion).map((e) => e.parent).join(', ')}{' '}
+                            registers its own copy with an unfilled version placeholder. The current{' '}
+                            {b.name} (v{b.standaloneVersion || '?'}) then cannot initialize its handlers.
+                          </span>
+                        </div>
+                      ))}
+                      {outdated.map((b) => (
+                        <div key={b.name} className="cleanup-item" style={{ color: 'var(--orange)', fontWeight: 700 }}>
+                          <span>
+                            ⚠️ {b.name} — your standalone copy (v{b.standaloneVersion || '?'}) is OLDER than the
+                            one bundled in {b.embedded.map((e) => `${e.parent} (v${e.version || '?'})`).join(', ')}.
+                          </span>
+                        </div>
+                      ))}
+                      {differing.map((b) => (
+                        <div key={b.name} className="cleanup-item" style={{ color: 'var(--yellow)' }}>
+                          <span>
+                            {b.name} — two different copies are live: your standalone v
+                            {b.standaloneVersion || '?'} and {b.embedded.map(copyText).join(', ')}.
+                            Often harmless; the suspect if {b.name} misbehaves.
                           </span>
                         </div>
                       ))}
@@ -237,6 +275,24 @@ const HygieneDialog: React.FC<HygieneDialogProps> = ({
                         </div>
                       ))}
                     </div>
+                    {fixes.length > 0 && (
+                      <>
+                        <div className="cleanup-section-label" style={{ marginTop: '12px' }}>
+                          Offered fixes ({fixes.length})
+                        </div>
+                        <div className="cleanup-items">
+                          {fixes.map((f) => (
+                            <label key={f.key} className="cleanup-item" onClick={() => toggleFix(f.key)}>
+                              <input type="checkbox" checked={fixSel.has(f.key)} readOnly />
+                              <span>
+                                {f.label}
+                                <span style={{ display: 'block', fontSize: '0.8rem', opacity: 0.7 }}>{f.detail}</span>
+                              </span>
+                            </label>
+                          ))}
+                        </div>
+                      </>
+                    )}
                   </>
                 );
               })()}
@@ -250,7 +306,13 @@ const HygieneDialog: React.FC<HygieneDialogProps> = ({
             onClick={handleConfirm}
             disabled={totalSelected === 0}
           >
-            ✓ Apply {totalSelected > 0 ? `(${repairSel.size} repair, ${totalSelected - repairSel.size} remove)` : ''}
+            ✓ Apply {totalSelected > 0
+              ? `(${[
+                  repairSel.size > 0 && `${repairSel.size} repair`,
+                  totalSelected - repairSel.size - fixSel.size > 0 && `${totalSelected - repairSel.size - fixSel.size} remove`,
+                  fixSel.size > 0 && `${fixSel.size} install`,
+                ].filter(Boolean).join(', ')})`
+              : ''}
           </button>
         </div>
       </div>
