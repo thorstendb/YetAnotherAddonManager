@@ -4,7 +4,7 @@
 // file.  With skipLibCheck on, a wrong path in a .d.ts is NOT an error: every
 // imported type silently becomes `any`, and the whole window.electronAPI
 // surface stops being type-checked (it ran that way until this was fixed).
-import { AddonInfo, AddonSettingsData, AppConfig, BundledLibReport, CatalogAddon, SavedVarsInfo, SvBallastFinding, YaamAddonEntry } from '../../electron/shared/types';
+import { AddonInfo, AddonSettingsData, AppConfig, AppUpdateCheck, BundledLibReport, CatalogAddon, SavedVarsInfo, SvBallastFinding, YaamAddonEntry } from '../../electron/shared/types';
 import { ExportData } from '../../electron/settingsManager';
 
 interface SnapshotAddon {
@@ -97,6 +97,10 @@ declare global {
       openInExplorer: (fullPath: string) => Promise<void>;
       openExternalUrl: (url: string) => Promise<void>;
       getAppVersion: () => Promise<string>;
+      /** Ask GitHub whether a newer YAAM release exists (a link, never an auto-update) */
+      checkAppUpdate: () => Promise<AppUpdateCheck>;
+      /** Help › Check for Updates… in the application menu */
+      onMenuCheckUpdates: (callback: () => void) => () => void;
       exportProfile: (
         addonsPath: string,
         addonList: { folderName: string; catalogId?: string; version: string; isLibrary: boolean }[],

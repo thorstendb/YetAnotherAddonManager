@@ -100,7 +100,7 @@ function guardConnect(req: http.ClientRequest, timeoutMs: number, onTimeout: () 
  * Fetch data from a URL as a string.
  * Aborts on idle/total timeout and refuses to follow redirects endlessly.
  */
-function fetchUrl(url: string, opts: FetchOptions = {}): Promise<string> {
+export function fetchUrl(url: string, opts: FetchOptions = {}): Promise<string> {
   const connectMs = opts.connectTimeoutMs ?? TIMEOUTS.net.connect;
   const idleMs = opts.idleTimeoutMs ?? TIMEOUTS.net.idle;
   const totalMs = opts.totalTimeoutMs ?? TIMEOUTS.net.small;

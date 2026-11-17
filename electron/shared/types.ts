@@ -815,6 +815,9 @@ export const IPC_CHANNELS = {
   RESTORE_REMOVED: 'restore-removed',
   MOVE_DOWNLOADS_BACK: 'move-downloads-back',
   IS_GAME_RUNNING: 'is-game-running',
+  CHECK_APP_UPDATE: 'check-app-update',
+  /** main → renderer: Help › Check for Updates… was clicked */
+  MENU_CHECK_UPDATES: 'menu-check-updates',
 } as const;
 
 /** One place where a library is embedded inside another addon's folder. */
@@ -887,4 +890,17 @@ export interface BundledLibReport {
    * initialize its handlers.  The one bundled-library state that needs action.
    */
   brokenRegistration: boolean;
+}
+
+/** Result of the YAAM self-update check (see electron/appUpdate.ts). */
+export interface AppUpdateCheck {
+  /** Version of the running YAAM */
+  current: string;
+  /** Latest published release, without the leading "v" */
+  latest?: string;
+  /** latest is strictly newer than current */
+  newer: boolean;
+  /** Release page to open — never a direct download (unsigned builds) */
+  url: string;
+  error?: string;
 }

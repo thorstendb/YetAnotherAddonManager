@@ -8,12 +8,14 @@ import { parseSavedVars, removeEntries, SvNode } from '../../electron/svParse';
 import { previewCleanupSettings } from '../../electron/settingsManager';
 import { scanAddonsFolder } from '../../electron/addonScanner';
 import { AddonInfo } from '../../electron/shared/types';
+import { makeLiveSandbox } from './liveSandbox';
 
 /**
  * READ-ONLY smoke test against the real SavedVariables of a live installation:
  * every file the game (or a tool) wrote must parse, an empty cut must be the
  * identity, and cuts anywhere in the tree must leave a parseable file.
- * Skipped automatically when the live folder is missing — it never writes.
+ * Skipped automatically when the live folder is missing.  Reading happens on
+ * the real files; the one test that SCANS works on a copy (see liveSandbox).
  */
 const LIVE = path.join(os.homedir(), 'Documents', 'Elder Scrolls Online', 'live');
 const SV_DIR = path.join(LIVE, 'SavedVariables');
@@ -53,11 +55,16 @@ describe.skipIf(!haveLive)('live SavedVariables', () => {
   });
 
   it('finds ballast only in files of installed addons and never in MM sales data', () => {
-    const addonsPath = path.join(LIVE, 'AddOns');
-    const preview = previewCleanupSettings(addonsPath, entryNames(scanAddonsFolder(addonsPath)));
-    for (const f of preview.ballast) {
-      expect(f.files.every((file) => !/^(GS\d\dData|ZO_.*)\.lua$/i.test(file) && !preview.orphanedSavedVars.includes(file))).toBe(true);
-      expect(f.bytes).toBeGreaterThan(0);
+    const box = makeLiveSandbox(['AddOns', 'SavedVariables', 'AddOnSettings.txt'])!;
+    try {
+      const addonsPath = path.join(box.live, 'AddOns');
+      const preview = previewCleanupSettings(addonsPath, entryNames(scanAddonsFolder(addonsPath)));
+      for (const f of preview.ballast) {
+        expect(f.files.every((file) => !/^(GS\d\dData|ZO_.*)\.lua$/i.test(file) && !preview.orphanedSavedVars.includes(file))).toBe(true);
+        expect(f.bytes).toBeGreaterThan(0);
+      }
+    } finally {
+      box.dispose();
     }
   });
 });

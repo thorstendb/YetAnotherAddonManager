@@ -5,12 +5,13 @@ import * as os from 'os';
 import { previewFolderHygiene } from '../../electron/addonScanner';
 import { buildDependencyResolver, classifyDirOwnership, findHijackedManifestOverlay, isOverlayStyleEntry } from '../../electron/shared/overlays';
 import { CatalogAddon } from '../../electron/shared/types';
+import { makeLiveSandbox } from './liveSandbox';
 
 /**
  * READ-ONLY smoke test against a real ESO installation + real catalog snapshot.
  * Verifies that the fixes work on the exact real-world mess they were built
  * for.  Skipped automatically when the live folder or snapshot is missing
- * (CI, other machines) — it never modifies anything.
+ * (CI, other machines).  The scan runs on a throwaway copy — see liveSandbox.
  */
 const LIVE_ADDONS = path.join(os.homedir(), 'Documents', 'Elder Scrolls Online', 'live', 'AddOns');
 const SNAPSHOT = path.join(__dirname, '..', 'esoui-catalog-snapshot-2026-04-10.json');
@@ -115,8 +116,17 @@ describe.skipIf(!haveSnapshot)('real catalog snapshot (2 932 entries)', () => {
  * The underlying logic is pinned independently in unit/folder-hygiene.test.ts
  * against fixtures, which is what actually guards against code regressions.
  */
-describe.skipIf(!haveLive)('live AddOns folder (read-only)', () => {
-  const preview = previewFolderHygiene(LIVE_ADDONS);
+describe.skipIf(!haveLive)('live AddOns folder (scanned on a copy)', () => {
+  // Scan, then drop the copy at once: the tests below only read the result.
+  // Not via afterAll — vitest skips it when every test here is skipped (a
+  // folder without the broken installs they look for), which leaked the copy.
+  const box = makeLiveSandbox(['AddOns'])!;
+  let preview: ReturnType<typeof previewFolderHygiene>;
+  try {
+    preview = previewFolderHygiene(path.join(box.live, 'AddOns'));
+  } finally {
+    box.dispose();
+  }
   const strayFor = (name: string) => preview.strayManifests.find((s) => s.addonName === name);
 
   it.skipIf(!strayFor('ArchiveHelper'))('finds the broken ArchiveHelper root install with its scattered folders', () => {

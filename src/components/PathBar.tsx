@@ -39,6 +39,8 @@ interface PathBarProps {
   updateRemaining?: number;
   theme: 'dark' | 'light';
   onToggleTheme: () => void;
+  /** Set when a newer YAAM release exists on GitHub */
+  appUpdate?: { version: string; url: string };
 }
 
 const PathBar: React.FC<PathBarProps> = ({
@@ -74,6 +76,7 @@ const PathBar: React.FC<PathBarProps> = ({
   updateRemaining,
   theme,
   onToggleTheme,
+  appUpdate,
 }) => {
   const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === 'Enter') {
@@ -210,6 +213,15 @@ const PathBar: React.FC<PathBarProps> = ({
       </fieldset>
       <fieldset className="toolbar-group">
         <legend>App</legend>
+        {appUpdate && (
+          <button
+            onClick={() => window.electronAPI.openExternalUrl(appUpdate.url)}
+            className="app-update-badge"
+            title={`YAAM v${appUpdate.version} is available — open the release page`}
+          >
+            ⬆️ v{appUpdate.version}
+          </button>
+        )}
         <button
           onClick={onSettings}
           className="theme-toggle"

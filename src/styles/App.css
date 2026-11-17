@@ -2397,4 +2397,19 @@
   color: var(--text-primary);
 }
 
+/* Toolbar notice: a newer YAAM release exists (click opens the release page) */
+.app-update-badge {
+  background: var(--accent);
+  color: var(--contrast-on-color);
+  border: none;
+  border-radius: 10px;
+  padding: 2px 10px;
+  font-size: 0.857rem;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+}
 
+.app-update-badge:hover {
+  background: var(--accent-hover);
+}

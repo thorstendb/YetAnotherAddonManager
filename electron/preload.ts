@@ -1,7 +1,7 @@
 // Copyright (c) 2026 thorstendb
 // SPDX-License-Identifier: MIT
 import { contextBridge, ipcRenderer, IpcRendererEvent, clipboard } from 'electron';
-import { AddonInfo, AddonSettingsData, AppConfig, CatalogAddon, SavedVarsInfo, SvBallastFinding, YaamAddonEntry, IPC_CHANNELS } from './shared/types';
+import { AddonInfo, AddonSettingsData, AppConfig, AppUpdateCheck, CatalogAddon, SavedVarsInfo, SvBallastFinding, YaamAddonEntry, IPC_CHANNELS } from './shared/types';
 import { SnapshotAddon, AddonSnapshot } from './snapshotManager';
 import { SvBackupEntry, ExportData } from './settingsManager';
 
@@ -132,6 +132,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.invoke(IPC_CHANNELS.OPEN_EXTERNAL_URL, url),
   getAppVersion: (): Promise<string> =>
     ipcRenderer.invoke(IPC_CHANNELS.GET_APP_VERSION),
+  checkAppUpdate: (): Promise<AppUpdateCheck> =>
+    ipcRenderer.invoke(IPC_CHANNELS.CHECK_APP_UPDATE),
+  onMenuCheckUpdates: (callback: () => void) => {
+    const handler = () => callback();
+    ipcRenderer.on(IPC_CHANNELS.MENU_CHECK_UPDATES, handler);
+    return () => { ipcRenderer.removeListener(IPC_CHANNELS.MENU_CHECK_UPDATES, handler); };
+  },
   exportProfile: (
     addonsPath: string,
     addonList: { folderName: string; catalogId?: string; version: string; isLibrary: boolean }[],

@@ -1,7 +1,7 @@
 // Copyright (c) 2026 thorstendb
 // SPDX-License-Identifier: MIT
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import { AddonInfo, AddonSettingsData, BundledLibReport, CatalogAddon, SavedVarsInfo, SvBallastFinding, compareVersionStrings, versionsDigitEqual, dateToVersion, releaseZipName } from '../electron/shared/types';
+import { AddonInfo, AddonSettingsData, AppUpdateCheck, BundledLibReport, CatalogAddon, SavedVarsInfo, SvBallastFinding, compareVersionStrings, versionsDigitEqual, dateToVersion, releaseZipName } from '../electron/shared/types';
 import { classifyDirOwnership, distrustTrackedIdentity, findHijackedManifestOverlay, hasOverlayStyleName } from '../electron/shared/overlays';
 import { CharDepConflict, findCharDepConflicts, findUnusedAddons, requiredDepClosure } from '../electron/shared/charDeps';
 import PathBar from './components/PathBar';
@@ -2812,6 +2812,41 @@ function App() {
   }, [addonPath, loading, updatingAll, addons, catalogAddons.length, catalogDiffReady,
       getCatalogAddon, updatableCatalogIds, addLog]);
 
+  // ── YAAM self-update notice ──────────────────────────────────────────────
+  // A check and a link — never an auto-update: the builds are unsigned, so
+  // nothing could verify what an updater installs.  One code path for the
+  // start-up check, Help › Check for Updates… and the About dialog.
+  const [appUpdate, setAppUpdate] = useState<AppUpdateCheck | null>(null);
+  const appUpdateCheckedRef = useRef(false);
+
+  const runAppUpdateCheck = useCallback(async (manual: boolean): Promise<AppUpdateCheck> => {
+    const res = await window.electronAPI.checkAppUpdate();
+    setAppUpdate(res);
+    if (res.newer) {
+      addLog(`YAAM v${res.latest} is available — you have v${res.current}`, 'success', {
+        strong: true,
+        action: { label: 'Open release page', onClick: () => { window.electronAPI.openExternalUrl(res.url); } },
+      });
+    } else if (manual) {
+      // At start-up, "up to date" and "offline" stay silent: a line on every
+      // launch is noise, and a warning on every offline launch is worse.
+      if (res.error) addLog(`Could not check for YAAM updates: ${res.error}`, 'warn');
+      else addLog(`YAAM is up to date (v${res.current})`, 'success');
+    }
+    return res;
+  }, [addLog]);
+
+  useEffect(() => {
+    if (welcomeAccepted !== true || appUpdateCheckedRef.current) return;
+    appUpdateCheckedRef.current = true;
+    runAppUpdateCheck(false).catch(() => {});
+  }, [welcomeAccepted, runAppUpdateCheck]);
+
+  useEffect(
+    () => window.electronAPI.onMenuCheckUpdates(() => { runAppUpdateCheck(true).catch(() => {}); }),
+    [runAppUpdateCheck],
+  );
+
   const handleCleanupSettings = useCallback(async () => {
     if (!addonPath || addons.length === 0) return;
     const existingNames = gameEntryNames(addons);
@@ -3543,6 +3578,7 @@ function App() {
         updateRemaining={updateRemaining}
         theme={theme}
         onToggleTheme={toggleTheme}
+        appUpdate={appUpdate?.newer ? { version: appUpdate.latest ?? '', url: appUpdate.url } : undefined}
       />
       <div className="filter-row">
         <StatusBar
@@ -3783,7 +3819,7 @@ function App() {
           onClose={() => setShowImportExport(false)}
         />
       )}
-      {showAbout && <AboutDialog onClose={() => setShowAbout(false)} />}
+      {showAbout && <AboutDialog onClose={() => setShowAbout(false)} onCheckUpdates={() => runAppUpdateCheck(true)} />}
       {showSettings && (
         <SettingsDialog
           fontScale={fontScale}

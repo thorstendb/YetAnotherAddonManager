@@ -1,6 +1,6 @@
 // Copyright (c) 2026 thorstendb
 // SPDX-License-Identifier: MIT
-import { app, BrowserWindow, ipcMain, dialog, shell, session, screen } from 'electron';
+import { app, BrowserWindow, ipcMain, dialog, shell, session, screen, Menu } from 'electron';
 import * as path from 'path';
 import * as fs from 'fs';
 import * as os from 'os';
@@ -12,6 +12,7 @@ import type { AdoptRequest } from './addonFiles';
 import { detectCloudProvider } from './cloudDetect';
 import { isGameRunning } from './gameProcess';
 import { TIMEOUTS } from './shared/timeouts';
+import { checkForAppUpdate, RELEASES_PAGE, REPO_PAGE } from './appUpdate';
 import { buildDependencyResolver } from './shared/overlays';
 import { fetchAddonCatalog, fetchAddonDetails, fetchCategories, fetchRelease, installAddon, installWithDependencies, updateCatalogSnapshot, commitCatalogSnapshot } from './addonCatalogApi';
 import { setAddonSetting, batchSetAddonSettings, getSavedVarsInfo, deleteSavedVars, cleanupSettings, undoCleanupSettings, listSavedVarsBackups, restoreSavedVarsFile, exportProfile, importProfile, exportProfileAsZip, previewProfileZip, importProfileFromZip, ExportData, previewCleanupSettings, cleanupSettingsSelected } from './settingsManager';
@@ -41,6 +42,41 @@ ipcMain.handle(IPC_CHANNELS.OPEN_EXTERNAL_URL, async (_event, url: string) => {
 ipcMain.handle(IPC_CHANNELS.GET_APP_VERSION, async () => {
   return app.getVersion();
 });
+
+// Is there a newer YAAM on GitHub?  A check and a link — no auto-update, the
+// builds are unsigned (see appUpdate.ts).
+ipcMain.handle(IPC_CHANNELS.CHECK_APP_UPDATE, async () => {
+  return checkForAppUpdate(app.getVersion());
+});
+
+/**
+ * The application menu.  Reproduces Electron's default menu role for role —
+ * on macOS, Cmd+C/V/X in text fields only work through the Edit menu's roles,
+ * so a hand-written menu without them would break copy & paste in every
+ * search box.  Only Help is ours: the default one links to electronjs.org.
+ * On Windows the menu bar is hidden in release builds; its accelerators still
+ * work, and Check for Updates is also reachable from the About dialog.
+ */
+function buildAppMenu(): void {
+  const isMac = process.platform === 'darwin';
+  const template: Electron.MenuItemConstructorOptions[] = [
+    ...(isMac ? [{ role: 'appMenu' as const }] : []),
+    { role: 'fileMenu' },
+    { role: 'editMenu' },
+    { role: 'viewMenu' },
+    { role: 'windowMenu' },
+    {
+      role: 'help',
+      submenu: [
+        { label: 'Check for Updates…', click: () => mainWindow?.webContents.send(IPC_CHANNELS.MENU_CHECK_UPDATES) },
+        { type: 'separator' },
+        { label: 'YAAM on GitHub', click: () => { shell.openExternal(REPO_PAGE); } },
+        { label: 'Release Notes', click: () => { shell.openExternal(RELEASES_PAGE); } },
+      ],
+    },
+  ];
+  Menu.setApplicationMenu(Menu.buildFromTemplate(template));
+}
 
 // Disable Chromium caches — we persist nothing via Electron's userData
 app.commandLine.appendSwitch('disk-cache-size', '1');
@@ -947,6 +983,7 @@ app.whenReady().then(() => {
       console.log(`Migrated ${migration.migrated} .yaam.json files to central database`);
     }
   }
+  buildAppMenu();
   createWindow();
 });
 
