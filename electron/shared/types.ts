@@ -75,7 +75,8 @@ export interface AddonInfo {
   /** YAAM marker file data read from .yaam.json in the addon folder */
   yaamMarker?: YaamMarker;
   /**
-   * The folder's entry in Minion's database (AddOns/miniondata.json), if any:
+   * The folder's entry in Minion's database (~/.minion/minion.xml, see
+   * electron/minionData.ts), if any:
    * the catalog version Minion last installed.  Minion offers an update when it
    * differs from the catalog — so a stale entry here makes Minion show an
    * update for an addon that is already current.
@@ -159,6 +160,10 @@ export interface YaamAddonEntry {
   fileStamps?: Record<string, FileStamp>;
   /** Overlays (language patches, fixes) layered into this addon's folder */
   overlays?: YaamOverlayEntry[];
+  /** The user reset YAAM tracking: best-effort detection until the next
+   *  install (a fresh entry drops this).  Nothing may re-anchor the folder on
+   *  its own — not Minion's record, not the cached-release check. */
+  trackingReset?: boolean;
 }
 
 /**

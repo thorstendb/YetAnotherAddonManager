@@ -8,6 +8,7 @@ import { AddonInfo, DependencyRef, ColorSegment, FileStamp, YaamAddonEntry, Bund
 // Re-exported for existing importers — the shapes are shared with the renderer
 export type { BundledLibReport, EmbeddedLibLocation } from './shared/types';
 import { loadDatabase, saveDatabase, YaamDatabase, readMarkerFile, writeMarkerFile, backupTrackingState } from './yaamDatabase';
+import { loadMinionData } from './minionData';
 import { canEnterDir } from './shared/fsWalk';
 import { writeJsonAtomic } from './shared/atomicWrite';
 
@@ -560,9 +561,11 @@ export function scanAddonsFolder(addonsPath: string): AddonInfo[] {
     } else if (entry?.esouid && !entry.catalogVersion && !marker) {
       // DB entry exists (e.g. from reconciliation) but has no catalogVersion
       // and no marker.  Try to backfill from Minion data so Tier 2 detection
-      // works instead of falling to Tier 3 best-effort.
+      // works instead of falling to Tier 3 best-effort — but only from a record
+      // of the SAME catalog entry (the version of another one means nothing
+      // here), and not after the user reset tracking on purpose.
       const minion = minionData.get(addon.folderName);
-      if (minion) {
+      if (minion && minion.uid === entry.esouid && !entry.trackingReset) {
         console.log(`[YAAM] Backfill catalogVersion from Minion: ${addon.folderName} → "${minion.uiVersion}" (uid=${minion.uid})`);
         entry.catalogVersion = minion.uiVersion;
         db.addons[addon.folderName] = entry;
@@ -640,44 +643,6 @@ export function scanAddonsFolder(addonsPath: string): AddonInfo[] {
   if (dbChanged) saveDatabase(db, addonsPath);
 
   return addons;
-}
-
-/** Entry format used by Minion's tracking file (miniondata.json in AddOns root) */
-interface MinionEntry {
-  uid: string;
-  md5: string;
-  uiVersion: string;
-  dirs: string[];
-}
-
-/**
- * Try to load Minion's tracking file from the AddOns folder root.
- * Returns a map from folder name → Minion entry, or an empty map if not found.
- *
- * File searched (in order): miniondata.json, minion_data.json
- * Format: array of { uid, md5, uiVersion, dirs[] }
- */
-function loadMinionData(addonsPath: string): Map<string, MinionEntry> {
-  const candidates = ['miniondata.json', 'minion_data.json'];
-  for (const name of candidates) {
-    const filePath = path.join(addonsPath, name);
-    if (!fs.existsSync(filePath)) continue;
-    try {
-      const data: MinionEntry[] = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
-      const map = new Map<string, MinionEntry>();
-      for (const entry of data) {
-        if (!entry.uid || !entry.uiVersion) continue;
-        for (const dir of entry.dirs || []) {
-          if (!map.has(dir)) map.set(dir, entry); // first dir wins (primary owner)
-        }
-      }
-      console.log(`[YAAM] Loaded Minion tracking data: ${map.size} directories from ${name}`);
-      return map;
-    } catch (err) {
-      console.warn(`[YAAM] Failed to parse ${name}:`, err);
-    }
-  }
-  return new Map();
 }
 
 /**
@@ -934,6 +899,7 @@ export function reconcileYaamMetadata(
         // Language patches live in the folder, not in the catalog identity —
         // dropping them here lost overlay tracking on any metadata change
         overlays: existing.overlays,
+        trackingReset: existing.trackingReset,
       };
       // Keep an existing .yaam.json marker in sync — a stale marker with the
       // old esouid, file list or catalog version would otherwise re-poison the

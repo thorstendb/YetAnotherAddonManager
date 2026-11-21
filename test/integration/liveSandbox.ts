@@ -29,16 +29,50 @@ export function makeLiveSandbox(
 ): { live: string; dispose: () => void } | null {
   if (!fs.existsSync(path.join(REAL_LIVE, 'AddOns'))) return null;
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'yaam-livebox-'));
+  const dispose = () => fs.rmSync(root, { recursive: true, force: true });
   const live = path.join(root, 'live');
-  fs.mkdirSync(live, { recursive: true });
-  for (const part of parts) {
-    const src = path.join(REAL_LIVE, part);
-    if (fs.existsSync(src)) fs.cpSync(src, path.join(live, part), { recursive: true, preserveTimestamps: true });
+  try {
+    fs.mkdirSync(live, { recursive: true });
+    for (const part of parts) {
+      const src = path.join(REAL_LIVE, part);
+      if (fs.existsSync(src)) copyTolerant(src, path.join(live, part));
+    }
+    const db = path.join(REAL_LIVE, 'YAAM', 'yaam-addons.json');
+    if (fs.existsSync(db)) {
+      fs.mkdirSync(path.join(live, 'YAAM'), { recursive: true });
+      fs.copyFileSync(db, path.join(live, 'YAAM', 'yaam-addons.json'));
+    }
+  } catch (err) {
+    // The caller never gets a handle to dispose — clean up here, or every
+    // failed copy leaks the whole tree into the temp folder
+    dispose();
+    throw err;
   }
-  const db = path.join(REAL_LIVE, 'YAAM', 'yaam-addons.json');
-  if (fs.existsSync(db)) {
-    fs.mkdirSync(path.join(live, 'YAAM'), { recursive: true });
-    fs.copyFileSync(db, path.join(live, 'YAAM', 'yaam-addons.json'));
+  return { live, dispose };
+}
+
+/** Error codes Windows reports for a file another program holds open */
+const LOCKED = new Set(['EBUSY', 'EPIPE', 'EPERM', 'EACCES']);
+
+/**
+ * fs.cpSync, but a file another program holds open is skipped instead of
+ * aborting the copy: while the game runs, the TTC client keeps
+ * TamrielTradeCentre/Client/TTC_Lock locked — a lock file nothing scans.
+ * Links are not followed (no junction cycles); timestamps are kept, the
+ * scanner's file stamps compare mtimes.
+ */
+function copyTolerant(src: string, dst: string): void {
+  const st = fs.lstatSync(src);
+  if (st.isSymbolicLink()) return;
+  if (st.isDirectory()) {
+    fs.mkdirSync(dst, { recursive: true });
+    for (const name of fs.readdirSync(src)) copyTolerant(path.join(src, name), path.join(dst, name));
+    return;
   }
-  return { live, dispose: () => fs.rmSync(root, { recursive: true, force: true }) };
+  try {
+    fs.copyFileSync(src, dst);
+    fs.utimesSync(dst, st.atime, st.mtime);
+  } catch (err) {
+    if (!LOCKED.has((err as NodeJS.ErrnoException).code ?? '')) throw err;
+  }
 }

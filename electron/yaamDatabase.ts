@@ -34,6 +34,8 @@ export interface YaamAddonEntry {
   fileStamps?: Record<string, FileStamp>;
   /** Overlays (language patches, fixes) layered into this addon's folder */
   overlays?: YaamOverlayEntry[];
+  /** Tracking was reset by the user — see shared/types.ts (keep in sync) */
+  trackingReset?: boolean;
 }
 
 /** Full database structure */
@@ -284,10 +286,13 @@ export function cleanupMarkerFiles(addonsPath: string): { count: number; backupD
           count++;
         }
       } catch { /* skip */ }
-      // Also clear catalogVersion/catalogDate in DB so Tier 3 kicks in
-      if (db.addons[entry.name]?.catalogVersion) {
-        db.addons[entry.name].catalogVersion = '';
-        db.addons[entry.name].catalogDate = undefined;
+      // Also clear catalogVersion/catalogDate in DB so Tier 3 kicks in, and
+      // flag the entry so nothing re-anchors it behind the user's back
+      const tracked = db.addons[entry.name];
+      if (tracked && (tracked.catalogVersion || !tracked.trackingReset)) {
+        tracked.catalogVersion = '';
+        tracked.catalogDate = undefined;
+        tracked.trackingReset = true;
         dbChanged = true;
       }
     }

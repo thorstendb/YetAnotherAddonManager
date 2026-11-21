@@ -4,6 +4,7 @@ import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { AddonInfo, AddonSettingsData, AppUpdateCheck, BundledLibReport, CatalogAddon, SavedVarsInfo, SvBallastFinding, compareVersionStrings, versionsDigitEqual, dateToVersion, releaseZipName } from '../electron/shared/types';
 import { classifyDirOwnership, distrustTrackedIdentity, findHijackedManifestOverlay, hasOverlayStyleName } from '../electron/shared/overlays';
 import { CharDepConflict, findCharDepConflicts, findUnusedAddons, requiredDepClosure } from '../electron/shared/charDeps';
+import { adoptionMode } from '../electron/shared/installState';
 import PathBar from './components/PathBar';
 import StatusBar from './components/StatusBar';
 import TreePanel from './components/TreePanel';
@@ -1892,17 +1893,8 @@ function App() {
       const match = getCatalogMatch(addon);
       if (!match || match.layered) continue;
       const ca = match.catalogAddon;
-      const meta = addon.yaamMeta;
-      let mode: 'anchor' | 'stamp';
-      if (!meta?.catalogVersion) {
-        if (match.ambiguous) continue;
-        mode = 'anchor';
-      } else if (!meta.fileStamps && meta.esouid === ca.id && meta.catalogVersion === ca.version
-        && (!ca.date || meta.catalogDate === ca.date) && (!meta.localVersion || addon.version === meta.localVersion)) {
-        mode = 'stamp';
-      } else {
-        continue;
-      }
+      const mode = adoptionMode(addon.yaamMeta, ca, addon.version, match.ambiguous);
+      if (!mode) continue;
       const key = [addonPath, addon.folderName, mode, ca.id, ca.version].join('\0');
       if (adoptAttemptedRef.current.has(key)) continue;
       adoptAttemptedRef.current.add(key);

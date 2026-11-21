@@ -20,6 +20,8 @@
  * entry from a "not installed" filter.
  */
 
+import type { CatalogAddon, YaamAddonEntry } from './types';
+
 export type InstallState = 'installed' | 'bundled' | 'absent';
 
 /**
@@ -37,4 +39,26 @@ export function classifyInstallState(
   // A secondary dir (shared library) or a bundled copy of the whole addon
   if (directories.some((dir) => presentDirs.has(dir))) return 'bundled';
   return 'absent';
+}
+
+/**
+ * What the release check (adoptCachedRelease) may do for a folder:
+ *   anchor - untracked: start tracking it if it is byte-identical to the release
+ *   stamp  - tracked at the current release, without file stamps: add them
+ *   null   - leave it alone
+ * A user's tracking reset stays in force until the next install, and an
+ * ambiguous catalog match is no identity to anchor a folder to.  An entry
+ * without a date (imported from Minion) counts as being at the current upload.
+ */
+export function adoptionMode(
+  meta: Pick<YaamAddonEntry, 'esouid' | 'catalogVersion' | 'catalogDate' | 'localVersion' | 'fileStamps' | 'trackingReset'> | undefined,
+  catalogAddon: Pick<CatalogAddon, 'id' | 'version' | 'date'>,
+  manifestVersion: string,
+  ambiguous: boolean
+): 'anchor' | 'stamp' | null {
+  if (!meta?.catalogVersion) return ambiguous || meta?.trackingReset ? null : 'anchor';
+  const atCurrentRelease = meta.esouid === catalogAddon.id && meta.catalogVersion === catalogAddon.version
+    && (!catalogAddon.date || !meta.catalogDate || meta.catalogDate === catalogAddon.date);
+  const filesUnchanged = !meta.localVersion || manifestVersion === meta.localVersion;
+  return !meta.fileStamps && atCurrentRelease && filesUnchanged ? 'stamp' : null;
 }

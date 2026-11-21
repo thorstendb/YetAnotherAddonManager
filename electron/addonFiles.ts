@@ -634,6 +634,9 @@ export function adoptCachedRelease(addonsPath: string, requests: AdoptRequest[])
       if (!entry?.esouid || entry.fileStamps) { done('skipped'); continue; }
       entry.installedFiles = files;
       entry.fileStamps = fileStamps;
+      // Imported from Minion: no date yet, and without one a later re-upload
+      // under the same version would go unnoticed
+      if (!entry.catalogDate && req.notBefore) entry.catalogDate = req.notBefore;
       saveDatabase(db, addonsPath);
       writeMarkerFile(addonsPath, req.folderName, entry);
       done('stamped', differing, missing);
